@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate plugin manifests
+        run: |
+          jq empty .claude-plugin/plugin.json .claude-plugin/marketplace.json
+          test "$(jq -r .name .claude-plugin/plugin.json)" = getaway
+          test "$(jq -r '.plugins[0].name' .claude-plugin/marketplace.json)" = getaway
+      - name: Validate skill frontmatter
+        run: |
+          for f in skills/*/SKILL.md; do
+            sed -n '2,/^---$/p' "$f" | grep -q '^name: ' || { echo "missing name in $f" >&2; exit 1; }
+            sed -n '2,/^---$/p' "$f" | grep -q '^description: ' || { echo "missing description in $f" >&2; exit 1; }
+          done
