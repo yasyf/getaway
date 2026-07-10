@@ -1,0 +1,11 @@
+{
+  "name": "getaway",
+  "description": "Plan award flights from Claude Code, backed by seats.aero availability across 26 mileage programs.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Yasyf Mohamedali",
+    "url": "https://github.com/yasyf"
+  },
+  "homepage": "https://github.com/yasyf/getaway",
+  "license": "PolyForm-Noncommercial-1.0.0"
+}
