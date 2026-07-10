@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "uvx capt-hook pack attach \"${CLAUDE_PLUGIN_ROOT}\"" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "uvx capt-hook run Stop" }] }
+    ]
+  }
+}

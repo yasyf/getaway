@@ -23,3 +23,15 @@ jobs:
             sed -n '2,/^---$/p' "$f" | grep -q '^name: ' || { echo "missing name in $f" >&2; exit 1; }
             sed -n '2,/^---$/p' "$f" | grep -q '^description: ' || { echo "missing description in $f" >&2; exit 1; }
           done
+      - name: Lint helper script
+        run: |
+          bash -n skills/getaway/getaway.sh
+          shellcheck skills/getaway/getaway.sh
+      - name: Prefs round-trip
+        run: |
+          export HOME="$(mktemp -d)"
+          skills/getaway/getaway.sh prefs-init
+          test "$(skills/getaway/getaway.sh prefs | jq .version)" = 1
+      - uses: astral-sh/setup-uv@v7
+      - name: Hook inline tests
+        run: uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json

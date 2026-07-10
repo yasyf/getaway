@@ -1,7 +1,7 @@
 {
   "name": "getaway",
-  "description": "Plan award flights from Claude Code, backed by seats.aero availability across 26 mileage programs.",
-  "version": "0.1.0",
+  "description": "Plan award flights from Claude Code. getaway searches seats.aero award space across 26 mileage programs and plans the trip around your preferences — dates, cabins, balances, booking links.",
+  "version": "0.2.0",
   "author": {
     "name": "Yasyf Mohamedali",
     "url": "https://github.com/yasyf"
