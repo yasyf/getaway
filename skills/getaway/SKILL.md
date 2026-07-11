@@ -312,6 +312,30 @@ list is `.flights` and the total is `.count`. The same call doubles as a
 cash-versus-points sanity check — when the cash fare undercuts the award's
 taxes plus a fair cent-per-point value of the miles, say so.
 
+When the positioning date is flexible, scan a window with `fli dates` and
+let the cheapest day anchor the plan:
+
+```bash
+uvx --from "flights[mcp]" fli dates SFO YVR --from 2026-09-05 --to 2026-09-12 --class BUSINESS --format json |
+  jq '{count, cheapest_days: (.dates | sort_by(.price) | .[0:3]
+       | map({date: .departure_date, price, currency}))}'
+```
+
+```json
+{
+  "count": 8,
+  "cheapest_days": [
+    { "date": "2026-09-12", "price": 266.0, "currency": "USD" },
+    { "date": "2026-09-06", "price": 305.0, "currency": "USD" },
+    { "date": "2026-09-07", "price": 305.0, "currency": "USD" }
+  ]
+}
+```
+
+`fli dates` also wraps its results: the per-day fares are `.dates`, each a
+`{departure_date, price, currency}` with no airline detail. It scans
+one-way by default; add `--round` for a round trip.
+
 ## Learnings
 
 Durable takeaways from a session have two homes: preferences the user
