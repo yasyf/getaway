@@ -32,6 +32,13 @@ jobs:
           export HOME="$(mktemp -d)"
           skills/getaway/getaway.sh prefs-init
           test "$(skills/getaway/getaway.sh prefs | jq .version)" = 1
+          status_out=$(skills/getaway/getaway.sh prefs-status) && status_code=0 || status_code=$?
+          test "$status_out" = unconfigured && test "$status_code" = 1
+          echo '{"balances": {"programs": {"alaska": 90000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
+          test "$(skills/getaway/getaway.sh prefs-status)" = configured
+          skills/getaway/getaway.sh prefs | jq -e '.balances.programs.alaska == 90000' >/dev/null
+          skills/getaway/getaway.sh prefs | jq -e '.home_airport == "SFO"' >/dev/null
+          if echo '{"bogus": 1}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1; then echo "unknown key not rejected"; exit 1; fi
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests
-        run: uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json
+        run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json

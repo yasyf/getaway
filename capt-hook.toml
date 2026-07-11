@@ -1,4 +1,4 @@
 name = "getaway"
-version = "0.2.0"
+version = "0.3.0"
 description = "Stop-time reflection: fold getaway session learnings into ~/.getaway preferences or the skill docs"
 hooks = "hooks"

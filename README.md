@@ -142,6 +142,10 @@ The skill keeps your travel profile at `~/.getaway/preferences.json`. It
 creates the file on first use and folds in what it learns as you plan: your
 home airport, cabin preference, destinations you never want, airlines to
 avoid, per-program points balances, and the `op_ref` pointer for the API key.
+First use also opens an interactive onboarding form (cc-present) that
+collects the profile up front: home airport, cabin, avoid lists, points
+balances, and the 1Password key reference. Skip the form to accept the
+defaults.
 The full schema lives in [skills/getaway/SKILL.md](skills/getaway/SKILL.md).
 
 ## Reference

@@ -16,6 +16,8 @@ usage: getaway.sh <command> [flags]
 commands:
   prefs-init                       write ~/.getaway/preferences.json (refuses if it exists)
   prefs                            print preferences as compact JSON
+  prefs-status                     print configured/unconfigured; exit 0 if a balance is set, else 1
+  prefs-set                        read a JSON patch on stdin and top-level-merge it into preferences
   search  --origin A,B --dest C,D [--start YYYY-MM-DD] [--end YYYY-MM-DD]
           [--cabin business] [--sources aeroplan,united] [--carriers DL,AA]
           [--direct] [--order lowest_mileage] [--take 500] [--pages 1]
@@ -118,13 +120,8 @@ paginate() {
   rm -f "$seenfile"
 }
 
-cmd_prefs_init() {
-  [[ -e "$PREFS" || -L "$PREFS" ]] && {
-    echo "preferences already exist at $PREFS; refusing to overwrite" >&2
-    exit 3
-  }
-  mkdir -p "$GETAWAY_DIR"
-  cat >"$PREFS" <<'JSON'
+prefs_template() {
+  cat <<'JSON'
 {
   "version": 1,
   "op_ref": null,
@@ -139,6 +136,48 @@ cmd_prefs_init() {
   "learnings": []
 }
 JSON
+}
+
+cmd_prefs_init() {
+  [[ -e "$PREFS" || -L "$PREFS" ]] && {
+    echo "preferences already exist at $PREFS; refusing to overwrite" >&2
+    exit 3
+  }
+  mkdir -p "$GETAWAY_DIR"
+  prefs_template >"$PREFS"
+  echo "$PREFS"
+}
+
+cmd_prefs_status() {
+  [[ -f "$PREFS" ]] || { echo "unconfigured"; exit 1; }
+  jq -e '.version == 1' "$PREFS" >/dev/null 2>&1 || { echo "unconfigured"; exit 1; }
+  if jq -e '((.balances.programs // {}) | length) > 0 or ((.balances.transferable // {}) | length) > 0' "$PREFS" >/dev/null; then
+    echo "configured"
+  else
+    echo "unconfigured"
+    exit 1
+  fi
+}
+
+cmd_prefs_set() {
+  local patch base tmp unknown
+  patch=$(cat)
+  jq -es 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$patch" || usage "prefs-set: stdin must be a single JSON object"
+  unknown=$(jq -c --argjson t "$(prefs_template)" '(keys - ($t | keys))' <<<"$patch")
+  [[ "$unknown" == "[]" ]] || usage "prefs-set: unknown preference keys: $unknown"
+  [[ -L "$PREFS" || ( -e "$PREFS" && ! -f "$PREFS" ) ]] && { echo "$PREFS is not a regular file; refusing to write" >&2; exit 3; }
+  mkdir -p "$GETAWAY_DIR"
+  if [[ -f "$PREFS" ]]; then
+    jq -e '.version == 1' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 1)" >&2; exit 3; }
+    base=$(cat "$PREFS")
+  else
+    base=$(prefs_template)
+  fi
+  tmp=$(mktemp "$GETAWAY_DIR/.prefs.XXXXXX")
+  trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
+  jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
+  jq -e '.version == 1 and has("op_ref") and has("home_airport") and (.balances | type == "object") and ((.balances.programs // {}) | type == "object") and ((.balances.transferable // {}) | type == "object")' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
+  mv -f "$tmp" "$PREFS"
   echo "$PREFS"
 }
 
@@ -250,6 +289,8 @@ main() {
   case "$cmd" in
     prefs-init) cmd_prefs_init "$@" ;;
     prefs) cmd_prefs "$@" ;;
+    prefs-status) cmd_prefs_status "$@" ;;
+    prefs-set) cmd_prefs_set "$@" ;;
     search) cmd_search "$@" ;;
     availability) cmd_availability "$@" ;;
     trip) cmd_trip "$@" ;;

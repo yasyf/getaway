@@ -10,7 +10,7 @@ getaway/
 ├── .claude-plugin/           # Plugin + marketplace manifests (install as getaway@getaway)
 ├── skills/
 │   └── getaway/              # The flight-planning skill (SKILL.md + getaway.sh helper)
-├── hooks/                    # Plugin-shipped capt-hook pack (hooks.json + reflect.py)
+├── hooks/                    # Plugin-shipped capt-hook pack (hooks.json + reflect.py + onboard.py)
 ├── docs/
 │   ├── assets/               # Mascot logo, README banner, social card
 │   └── seats-aero-api.md     # seats.aero Partner API reference

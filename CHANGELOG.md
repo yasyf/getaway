@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-10
+
+### Added
+- First-run onboarding for the `getaway` skill. The skill offers a
+  cc-present preferences form before planning a trip and writes submitted
+  answers through the new `getaway.sh` `prefs-status` and `prefs-set`
+  subcommands.
+- Plugin-shipped capt-hook PostToolUse nudge that backstops onboarding.
+  When a session loads the skill while `~/.getaway/preferences.json` is
+  missing or records no balances, it advises offering the form without
+  blocking.
+
 ## [0.2.0] - 2026-07-10
 
 ### Added

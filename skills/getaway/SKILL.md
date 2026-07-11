@@ -30,16 +30,10 @@ The base URL is `https://seats.aero/partnerapi`. Pro keys get 1,000 calls
 per day, resetting at midnight UTC. Budget them per
 [Quota discipline](#quota-discipline).
 
-On first use, write the preferences file, then confirm its defaults with
-the user:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" prefs-init
-```
-
-```
-/Users/<user>/.getaway/preferences.json
-```
+On first use, set the preferences up through
+[first-run onboarding](#first-run-onboarding), which collects the user's
+airports, balances, and avoid lists and writes them in one pass. A bare
+`prefs-init` only writes the template below.
 
 `prefs` prints the current file as compact JSON, and these are the shipped
 defaults:
@@ -70,6 +64,8 @@ The keys that steer planning:
 |---|---|---|
 | `prefs-init` | 0 | Write the `~/.getaway/preferences.json` template; exits 3 if the file exists |
 | `prefs` | 0 | Print preferences as compact JSON; exits 3 when the file is missing or not `version: 1` |
+| `prefs-status` | 0 | Print `configured` (exit 0) or `unconfigured` (exit 1: file missing, not `version: 1`, or no balances recorded) |
+| `prefs-set` | 0 | Top-level-merge a JSON patch from stdin into preferences, creating the file from the template when absent; exits 64 on unknown keys or non-object input, 3 when the version is not 1 |
 | `search --origin A,B --dest C,D [flags]` | 1 per page | Cached award space via `/search`; origins and destinations take IATA codes or [region pseudo-codes](#region-pseudo-codes) |
 | `availability --source <program> [flags]` | 1 per page | Per-program bulk dump via `/availability`; the only route to continent-wide sweeps |
 | `trip <availability-ID>` | 1 | One row's bookable trips via `/trips/{id}`: segments, exact taxes, booking links |
@@ -90,8 +86,111 @@ scratchpad file. `--pages` walks the API's `cursor` + `skip` continuation,
 and every page costs one quota call: prefer one page with a big `--take`.
 Exit codes: 2 no key, 3 preferences problem, 4 no quota recorded, 64 usage.
 
+## First-run onboarding
+
+Step 0 of every planning request is a status check:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" prefs-status
+```
+
+```
+unconfigured
+```
+
+`unconfigured` (exit 1) means the preferences file is missing, not
+`version: 1`, or records no points balances — and without balances,
+program selection is guesswork. Offer onboarding before planning; it is
+optional, and the user may skip it and plan on the shipped defaults. A
+`PostToolUse` hook (`hooks/onboard.py`, sibling to `reflect.py`)
+backstops this step: when the skill runs while preferences are
+unconfigured, it injects the same offer once per session, and it never
+blocks.
+
+Collect the answers with a cc-present form, not the approval board. Seed
+each field's `placeholder` with the user's current preference (from
+`prefs`); the shipped defaults below stand in when no file exists yet.
+This document passes `cc-present push --dry-run`:
+
+```json
+{
+  "version": 1,
+  "title": "getaway onboarding",
+  "intro": "Set your award-travel preferences. Anything you leave blank keeps its current value (shown as the placeholder). Press Submit when done.",
+  "submit": { "label": "Save preferences", "note": "Writes the values below to ~/.getaway/preferences.json." },
+  "blocks": [
+    { "id": "sec-airports", "type": "section", "title": "Airports" },
+    { "id": "home-airport", "type": "input", "label": "Home airport (IATA)", "placeholder": "SFO" },
+    { "id": "origin-airports", "type": "input", "label": "Origin airports to search from (comma-separated IATA)", "placeholder": "SFO,SJC,SAN,PDX,DEN,LAS,SLC,YVR" },
+    { "id": "sec-cabin", "type": "section", "title": "Cabin" },
+    { "id": "cabin", "type": "choice", "prompt": "Preferred cabin (current default: Business)", "multi": false, "options": [ {"id":"economy","label":"Economy"}, {"id":"premium","label":"Premium economy"}, {"id":"business","label":"Business","hint":"current default"}, {"id":"first","label":"First"} ] },
+    { "id": "sec-avoid", "type": "section", "title": "Avoid" },
+    { "id": "avoid-destinations", "type": "input", "label": "Destinations to avoid (comma-separated IATA)", "placeholder": "ICN,GMP,NRT,HND" },
+    { "id": "avoid-airlines", "type": "input", "label": "Airlines to avoid — name:soft or name:hard, comma-separated", "placeholder": "Ethiopian:soft", "multiline": true },
+    { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
+    { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
+    { "id": "balances-transferable", "type": "input", "label": "Transferable points (bank:points, comma-separated)", "placeholder": "amex:150000, chase:80000", "multiline": true },
+    { "id": "sec-auth", "type": "section", "title": "seats.aero API key" },
+    { "id": "op-ref", "type": "input", "label": "1Password reference for the seats.aero API key", "placeholder": "op://Vault/item/field" }
+  ]
+}
+```
+
+Drive it with `Skill(cc-present:present)` exactly like
+[Presenting options](#presenting-options) — push, rounds, submit,
+outcomes, close are the same loop.
+
+Reading the outcomes back takes judgment; the form's free-text fields and
+the preference schema differ:
+
+- `input` blocks carry no seeded value — the placeholder only displays
+  the current setting. A field absent from the outcomes means the user
+  left it blank: omit that key from the patch, and never overwrite a
+  preference with an empty value.
+- The cabin pick is `outcomes.interactions.choices["cabin"].optionIds[0]`
+  when the user chose one; if the choice is absent, omit `cabin` and keep
+  the current value.
+- `avoid-airlines` answers are `name:soft|hard`, but the `avoid_airlines`
+  preference stores `{code, name, strength}` objects matched on the IATA
+  `code`. Resolve each airline name to its code yourself (Ethiopian is
+  ET) and build the full object.
+- Balance answers are `program:points` free text. Parse the points to
+  integers; resolve program names to seats.aero source slugs (Alaska is
+  `alaska`, Aeroplan is `aeroplan`) for `balances.programs` and bank
+  names (`amex`, `chase`, `citi`, `capitalone`) for
+  `balances.transferable`. Always send both maps, merged with the current
+  values — the top-level merge replaces `balances` whole, so a patch
+  carrying only one map erases the other.
+
+Write the patch with `prefs-set`. The merge is top-level: each key in the
+patch replaces that whole key, and every omitted key keeps its current
+value (the shipped defaults when the file does not exist yet). A real
+write:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" prefs-set <<'JSON'
+{"home_airport": "SFO",
+ "cabin": "business",
+ "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
+ "balances": {"programs": {"aeroplan": 88000, "alaska": 90000},
+              "transferable": {"amex": 150000, "chase": 80000}},
+ "op_ref": "op://Vault/item/field"}
+JSON
+```
+
+```
+/Users/<user>/.getaway/preferences.json
+```
+
+`prefs-status` flips to `configured` once a balance lands. Close by
+running `prefs` and confirming the saved values with the user.
+
 ## Planning workflow
 
+0. Check configuration with `prefs-status`. On `unconfigured`, offer
+   [first-run onboarding](#first-run-onboarding) — skippable; a decline
+   means planning proceeds on the current defaults. If no file exists yet,
+   run `prefs-init` on the skip path so `prefs` has defaults to read.
 1. Read preferences with `prefs`. Derive the origin set, cabin, date
    window (`trip_length_days` anchored on `departure_days`), avoid lists,
    and which programs hold points.
