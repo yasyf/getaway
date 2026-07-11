@@ -68,13 +68,12 @@ GIT_STATUS = {
 
 gate(
     REFLECT,
-    when=lambda evt: evt.ctx.t.has_skill("getaway", "getaway:getaway")
-    or any("seats.aero/partnerapi" in c for c in evt.ctx.t.commands()),
+    when=lambda evt: evt.ctx.t.has_skill("getaway", "getaway:getaway"),
     events=Event.Stop,
     max_fires=1,
     tests={
-        Input(transcript=[SEATS_SEARCH]): Block(pattern=r"preferences\.json"),
-        Input(transcript=[GETAWAY_SKILL]): Block(),
+        Input(transcript=[GETAWAY_SKILL]): Block(pattern=r"preferences\.json"),
+        Input(transcript=[SEATS_SEARCH]): Allow(),
         Input(transcript=[GIT_STATUS]): Allow(),
         Input(transcript=[]): Allow(),
     },
