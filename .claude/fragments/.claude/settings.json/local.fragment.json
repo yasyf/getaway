@@ -1,14 +1,1 @@
-{
-  "hooks": {
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uvx capt-hook run SubagentStart"
-          }
-        ]
-      }
-    ]
-  }
-}
+{}
