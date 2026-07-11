@@ -6,7 +6,7 @@ REFLECT = (
     "This session used the getaway skill. Before stopping, sweep the whole conversation once and land each "
     "durable learning in its home. Preferences the user stated or corrected belong in "
     "~/.getaway/preferences.json. That covers routing vetoes like 'never route me through IST', program "
-    "balances like 'my Alaska balance is actually 90k', home airports, and cabin or alliance preferences. "
+    "balances like 'my Alaska balance is actually 90k', home airports, elite status, and cabin or alliance preferences. "
     "Read the file, create it if absent, fold each learning into its key, and keep every existing key intact. "
     "Skill fixes belong upstream. That covers a wrong endpoint, parameter, or field name in SKILL.md or "
     "docs/seats-aero-api.md, an API quirk such as rate limits or stale-cache windows, and a query pattern "

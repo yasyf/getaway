@@ -132,6 +132,7 @@ prefs_template() {
   "departure_days": ["Sun", "Mon"],
   "avoid_destinations": ["ICN", "GMP", "NRT", "HND"],
   "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
+  "statuses": {},
   "balances": {"programs": {}, "transferable": {}},
   "learnings": []
 }
@@ -176,7 +177,7 @@ cmd_prefs_set() {
   tmp=$(mktemp "$GETAWAY_DIR/.prefs.XXXXXX")
   trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
   jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
-  jq -e '.version == 1 and has("op_ref") and has("home_airport") and (.balances | type == "object") and ((.balances.programs // {}) | type == "object") and ((.balances.transferable // {}) | type == "object")' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
+  jq -e '.version == 1 and has("op_ref") and has("home_airport") and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
   mv -f "$tmp" "$PREFS"
   echo "$PREFS"
 }

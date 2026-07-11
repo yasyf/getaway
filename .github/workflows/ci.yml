@@ -38,6 +38,18 @@ jobs:
           test "$(skills/getaway/getaway.sh prefs-status)" = configured
           skills/getaway/getaway.sh prefs | jq -e '.balances.programs.alaska == 90000' >/dev/null
           skills/getaway/getaway.sh prefs | jq -e '.home_airport == "SFO"' >/dev/null
+          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null
+          skills/getaway/getaway.sh prefs | jq -e '.statuses.united == "1K"' >/dev/null
+          prefs_file="$HOME/.getaway/preferences.json"
+          jq 'del(.statuses)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          echo '{"balances": {"programs": {"jetblue": 12000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
+          skills/getaway/getaway.sh prefs | jq -e '.balances.programs.jetblue == 12000' >/dev/null
+          for bad in '{"statuses": null}' '{"statuses": false}' '{"statuses": [1]}' '{"balances": {"programs": null}}' '{"balances": {"transferable": null}}'; do
+            before=$(cat "$prefs_file")
+            echo "$bad" | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
+            test "$rc" = 3 || { echo "expected shape-failure exit 3 for $bad, got $rc" >&2; exit 1; }
+            test "$(cat "$prefs_file")" = "$before" || { echo "file changed after rejected patch: $bad" >&2; exit 1; }
+          done
           if echo '{"bogus": 1}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1; then echo "unknown key not rejected"; exit 1; fi
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests

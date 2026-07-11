@@ -146,6 +146,11 @@ First use also opens an interactive onboarding form (cc-present) that
 collects the profile up front: home airport, cabin, avoid lists, points
 balances, and the 1Password key reference. Skip the form to accept the
 defaults.
+The form arrives pre-filled: [gogcli](https://gogcli.sh) scans Gmail
+read-only for airline emails, and the agent-browser-with-cookies skill
+reads live balances and elite tiers from the airline sites you're already
+logged into, behind one Touch ID tap. Nothing is saved until you confirm
+the form.
 The full schema lives in [skills/getaway/SKILL.md](skills/getaway/SKILL.md).
 
 ## Reference

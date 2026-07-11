@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-11
+
+### Added
+- Auto-filled onboarding. When the user accepts the form, the skill first
+  scans Gmail read-only through `gog` (lockdown flags on every call) for
+  programs, statuses, balances, and the home airport, then reads live
+  balances and elite tiers from airline sites via the
+  `agent-browser-with-cookies` skill behind one Touch ID tap. Discoveries
+  seed the form; nothing is written until Submit.
+- `statuses` preference: program slug to elite tier, breaking mileage-cost
+  ties toward carriers where the user holds status.
+- "Refresh my balances" path: re-scrape the airline sites for the programs
+  already on file, merge the results with `prefs-set`, and report per-program
+  deltas — no form round-trip.
+
+### Changed
+- The onboarding nudge hook now mentions the auto-fill step, and the
+  capt-hook pack manifest covers both shipped hooks.
+
 ## [0.3.0] - 2026-07-10
 
 ### Added

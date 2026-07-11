@@ -9,8 +9,11 @@ from captain_hook import Allow, Event, Input, Warn, nudge
 ONBOARD = (
     "This session is using the getaway skill and ~/.getaway/preferences.json is not configured yet "
     "(the file is missing, or it records no points balances). Before planning a trip, offer the "
-    "first-run onboarding form described in the getaway SKILL.md: build the cc-present preferences "
-    "form, invoke cc-present:present with it, and on submit write the answers with "
+    "first-run onboarding form described in the getaway SKILL.md: run auto-fill first, where each "
+    "gatherer degrades on its own tooling — when gog is present, scan Gmail; when the "
+    "agent-browser-with-cookies skill is available, read airline-site balances; missing tooling skips "
+    "only that half — and seed the form with what it discovers; then build the cc-present "
+    "preferences form, invoke cc-present:present with it, and on submit write the answers with "
     "getaway.sh prefs-set. The user may skip onboarding and plan with the current defaults; do not "
     "block on it. If preferences are already configured, ignore this."
 )
@@ -59,7 +62,7 @@ nudge(
     events=Event.PostToolUse,
     max_fires=1,
     tests={
-        Input(transcript=[GETAWAY_SKILL]): Warn(pattern=r"onboarding"),
+        Input(transcript=[GETAWAY_SKILL]): Warn(pattern=r"auto-fill"),
         Input(transcript=[GIT_STATUS]): Allow(),
         Input(transcript=[]): Allow(),
     },
