@@ -401,8 +401,10 @@ The full code list lives in
 > bucket also includes Indian Ocean (MRU, MLE) and Canary Islands
 > (FUE, ACE) airports; drop them when the user means the continent.
 
-Preferences and trip memory store explicit IATA codes, never
-pseudo-codes, so they stay valid if the API's expansion shifts.
+Trip memory and planner write-backs store explicit IATA codes, so they
+stay valid if the API's expansion shifts. Airport preferences the user
+states as pseudo-codes (`WST`, `QBA`) are stored verbatim — `search`
+re-expands them server-side on every call.
 
 ## Quota discipline
 

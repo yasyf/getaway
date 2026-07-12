@@ -18,8 +18,8 @@ any spawn. Prime the cookie grant at the main level per gather.md's
 [browser read](../refresh/gather.md#browser-read) — Touch ID denied
 means the spawn goes Gmail-only, no browser gatherers. Then run the
 gatherers below as parallel subagents in one spawn message — the
-Gmail gatherer (queries 2–4 and body fetches) beside one browser
-gatherer per host. The gatherers degrade
+Gmail gatherer (reads 2–4, the calendar read among them, and body
+fetches) beside one browser gatherer per host. The gatherers degrade
 independently: skipping one costs nothing but its answers, and none of
 them writes a byte. The form's Submit is the sole write gate, and the
 form is never delegated.
@@ -32,9 +32,10 @@ account and the tally-narrowed `from:` list; it returns
 JSON. Query 1 runs at the main level first, so the tally can seed both
 gatherers.
 
-Invocation mechanics — gog detection, the five lockdown flags, and the
+Invocation mechanics — gog detection, the lockdown flags, and the
 trust doctrine — live in gather.md's
-[Gmail read](../refresh/gather.md#gmail-read-gog-lockdown); Read
+[Gmail read](../refresh/gather.md#gmail-read-gog-lockdown) and
+[Calendar read](../refresh/gather.md#calendar-read-gog-lockdown); Read
 `${CLAUDE_PLUGIN_ROOT}/skills/refresh/gather.md` first.
 
 Resolve the account per gather.md's account rule (`gog auth list
@@ -42,8 +43,10 @@ Resolve the account per gather.md's account rule (`gog auth list
 onboarding the mailbox pick happens at the main level before the
 gatherers spawn — the lone pre-spawn question in this flow.
 
-Run four headers-first queries, fetching at most 10 message bodies
-total across all four per gather.md's body-fetch rule:
+Run the four reads below — three headers-first Gmail queries and one
+calendar read — fetching at most 10 message bodies total across the
+Gmail queries per gather.md's body-fetch rule (the flight-history
+fallback carries its own 25-body budget):
 
 1. **Programs, airlines, and banks** — `from:(<the 26 program domains
    and the 4 bank domains>) newer_than:1y`, `--max 100`, the domains
@@ -57,14 +60,36 @@ total across all four per gather.md's body-fetch rule:
    `subject:(status OR elite OR tier OR statement OR balance OR "miles
    summary") newer_than:1y`, `--max 25`. Take tier strings verbatim;
    parse balances to integers, most recent email wins.
-3. **Home airport** — `subject:("your itinerary" OR "flight
-   confirmation" OR "booking confirmation" OR "e-ticket" OR "boarding
-   pass") newer_than:2y`, `--max 50`. The mode of first-segment
-   departure airports is the home airport; runners-up are
-   `origin_airports` candidates.
+3. **Home airport** — a calendar read, not a Gmail query: ten years
+   of Google Calendar's Gmail-auto-extracted flight events, each
+   carrying the departure airport as the trailing IATA token of its
+   `location`. The invocation and the jq tally live in gather.md's
+   [Calendar read](../refresh/gather.md#calendar-read-gog-lockdown);
+   project and tally in the pipe so the raw event list never enters
+   context. The most frequent departure airport is `home_airport` only
+   when it has at least 10 segments and at least twice the runner-up's
+   count; short of either margin, return `home_airport: null` and the
+   form asks. Runners-up in frequency order are `origin_candidates`.
+   Calendar scope missing or denied, or fewer than 10 flight events
+   (0 is a normal path — Gmail auto-extraction can be off): run the
+   flight-history fallback below.
 4. **Bank points** — the query and its parse rules live in gather.md's
    [Gmail read](../refresh/gather.md#gmail-read-gog-lockdown); senders
    map to `balances.transferable` keys through its bank table.
+
+The flight-history fallback: `from:(<the 26 program domains from
+gather.md's
+[Program and bank domains](../refresh/gather.md#program-and-bank-domains)>)
+(itinerary OR receipt OR confirmation OR eticket OR "e-ticket" OR
+"boarding pass" OR reservation) newer_than:10y`, paged with `--all`
+and tallied with jq — the raw message list never enters context
+either. Then spend up to 25 sanitized body fetches on this question
+alone — a dedicated budget, separate from the shared 10 — stratified
+across years and airlines, preferring PNR-bearing transactional
+subjects ("eTicket Itinerary and Receipt", "Your Flight Receipt",
+"booking confirmation"). Departure airports come from the bodies'
+"City (XXX)" patterns; the same frequency-and-margin rule decides
+`home_airport` and `origin_candidates`.
 
 ## Balances from logins
 
@@ -73,8 +98,8 @@ spawn one browser gatherer per host beside the Gmail gatherer — all in
 one message, with the host list derived and fixed at spawn time. Each
 gatherer returns one `{slug, balance, tier}` record or a skip note;
 the orchestrator aggregates them. Programs the Gmail gatherer surfaces
-after the spawn enter the form as Gmail-sourced placeholders — offer a
-second browser pass only when the user wants exact numbers.
+after the spawn reach the form as Gmail-sourced label suffixes — offer
+a second browser pass only when the user wants exact numbers.
 
 Derive the host list automatically: the Gmail-tally programs and
 banks, any programs or banks the user has named, and the keys already
@@ -91,10 +116,12 @@ per-site extraction, the failure branches — are gather.md's
 
 Collect the answers with a cc-present form, not the approval board. Seed
 each field's `placeholder` with the user's current preference (from
-`prefs`); the shipped defaults below stand in when no file exists yet. A
-field auto-fill discovered gets the discovered value as its placeholder
-instead, plus a label suffix naming the source — `— found in Gmail,
-blank keeps it` or `— read from united.com`.
+`prefs`); the shipped defaults below stand in only when no preferences
+file exists yet. The saved preference always wins the placeholder — a
+discovery never displaces it. Auto-fill discoveries appear only as a
+label suffix naming the source and its strength — `— Calendar suggests
+YVR, weak: 2 of 3 segments` or `— united.com reads 88,000` — never as
+the keep-on-blank value; accepting one means typing it.
 This document passes `cc-present push --dry-run`:
 
 ```json
@@ -105,10 +132,10 @@ This document passes `cc-present push --dry-run`:
   "submit": { "label": "Save preferences", "note": "Writes the values below to ~/.getaway/preferences.json." },
   "blocks": [
     { "id": "sec-airports", "type": "section", "title": "Airports" },
-    { "id": "home-airport", "type": "input", "label": "Home airport (IATA)", "placeholder": "SFO" },
-    { "id": "origin-airports", "type": "input", "label": "Origin airports to search from (comma-separated IATA)", "placeholder": "SFO,SJC,SAN,PDX,DEN,LAS,SLC,YVR" },
+    { "id": "home-airport", "type": "input", "label": "Home airport (IATA or seats.aero region code — QBA, WST, NYC…)", "placeholder": "SFO" },
+    { "id": "origin-airports", "type": "input", "label": "Origin airports to search from (comma-separated IATA or seats.aero region codes — QBA, WST, NYC…)", "placeholder": "SFO,SJC,SAN,PDX,DEN,LAS,SLC,YVR" },
     { "id": "sec-avoid", "type": "section", "title": "Avoid" },
-    { "id": "avoid-transit", "type": "input", "label": "Airports you never want to connect through, comma-separated IATA", "placeholder": "none" },
+    { "id": "avoid-transit", "type": "input", "label": "Airports you never want to connect through — comma-separated IATA or seats.aero region codes (QBA, WST, NYC…)", "placeholder": "none" },
     { "id": "avoid-airlines", "type": "input", "label": "Airlines to avoid — name:soft or name:hard, comma-separated", "placeholder": "Ethiopian:soft", "multiline": true },
     { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
     { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
@@ -129,13 +156,21 @@ the preference schema differ:
 
 - `input` blocks carry no seeded value — the placeholder displays what
   blank keeps. A field absent from the outcomes means the user left it
-  blank: keep the placeholder's value. On an ordinary field that is the
-  current preference, so omit the key from the patch; on a
-  discovery-seeded field it is the discovered value, so include it in
-  the patch. Never overwrite a preference with an empty value.
-- `avoid-transit` answers are comma-separated IATA codes; split them into
-  the `avoid_transit` array. A blank field keeps the current list, so omit
-  the key; a literal `none` clears it, so send `"avoid_transit": []`.
+  blank: keep the placeholder's value — the current preference, or the
+  shipped default when no file exists — so omit the key from the patch.
+  A blank never adopts a discovery; adopting one takes a typed answer.
+  Never overwrite a preference with an empty value.
+- Airport answers accept 3-letter IATA-shaped codes plus the region
+  pseudo-codes documented in
+  [docs/seats-aero-api.md](../../docs/seats-aero-api.md) § Region
+  pseudo-codes — the same table
+  [skills/getaway/SKILL.md](../getaway/SKILL.md#region-pseudo-codes)
+  points at. Reject anything else; store accepted codes verbatim —
+  `getaway.sh search --origin` already resolves pseudo-codes.
+- `avoid-transit` answers are comma-separated airport codes; split them
+  into the `avoid_transit` array. A blank field keeps the current list,
+  so omit the key; a literal `none` clears it, so send
+  `"avoid_transit": []`.
 - `avoid-airlines` answers are `name:soft|hard`, but the `avoid_airlines`
   preference stores `{code, name, strength}` objects matched on the IATA
   `code`. Resolve each airline name to its code yourself (Ethiopian is

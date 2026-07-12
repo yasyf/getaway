@@ -4,7 +4,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-12
+
+### Fixed
+- The gather doctrine no longer attributes a logged-out airline landing
+  to IndexedDB auth — an untested inference from a hung session; the
+  branch is now neutral: a page that lands logged-out after a
+  verified-fresh login is noted and skipped.
 
 ### Added
 - `skills/getaway/plan-trip.js`: a shipped Workflow script that runs the
@@ -40,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks re-aimed: the onboarding nudge points unconfigured sessions at
   `getaway:onboard`, and session reflection also fires for onboard and
   refresh sessions.
+- Onboarding's home-airport inference is calendar-first: ten years of
+  Google Calendar's Gmail-auto-extracted flight events (locked-down
+  `gog calendar events --event-types from-gmail`, tallied in the jq
+  pipe) with a frequency-plus-margin rule — at least 10 segments and
+  twice the runner-up — before naming `home_airport`; the Gmail
+  fallback becomes a sender-domain query over the program-domain table
+  with a dedicated 25-body budget, replacing the subject-phrase query
+  that counted return legs as origins. Saved preferences always win
+  form placeholders — a discovery is a label suffix naming source and
+  strength, and blank keeps the saved value — and airport fields
+  accept seats.aero region pseudo-codes (QBA, WST, NYC…) stored
+  verbatim.
 
 ## [0.6.0] - 2026-07-11
 
