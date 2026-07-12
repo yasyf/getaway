@@ -100,6 +100,14 @@ jobs:
           test "$rc" = 3 || { echo "expected no-current plan-set exit 3, got $rc" >&2; exit 1; }
           skills/getaway/getaway.sh plan-new 2026-07-test >/dev/null 2>&1 && rc=0 || rc=$?
           test "$rc" = 3 || { echo "expected existing-slug plan-new exit 3, got $rc" >&2; exit 1; }
+          victim="$HOME/victim" && echo keepme >"$victim"
+          ln -s "$victim" "$HOME/.getaway/plans/current"
+          skills/getaway/getaway.sh plan-new 2026-08-symlink >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected symlink-pointer refusal exit 3, got $rc" >&2; exit 1; }
+          test "$(cat "$victim")" = keepme || { echo "symlinked victim overwritten" >&2; exit 1; }
+          test ! -e "$HOME/.getaway/plans/2026-08-symlink.json" || { echo "orphan plan file left behind symlink refusal" >&2; exit 1; }
+          rm "$HOME/.getaway/plans/current"
+          skills/getaway/getaway.sh plan-new 2026-08-symlink >/dev/null
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests
         run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json

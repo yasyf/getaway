@@ -229,9 +229,16 @@ plan_resolve_slug() {
   printf '%s' "$slug"
 }
 
+plan_current_guard() {
+  if [[ -L "$PLANS_CURRENT" || ( -e "$PLANS_CURRENT" && ! -f "$PLANS_CURRENT" ) ]]; then
+    echo "$PLANS_CURRENT is not a regular file; refusing to write" >&2
+    exit 3
+  fi
+}
+
 plan_write_current() {
   local slug="$1" tmp
-  [[ -L "$PLANS_CURRENT" || ( -e "$PLANS_CURRENT" && ! -f "$PLANS_CURRENT" ) ]] && { echo "$PLANS_CURRENT is not a regular file; refusing to write" >&2; exit 3; }
+  plan_current_guard
   tmp=$(mktemp "$PLANS_DIR/.current.XXXXXX")
   trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
   printf '%s' "$slug" >"$tmp"
@@ -254,6 +261,7 @@ cmd_plan_new() {
     exit 3
   }
   mkdir -p "$PLANS_DIR"
+  plan_current_guard
   plan_template | jq --arg slug "$slug" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.slug = $slug | .created = $created' >"$file"
   plan_write_current "$slug"
   echo "$file"
@@ -303,11 +311,11 @@ cmd_plan_done() {
   slug=$(plan_resolve_slug "${1:-}") || exit $?
   file="$PLANS_DIR/$slug.json"
   plan_require "$file"
+  plan_current_guard
   tmp=$(mktemp "$PLANS_DIR/.plan.XXXXXX")
   trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
   jq '.status = "done"' "$file" >"$tmp"
   mv -f "$tmp" "$file"
-  [[ -L "$PLANS_CURRENT" || ( -e "$PLANS_CURRENT" && ! -f "$PLANS_CURRENT" ) ]] && { echo "$PLANS_CURRENT is not a regular file; refusing to write" >&2; exit 3; }
   [[ -f "$PLANS_CURRENT" && "$(cat "$PLANS_CURRENT")" == "$slug" ]] && rm -f "$PLANS_CURRENT"
   echo "$file"
 }
