@@ -31,7 +31,7 @@ jobs:
         run: |
           export HOME="$(mktemp -d)"
           skills/getaway/getaway.sh prefs-init
-          test "$(skills/getaway/getaway.sh prefs | jq .version)" = 1
+          test "$(skills/getaway/getaway.sh prefs | jq .version)" = 2
           status_out=$(skills/getaway/getaway.sh prefs-status) && status_code=0 || status_code=$?
           test "$status_out" = unconfigured && test "$status_code" = 1
           echo '{"balances": {"programs": {"alaska": 90000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
@@ -51,6 +51,55 @@ jobs:
             test "$(cat "$prefs_file")" = "$before" || { echo "file changed after rejected patch: $bad" >&2; exit 1; }
           done
           if echo '{"bogus": 1}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1; then echo "unknown key not rejected"; exit 1; fi
+          echo '{"cabin": "business"}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 64 || { echo "expected removed-key rejection exit 64, got $rc" >&2; exit 1; }
+          jq '. + {"cabin": "business"}' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          before=$(cat "$prefs_file")
+          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected stale merged-key exit 3, got $rc" >&2; exit 1; }
+          test "$(cat "$prefs_file")" = "$before" || { echo "prefs changed after stale-key rejection" >&2; exit 1; }
+          jq 'del(.cabin)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          jq '.version = 1' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          skills/getaway/getaway.sh prefs >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected version-1 prefs exit 3, got $rc" >&2; exit 1; }
+          skills/getaway/getaway.sh prefs-status >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected version-1 prefs-status exit 3, got $rc" >&2; exit 1; }
+      - name: Plan round-trip
+        run: |
+          export HOME="$(mktemp -d)"
+          skills/getaway/getaway.sh prefs-init
+          skills/getaway/getaway.sh plan-new 2026-07-test
+          for badslug in '' '.hidden' 'a/b'; do
+            skills/getaway/getaway.sh plan-new "$badslug" >/dev/null 2>&1 && rc=0 || rc=$?
+            test "$rc" = 64 || { echo "expected malformed-slug exit 64 for '$badslug', got $rc" >&2; exit 1; }
+          done
+          echo '{"cabin": "business", "window": {"start": "2026-07-12", "end": "2026-07-16", "trip_length_days": 7}, "avoid_final_destinations": ["ICN","GMP","NRT","HND"]}' | skills/getaway/getaway.sh plan-set >/dev/null
+          skills/getaway/getaway.sh plan-show | jq -e '.cabin == "business" and .status == "planning"' >/dev/null
+          skills/getaway/getaway.sh plan-show | jq -e '.slug == "2026-07-test"' >/dev/null
+          skills/getaway/getaway.sh plan-list | grep -q '2026-07-test.*planning'
+          plan_file="$HOME/.getaway/plans/2026-07-test.json"
+          echo '{"bogus": 1}' | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 64 || { echo "expected unknown plan key exit 64, got $rc" >&2; exit 1; }
+          for bad in '{"window": null}' '{"regions": [1]}' '{"vibe": 1}' '{"avoid_final_destinations": "ICN"}' '{"decisions": {}}' '{"status": {}}' '{"status": "bogus"}' '{"window": {"start": {}, "end": null, "trip_length_days": null}}' '{"regions": {"include": "x", "exclude": []}}'; do
+            before=$(cat "$plan_file")
+            echo "$bad" | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
+            test "$rc" = 3 || { echo "expected shape-failure exit 3 for $bad, got $rc" >&2; exit 1; }
+            test "$(cat "$plan_file")" = "$before" || { echo "plan changed after rejected patch: $bad" >&2; exit 1; }
+          done
+          for reserved in '{"slug": "beta"}' '{"created": "2020-01-01T00:00:00Z"}' '{"version": 2}'; do
+            before=$(cat "$plan_file")
+            echo "$reserved" | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
+            test "$rc" = 64 || { echo "expected reserved-key exit 64 for $reserved, got $rc" >&2; exit 1; }
+            test "$(cat "$plan_file")" = "$before" || { echo "plan changed after reserved patch: $reserved" >&2; exit 1; }
+          done
+          skills/getaway/getaway.sh plan-done
+          skills/getaway/getaway.sh plan-show 2026-07-test | jq -e '.status == "done"' >/dev/null
+          skills/getaway/getaway.sh plan-show >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected no-current plan-show exit 3, got $rc" >&2; exit 1; }
+          echo '{"cabin": "business"}' | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected no-current plan-set exit 3, got $rc" >&2; exit 1; }
+          skills/getaway/getaway.sh plan-new 2026-07-test >/dev/null 2>&1 && rc=0 || rc=$?
+          test "$rc" = 3 || { echo "expected existing-slug plan-new exit 3, got $rc" >&2; exit 1; }
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests
         run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json

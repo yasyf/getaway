@@ -6,6 +6,8 @@ BASE_URL="https://seats.aero/partnerapi"
 GETAWAY_DIR="$HOME/.getaway"
 PREFS="$GETAWAY_DIR/preferences.json"
 QUOTA="$GETAWAY_DIR/quota"
+PLANS_DIR="$GETAWAY_DIR/plans"
+PLANS_CURRENT="$PLANS_DIR/current"
 
 usage() {
   local msg="${1:-}"
@@ -18,6 +20,11 @@ commands:
   prefs                            print preferences as compact JSON
   prefs-status                     print configured/unconfigured; exit 0 if a balance is set, else 1
   prefs-set                        read a JSON patch on stdin and top-level-merge it into preferences
+  plan-new <slug>                  create a trip-memory plan (refuses if the slug exists); sets it current
+  plan-set [<slug>]                read a JSON patch on stdin and top-level-merge it into the named/current plan
+  plan-show [<slug>]               print the named/current plan as compact JSON
+  plan-list                        list plans as slug/status/created rows
+  plan-done [<slug>]               mark the named/current plan done; clears the current pointer if it points there
   search  --origin A,B --dest C,D [--start YYYY-MM-DD] [--end YYYY-MM-DD]
           [--cabin business] [--sources aeroplan,united] [--carriers DL,AA]
           [--direct] [--order lowest_mileage] [--take 500] [--pages 1]
@@ -123,18 +130,34 @@ paginate() {
 prefs_template() {
   cat <<'JSON'
 {
-  "version": 1,
+  "version": 2,
   "op_ref": null,
   "home_airport": "SFO",
   "origin_airports": ["SFO", "SJC", "SAN", "PDX", "DEN", "LAS", "SLC", "YVR"],
-  "cabin": "business",
-  "trip_length_days": 7,
-  "departure_days": ["Sun", "Mon"],
-  "avoid_destinations": ["ICN", "GMP", "NRT", "HND"],
+  "avoid_transit": [],
   "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
   "statuses": {},
   "balances": {"programs": {}, "transferable": {}},
   "learnings": []
+}
+JSON
+}
+
+plan_template() {
+  cat <<'JSON'
+{
+  "version": 1,
+  "slug": null,
+  "created": null,
+  "status": "planning",
+  "ask": null,
+  "window": {"start": null, "end": null, "trip_length_days": null},
+  "cabin": null,
+  "party": 1,
+  "regions": {"include": [], "exclude": []},
+  "vibe": [],
+  "avoid_final_destinations": [],
+  "decisions": []
 }
 JSON
 }
@@ -151,7 +174,7 @@ cmd_prefs_init() {
 
 cmd_prefs_status() {
   [[ -f "$PREFS" ]] || { echo "unconfigured"; exit 1; }
-  jq -e '.version == 1' "$PREFS" >/dev/null 2>&1 || { echo "unconfigured"; exit 1; }
+  jq -e '.version == 2' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 2); see the CHANGELOG for the migration" >&2; exit 3; }
   if jq -e '((.balances.programs // {}) | length) > 0 or ((.balances.transferable // {}) | length) > 0' "$PREFS" >/dev/null; then
     echo "configured"
   else
@@ -161,7 +184,7 @@ cmd_prefs_status() {
 }
 
 cmd_prefs_set() {
-  local patch base tmp unknown
+  local patch base tmp unknown extra
   patch=$(cat)
   jq -es 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$patch" || usage "prefs-set: stdin must be a single JSON object"
   unknown=$(jq -c --argjson t "$(prefs_template)" '(keys - ($t | keys))' <<<"$patch")
@@ -169,7 +192,7 @@ cmd_prefs_set() {
   [[ -L "$PREFS" || ( -e "$PREFS" && ! -f "$PREFS" ) ]] && { echo "$PREFS is not a regular file; refusing to write" >&2; exit 3; }
   mkdir -p "$GETAWAY_DIR"
   if [[ -f "$PREFS" ]]; then
-    jq -e '.version == 1' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 1)" >&2; exit 3; }
+    jq -e '.version == 2' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 2)" >&2; exit 3; }
     base=$(cat "$PREFS")
   else
     base=$(prefs_template)
@@ -177,7 +200,9 @@ cmd_prefs_set() {
   tmp=$(mktemp "$GETAWAY_DIR/.prefs.XXXXXX")
   trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
   jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
-  jq -e '.version == 1 and has("op_ref") and has("home_airport") and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
+  extra=$(jq -c --argjson t "$(prefs_template)" '(keys - ($t | keys))' "$tmp")
+  [[ "$extra" == "[]" ]] || { echo "prefs-set: merged preferences carry keys absent from the template: $extra; refusing to write" >&2; exit 3; }
+  jq -e '.version == 2 and has("op_ref") and has("home_airport") and ((has("avoid_transit") | not) or (.avoid_transit | type == "array")) and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
   mv -f "$tmp" "$PREFS"
   echo "$PREFS"
 }
@@ -187,11 +212,104 @@ cmd_prefs() {
     echo "no preferences at $PREFS; run: getaway.sh prefs-init" >&2
     exit 3
   }
-  if ! jq -e '.version == 1' "$PREFS" >/dev/null; then
-    echo "unsupported preferences version in $PREFS (expected 1)" >&2
+  if ! jq -e '.version == 2' "$PREFS" >/dev/null; then
+    echo "unsupported preferences version in $PREFS (expected 2)" >&2
     exit 3
   fi
   jq -c . "$PREFS"
+}
+
+plan_resolve_slug() {
+  local slug="$1"
+  if [[ -z "$slug" ]]; then
+    [[ -f "$PLANS_CURRENT" ]] || { echo "no current plan; run: getaway.sh plan-new <slug>" >&2; exit 3; }
+    slug=$(cat "$PLANS_CURRENT")
+  fi
+  [[ "$slug" == */* ]] && { echo "plan slug must not contain '/': $slug" >&2; exit 3; }
+  printf '%s' "$slug"
+}
+
+plan_write_current() {
+  local slug="$1" tmp
+  [[ -L "$PLANS_CURRENT" || ( -e "$PLANS_CURRENT" && ! -f "$PLANS_CURRENT" ) ]] && { echo "$PLANS_CURRENT is not a regular file; refusing to write" >&2; exit 3; }
+  tmp=$(mktemp "$PLANS_DIR/.current.XXXXXX")
+  trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
+  printf '%s' "$slug" >"$tmp"
+  mv -f "$tmp" "$PLANS_CURRENT"
+}
+
+plan_require() {
+  local file="$1"
+  [[ -f "$file" ]] || { echo "no plan at $file" >&2; exit 3; }
+  jq -e '.version == 1' "$file" >/dev/null 2>&1 || { echo "unsupported plan version in $file (expected 1)" >&2; exit 3; }
+}
+
+cmd_plan_new() {
+  [[ $# -ge 1 ]] || usage "plan-new: usage: plan-new <slug>"
+  local slug="$1"
+  [[ "$slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || usage "plan-new: invalid slug: $slug (must match ^[A-Za-z0-9][A-Za-z0-9._-]*\$; letters, digits, dot, dash, underscore, no leading dot or slash)"
+  local file="$PLANS_DIR/$slug.json"
+  [[ -e "$file" || -L "$file" ]] && {
+    echo "plan already exists at $file; refusing to overwrite" >&2
+    exit 3
+  }
+  mkdir -p "$PLANS_DIR"
+  plan_template | jq --arg slug "$slug" --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.slug = $slug | .created = $created' >"$file"
+  plan_write_current "$slug"
+  echo "$file"
+}
+
+cmd_plan_set() {
+  local slug patch base tmp unknown reserved file
+  patch=$(cat)
+  jq -es 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$patch" || usage "plan-set: stdin must be a single JSON object"
+  unknown=$(jq -c --argjson t "$(plan_template)" '(keys - ($t | keys))' <<<"$patch")
+  [[ "$unknown" == "[]" ]] || usage "plan-set: unknown plan keys: $unknown"
+  reserved=$(jq -c '[keys[] | select(. == "slug" or . == "created" or . == "version")]' <<<"$patch")
+  [[ "$reserved" == "[]" ]] || usage "plan-set: keys stamped by plan-new cannot be patched: $reserved"
+  slug=$(plan_resolve_slug "${1:-}") || exit $?
+  file="$PLANS_DIR/$slug.json"
+  [[ -L "$file" || ( -e "$file" && ! -f "$file" ) ]] && { echo "$file is not a regular file; refusing to write" >&2; exit 3; }
+  plan_require "$file"
+  base=$(cat "$file")
+  tmp=$(mktemp "$PLANS_DIR/.plan.XXXXXX")
+  trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
+  jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
+  jq -e '.version == 1 and has("slug") and (.status == "planning" or .status == "done") and ((has("window") | not) or (.window | type == "object" and ((has("start") | not) or (.start | type == "string" or . == null)) and ((has("end") | not) or (.end | type == "string" or . == null)) and ((has("trip_length_days") | not) or (.trip_length_days | type == "number" or . == null)))) and ((has("regions") | not) or (.regions | type == "object" and ((has("include") | not) or (.include | type == "array")) and ((has("exclude") | not) or (.exclude | type == "array")))) and ((has("vibe") | not) or (.vibe | type == "array")) and ((has("avoid_final_destinations") | not) or (.avoid_final_destinations | type == "array")) and ((has("decisions") | not) or (.decisions | type == "array"))' "$tmp" >/dev/null || { echo "plan-set produced an invalid plan; refusing to write" >&2; exit 3; }
+  mv -f "$tmp" "$file"
+  echo "$file"
+}
+
+cmd_plan_show() {
+  local slug file
+  slug=$(plan_resolve_slug "${1:-}") || exit $?
+  file="$PLANS_DIR/$slug.json"
+  plan_require "$file"
+  jq -c . "$file"
+}
+
+cmd_plan_list() {
+  [[ -d "$PLANS_DIR" ]] || return 0
+  local f
+  for f in "$PLANS_DIR"/*.json; do
+    [[ -e "$f" ]] || continue
+    plan_require "$f"
+    jq -r '[.slug, .status, .created] | @tsv' "$f"
+  done
+}
+
+cmd_plan_done() {
+  local slug file tmp
+  slug=$(plan_resolve_slug "${1:-}") || exit $?
+  file="$PLANS_DIR/$slug.json"
+  plan_require "$file"
+  tmp=$(mktemp "$PLANS_DIR/.plan.XXXXXX")
+  trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
+  jq '.status = "done"' "$file" >"$tmp"
+  mv -f "$tmp" "$file"
+  [[ -L "$PLANS_CURRENT" || ( -e "$PLANS_CURRENT" && ! -f "$PLANS_CURRENT" ) ]] && { echo "$PLANS_CURRENT is not a regular file; refusing to write" >&2; exit 3; }
+  [[ -f "$PLANS_CURRENT" && "$(cat "$PLANS_CURRENT")" == "$slug" ]] && rm -f "$PLANS_CURRENT"
+  echo "$file"
 }
 
 cmd_search() {
@@ -292,6 +410,11 @@ main() {
     prefs) cmd_prefs "$@" ;;
     prefs-status) cmd_prefs_status "$@" ;;
     prefs-set) cmd_prefs_set "$@" ;;
+    plan-new) cmd_plan_new "$@" ;;
+    plan-set) cmd_plan_set "$@" ;;
+    plan-show) cmd_plan_show "$@" ;;
+    plan-list) cmd_plan_list "$@" ;;
+    plan-done) cmd_plan_done "$@" ;;
     search) cmd_search "$@" ;;
     availability) cmd_availability "$@" ;;
     trip) cmd_trip "$@" ;;

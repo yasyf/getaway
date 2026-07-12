@@ -101,8 +101,9 @@ exactly where you don't want to land. Hand it over as-is:
 I want to go somewhere warm for a week on points, skipping the usual suspects.
 ```
 
-The skill reads your preferences — home airport, avoided destinations,
-program balances — sweeps whole regions, and pitches concrete options. One
+The skill reads your travel profile — home airport, program balances —
+pins the brief into per-trip memory, sweeps whole regions, and pitches
+concrete options. One
 Aeroplan bulk scan surfaces island space most people never think to search:
 
 ```text
@@ -136,14 +137,18 @@ Aeroplan bulk scan surfaces island space most people never think to search:
 
 </details>
 
-## Preferences
+## Preferences and trip memory
 
-The skill keeps your travel profile at `~/.getaway/preferences.json`. It
-creates the file on first use and folds in what it learns as you plan: your
-home airport, cabin preference, destinations you never want, airlines to
-avoid, per-program points balances, and the `op_ref` pointer for the API key.
+Two stores back planning. Your global profile lives at
+`~/.getaway/preferences.json` — the always-true facts: home airport, origin
+airports, airlines to avoid, airports you never connect through, elite
+statuses, per-program points balances, and the `op_ref` pointer for the API
+key. Each trip gets its own memory at `~/.getaway/plans/<slug>.json`, filled
+in as planning pins down the dates, cabin, party, regions, and destinations
+to skip. A destination skipped there is ruled out only as the trip's final
+stop; it stays valid as a connection or positioning stop.
 First use also opens an interactive onboarding form (cc-present) that
-collects the profile up front: home airport, cabin, avoid lists, points
+collects the profile up front: home airport, avoid lists, points
 balances, and the 1Password key reference. Skip the form to accept the
 defaults.
 The form arrives pre-filled: [gogcli](https://gogcli.sh) scans Gmail
@@ -151,7 +156,7 @@ read-only for airline emails, and the agent-browser-with-cookies skill
 reads live balances and elite tiers from the airline sites you're already
 logged into, behind one Touch ID tap. Nothing is saved until you confirm
 the form.
-The full schema lives in [skills/getaway/SKILL.md](skills/getaway/SKILL.md).
+Both schemas live in [skills/getaway/SKILL.md](skills/getaway/SKILL.md).
 
 ## Reference
 

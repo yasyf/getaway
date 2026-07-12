@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-11
+
+### Added
+- Per-trip memory at `~/.getaway/plans/<slug>.json`, with the active slug
+  in `~/.getaway/plans/current` and five `getaway.sh` subcommands:
+  `plan-new`, `plan-set`, `plan-show`, `plan-list`, and `plan-done`.
+  Trip-shaped constraints — window, cabin, party, regions, vibe,
+  `avoid_final_destinations` (final-stop veto only; those airports stay
+  valid as connections), and a `decisions` log — write back mid-planning,
+  the moment each one is pinned down.
+- `avoid_transit` preference: airports never to connect through, enforced
+  against `/trips/{id}` segments.
+- Three-way session reflection: always-true facts route to preferences,
+  trip-scoped facts to the active plan via `plan-set`, and skill or API
+  corrections to the docs.
+
+### Changed
+- **BREAKING**: preferences schema v2. `cabin`, `trip_length_days`,
+  `departure_days`, and `avoid_destinations` were trip-shaped, not
+  global; they leave `~/.getaway/preferences.json` for trip memory.
+  Old `version: 1` files exit 3 until migrated:
+
+  ```bash
+  jq 'del(.cabin, .trip_length_days, .departure_days, .avoid_destinations) | .version = 2 | .avoid_transit = []' \
+    ~/.getaway/preferences.json > ~/.getaway/preferences.json.tmp \
+  && mv ~/.getaway/preferences.json.tmp ~/.getaway/preferences.json
+  ```
+
 ## [0.5.0] - 2026-07-11
 
 ### Added
