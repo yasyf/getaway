@@ -130,7 +130,6 @@ paginate() {
 prefs_template() {
   cat <<'JSON'
 {
-  "version": 2,
   "op_ref": null,
   "home_airport": "SFO",
   "origin_airports": ["SFO", "SJC", "SAN", "PDX", "DEN", "LAS", "SLC", "YVR"],
@@ -146,7 +145,6 @@ JSON
 plan_template() {
   cat <<'JSON'
 {
-  "version": 1,
   "slug": null,
   "created": null,
   "status": "planning",
@@ -174,7 +172,6 @@ cmd_prefs_init() {
 
 cmd_prefs_status() {
   [[ -f "$PREFS" ]] || { echo "unconfigured"; exit 1; }
-  jq -e '.version == 2' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 2); see the CHANGELOG for the migration" >&2; exit 3; }
   if jq -e '((.balances.programs // {}) | length) > 0 or ((.balances.transferable // {}) | length) > 0' "$PREFS" >/dev/null; then
     echo "configured"
   else
@@ -192,7 +189,6 @@ cmd_prefs_set() {
   [[ -L "$PREFS" || ( -e "$PREFS" && ! -f "$PREFS" ) ]] && { echo "$PREFS is not a regular file; refusing to write" >&2; exit 3; }
   mkdir -p "$GETAWAY_DIR"
   if [[ -f "$PREFS" ]]; then
-    jq -e '.version == 2' "$PREFS" >/dev/null 2>&1 || { echo "unsupported preferences version in $PREFS (expected 2)" >&2; exit 3; }
     base=$(cat "$PREFS")
   else
     base=$(prefs_template)
@@ -202,7 +198,7 @@ cmd_prefs_set() {
   jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
   extra=$(jq -c --argjson t "$(prefs_template)" '(keys - ($t | keys))' "$tmp")
   [[ "$extra" == "[]" ]] || { echo "prefs-set: merged preferences carry keys absent from the template: $extra; refusing to write" >&2; exit 3; }
-  jq -e '.version == 2 and has("op_ref") and has("home_airport") and ((has("avoid_transit") | not) or (.avoid_transit | type == "array")) and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
+  jq -e 'has("op_ref") and has("home_airport") and ((has("avoid_transit") | not) or (.avoid_transit | type == "array")) and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
   mv -f "$tmp" "$PREFS"
   echo "$PREFS"
 }
@@ -212,10 +208,6 @@ cmd_prefs() {
     echo "no preferences at $PREFS; run: getaway.sh prefs-init" >&2
     exit 3
   }
-  if ! jq -e '.version == 2' "$PREFS" >/dev/null; then
-    echo "unsupported preferences version in $PREFS (expected 2)" >&2
-    exit 3
-  fi
   jq -c . "$PREFS"
 }
 
@@ -248,7 +240,6 @@ plan_write_current() {
 plan_require() {
   local file="$1"
   [[ -f "$file" ]] || { echo "no plan at $file" >&2; exit 3; }
-  jq -e '.version == 1' "$file" >/dev/null 2>&1 || { echo "unsupported plan version in $file (expected 1)" >&2; exit 3; }
 }
 
 cmd_plan_new() {
@@ -273,7 +264,7 @@ cmd_plan_set() {
   jq -es 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$patch" || usage "plan-set: stdin must be a single JSON object"
   unknown=$(jq -c --argjson t "$(plan_template)" '(keys - ($t | keys))' <<<"$patch")
   [[ "$unknown" == "[]" ]] || usage "plan-set: unknown plan keys: $unknown"
-  reserved=$(jq -c '[keys[] | select(. == "slug" or . == "created" or . == "version")]' <<<"$patch")
+  reserved=$(jq -c '[keys[] | select(. == "slug" or . == "created")]' <<<"$patch")
   [[ "$reserved" == "[]" ]] || usage "plan-set: keys stamped by plan-new cannot be patched: $reserved"
   slug=$(plan_resolve_slug "${1:-}") || exit $?
   file="$PLANS_DIR/$slug.json"
@@ -283,7 +274,7 @@ cmd_plan_set() {
   tmp=$(mktemp "$PLANS_DIR/.plan.XXXXXX")
   trap 'rm -f "${tmp:-}"' EXIT  # EXIT, not RETURN: this runs in the main shell, so cleanup must survive exit 3 and set -e
   jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
-  jq -e '.version == 1 and has("slug") and (.status == "planning" or .status == "done") and ((has("window") | not) or (.window | type == "object" and ((has("start") | not) or (.start | type == "string" or . == null)) and ((has("end") | not) or (.end | type == "string" or . == null)) and ((has("trip_length_days") | not) or (.trip_length_days | type == "number" or . == null)))) and ((has("regions") | not) or (.regions | type == "object" and ((has("include") | not) or (.include | type == "array")) and ((has("exclude") | not) or (.exclude | type == "array")))) and ((has("vibe") | not) or (.vibe | type == "array")) and ((has("avoid_final_destinations") | not) or (.avoid_final_destinations | type == "array")) and ((has("decisions") | not) or (.decisions | type == "array"))' "$tmp" >/dev/null || { echo "plan-set produced an invalid plan; refusing to write" >&2; exit 3; }
+  jq -e 'has("slug") and (.status == "planning" or .status == "done") and ((has("window") | not) or (.window | type == "object" and ((has("start") | not) or (.start | type == "string" or . == null)) and ((has("end") | not) or (.end | type == "string" or . == null)) and ((has("trip_length_days") | not) or (.trip_length_days | type == "number" or . == null)))) and ((has("regions") | not) or (.regions | type == "object" and ((has("include") | not) or (.include | type == "array")) and ((has("exclude") | not) or (.exclude | type == "array")))) and ((has("vibe") | not) or (.vibe | type == "array")) and ((has("avoid_final_destinations") | not) or (.avoid_final_destinations | type == "array")) and ((has("decisions") | not) or (.decisions | type == "array"))' "$tmp" >/dev/null || { echo "plan-set produced an invalid plan; refusing to write" >&2; exit 3; }
   mv -f "$tmp" "$file"
   echo "$file"
 }

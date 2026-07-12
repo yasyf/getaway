@@ -20,7 +20,7 @@ REFLECT = (
     "that beat the documented one. Working in the getaway repo itself, propose the doc edit to the user; "
     "anywhere else, append one dated bullet to ~/.getaway/learnings.md. "
     "On every write, fold each fact into its key and keep every existing key intact, write only keys the "
-    "respective shipped template already defines, and leave op_ref and version exactly as they are. A session "
+    "respective shipped template already defines, and leave op_ref exactly as it is. A session "
     "with nothing the user stated yields no writes; stop again right away."
 )
 

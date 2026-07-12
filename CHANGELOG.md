@@ -23,16 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   corrections to the docs.
 
 ### Changed
-- **BREAKING**: preferences schema v2. `cabin`, `trip_length_days`,
-  `departure_days`, and `avoid_destinations` were trip-shaped, not
-  global; they leave `~/.getaway/preferences.json` for trip memory.
-  Old `version: 1` files exit 3 until migrated:
-
-  ```bash
-  jq 'del(.cabin, .trip_length_days, .departure_days, .avoid_destinations) | .version = 2 | .avoid_transit = []' \
-    ~/.getaway/preferences.json > ~/.getaway/preferences.json.tmp \
-  && mv ~/.getaway/preferences.json.tmp ~/.getaway/preferences.json
-  ```
+- Preferences hold only always-true profile facts. `cabin`,
+  `trip_length_days`, `departure_days`, and `avoid_destinations` were
+  trip-shaped, not global; they leave `~/.getaway/preferences.json` for
+  trip memory. Schema files carry no version field — validation is
+  shape-only, and a file that doesn't fit is re-initialized, not
+  migrated.
 
 ## [0.5.0] - 2026-07-11
 

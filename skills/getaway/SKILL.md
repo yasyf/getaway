@@ -44,7 +44,7 @@ defaults:
 ```
 
 ```json
-{"version":2,"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"statuses":{},"balances":{"programs":{},"transferable":{}},"learnings":[]}
+{"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"statuses":{},"balances":{"programs":{},"transferable":{}},"learnings":[]}
 ```
 
 The keys that steer planning:
@@ -67,14 +67,14 @@ party, regions, destinations to skip — live per trip in
 | Command | API calls | Purpose |
 |---|---|---|
 | `prefs-init` | 0 | Write the `~/.getaway/preferences.json` template; exits 3 if the file exists |
-| `prefs` | 0 | Print preferences as compact JSON; exits 3 when the file is missing or not `version: 2` |
-| `prefs-status` | 0 | Print `configured` (exit 0) or `unconfigured` (exit 1: file missing or no balances recorded); a `version: 1` file exits 3 with a pointer at the CHANGELOG migration |
-| `prefs-set` | 0 | Top-level-merge a JSON patch from stdin into preferences, creating the file from the template when absent; exits 64 on unknown keys or non-object input, 3 when the version is not 2 |
+| `prefs` | 0 | Print preferences as compact JSON; exits 3 when the file is missing |
+| `prefs-status` | 0 | Print `configured` (exit 0) or `unconfigured` (exit 1: file missing or no balances recorded) |
+| `prefs-set` | 0 | Top-level-merge a JSON patch from stdin into preferences, creating the file from the template when absent; exits 64 on unknown keys or non-object input, 3 on a malformed merge |
 | `plan-new <slug>` | 0 | Create `~/.getaway/plans/<slug>.json` from the plan template and set it current; exits 64 on a malformed slug, 3 if the slug exists |
-| `plan-set [<slug>]` | 0 | Top-level-merge a JSON patch from stdin into the named/current plan; exits 64 on unknown or reserved (`slug`/`created`/`version`) keys or non-object input, 3 when no plan resolves, the version is not 1, or the merge is malformed |
-| `plan-show [<slug>]` | 0 | Print the named/current plan as compact JSON; exits 3 when the plan is missing, nothing is current, or the version is not 1 |
-| `plan-list` | 0 | One tab-separated `slug status created` row per plan; exits 3 on a plan whose version is not 1 |
-| `plan-done [<slug>]` | 0 | Set the plan's `status` to `done`; clears the current pointer when it points there; exits 3 when the plan is missing or the version is not 1 |
+| `plan-set [<slug>]` | 0 | Top-level-merge a JSON patch from stdin into the named/current plan; exits 64 on unknown or reserved (`slug`/`created`) keys or non-object input, 3 when no plan resolves or the merge is malformed |
+| `plan-show [<slug>]` | 0 | Print the named/current plan as compact JSON; exits 3 when the plan is missing or nothing is current |
+| `plan-list` | 0 | One tab-separated `slug status created` row per plan |
+| `plan-done [<slug>]` | 0 | Set the plan's `status` to `done`; clears the current pointer when it points there; exits 3 when the plan is missing |
 | `search --origin A,B --dest C,D [flags]` | 1 per page | Cached award space via `/search`; origins and destinations take IATA codes or [region pseudo-codes](#region-pseudo-codes) |
 | `availability --source <program> [flags]` | 1 per page | Per-program bulk dump via `/availability`; the only route to continent-wide sweeps |
 | `trip <availability-ID>` | 1 | One row's bookable trips via `/trips/{id}`: segments, exact taxes, booking links |
@@ -93,9 +93,9 @@ Africa, Asia, Europe, North America, Oceania, South America), `--take`,
 deduped by `.ID` across pages — so output pipes straight into `jq` or a
 scratchpad file. `--pages` walks the API's `cursor` + `skip` continuation,
 and every page costs one quota call: prefer one page with a big `--take`.
-Exit codes: 2 no key, 3 preferences or plan problem (missing file, wrong
-version, no current plan), 4 no quota recorded, 64 usage (unknown or
-reserved patch keys and malformed plan slugs included).
+Exit codes: 2 no key, 3 preferences or plan problem (missing file, no
+current plan), 4 no quota recorded, 64 usage (unknown or reserved patch
+keys and malformed plan slugs included).
 
 ## Trip memory
 
@@ -107,7 +107,6 @@ this template and points `current` at it:
 
 ```json
 {
-  "version": 1,
   "slug": null,
   "created": null,
   "status": "planning",
@@ -173,8 +172,7 @@ unconfigured
 
 `unconfigured` (exit 1) means the preferences file is missing or records
 no points balances — and without balances, program selection is
-guesswork. (A pre-v2 file exits 3 instead; relay the CHANGELOG migration
-note.) Offer onboarding before planning; it is
+guesswork. Offer onboarding before planning; it is
 optional, and the user may skip it and plan on the shipped defaults. A
 `PostToolUse` hook (`hooks/onboard.py`, sibling to `reflect.py`)
 backstops this step: when the skill runs while preferences are
@@ -415,10 +413,7 @@ onboarding:
 0. Check configuration with `prefs-status`. On `unconfigured`, offer
    [first-run onboarding](#first-run-onboarding) — skippable; a decline
    means planning proceeds on the current defaults. If no file exists yet,
-   run `prefs-init` on the skip path so `prefs` has defaults to read. Exit
-   3 means a pre-v2 preferences file: relay the migration note from the
-   stderr message (the CHANGELOG carries the jq one-liner) and stop until
-   the user migrates.
+   run `prefs-init` on the skip path so `prefs` has defaults to read.
 1. Read the globals with `prefs`: the origin set, `avoid_transit`,
    `avoid_airlines`, and which programs hold points. When mileage costs
    tie, prefer carriers where `statuses` shows the user holds elite
