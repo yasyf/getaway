@@ -1,7 +1,7 @@
 ---
 name: getaway
 description: Plans award flights using the seats.aero Partner API. Triggers when the user wants to plan an award flight or trip on points or miles, find award availability or saver space between airports or across a region ("west coast to Asia", "somewhere warm in September"), compare mileage programs for a route, pull booking links or taxes for an award, find a cash positioning flight, set up or refresh getaway travel preferences (auto-filled from Gmail and airline logins), or refresh their award balances ("refresh my balances") — or mentions seats.aero. Needs a seats.aero Pro API key, from SEATS_AERO_API_KEY or a 1Password reference in ~/.getaway/preferences.json.
-allowed-tools: Bash(curl:*), Bash(jq:*), Bash(op:*), Bash(uvx:*), Bash(gog:*)
+allowed-tools: Bash(curl:*), Bash(jq:*), Bash(op:*), Bash(uvx:*), Bash(gog:*), Agent, Workflow
 ---
 
 # getaway
@@ -158,6 +158,58 @@ resuming an open plan), `plan-set` throughout planning as constraints pin
 down, `plan-done` once the trip is booked or abandoned — it flips
 `status` and clears `current`. Old plans stay on disk as history.
 
+## Orchestration
+
+The flows below fan out by default. Sibling lookups are independent —
+nothing about a Lisbon sweep informs an Athens one — so independent
+calls never run one after another: fan-out spends the same quota in a
+fraction of the wall time. Climb this ladder one rung at a time, only
+when the rung below cannot express the work:
+
+1. **Batch into one call.** Comma-list destinations first — one
+   `search` call covers a whole bucket. Call count beats latency
+   ([Quota discipline](#quota-discipline)); parallelism buys latency,
+   never extra calls.
+2. **Parallel subagents — the Agent tool, one message, N calls.** The
+   default for independent calls that cannot share a batch:
+   per-program `availability` sweeps, per-finalist `trip` expansions,
+   per-destination `WebSearch` enrichment, per-leg `fli` pricing, the
+   two onboarding gatherers. Every brief carries the exact commands to
+   run and a compact JSON return shape; a brief that spends API quota
+   also carries the absolute `getaway.sh` path, the scratchpad file to
+   write, and the `quota remaining` the agent observed in its return
+   shape.
+3. **The Workflow tool.** A planning ask spanning two or more
+   destination buckets or programs runs the shipped `plan-trip.js` —
+   the invocation lives in the [Planning workflow](#planning-workflow).
+   The script holds the four-phase pipeline — sweep, shortlist,
+   expand, enrich — and its intermediate results; the conversation
+   holds only the finalists.
+4. **A team, for one shape.** A multi-city or multi-traveler plan that
+   will span several presentation rounds earns a persistent team
+   (`TeamCreate`): a sweeper teammate holds the sweep JSONL and
+   observed quota across rounds, re-filtering and expanding on demand
+   while the lead drives the board. Everything else stays subagents
+   and workflows.
+
+Invariants on every rung:
+
+- Fan-out never adds API calls — parallelize only calls you would make
+  anyway.
+- Interactive surfaces stay at the main level: cc-present boards and
+  forms, `AskUserQuestion`. (Touch ID lands on the user's screen
+  whichever agent invokes cookiesync, so the balances gatherer may run
+  as a subagent.)
+- One writer for durable state: every `prefs-set` and `plan-set` runs
+  at the main level. Subagents read `prefs` and the plan file and
+  write only their own scratchpad files; nothing under `~/.getaway` is
+  theirs to touch.
+- The quota cache is last-writer-wins: after a parallel burst, trust
+  the minimum your subagents reported, or run `quota` once the burst
+  settles — never mid-burst.
+- Sequential stays right for a single lookup: one route, one
+  expansion, one balance check runs inline.
+
 ## First-run onboarding
 
 Step 0 of every planning request is a status check:
@@ -180,11 +232,22 @@ unconfigured, it injects the same offer once per session, and it never
 blocks.
 
 When the user accepts onboarding, run auto-fill immediately — announce
-each step, do not ask permission for it. The two gather steps below
-degrade independently: skipping one costs nothing but its answers, and
-neither writes a byte. The form's Submit is the sole write gate.
+each step, do not ask permission for it. Start at the main level with
+Gmail query 1, the domain tally: the browser gatherer's host list
+derives from it, and the mailbox question below is asked here, before
+any spawn. Then run the two gatherers below as parallel subagents —
+one message, two Agent calls, Gmail (queries 2–4 and body fetches)
+beside airline logins. The gatherers degrade independently: skipping
+one costs nothing but its answers, and neither writes a byte. The
+form's Submit is the sole write gate, and the form is never delegated.
 
 ### Auto-fill from Gmail
+
+This section is the Gmail subagent's brief. Spawn it with the chosen
+account and the tally-narrowed `from:` list; it returns
+`{programs, statuses, balances, home_airport, origin_candidates}` as
+JSON. Query 1 runs at the main level first, so the tally can seed both
+gatherers.
 
 Check for the [gogcli](https://gogcli.sh) Gmail CLI first. When
 `command -v gog` finds nothing, or any call exits 4 (`auth_required`,
@@ -196,8 +259,8 @@ manual form. Never block onboarding on gog.
 Announce the scan in one status line: reading Gmail read-only, locked to
 search and single-message reads, sending blocked. Pick the account from
 `gog auth list --json`; when more than one account is configured, ask
-which mailbox to scan — the lone question in this flow. Never guess a
-mailbox.
+which mailbox to scan — the lone question in this flow, asked at the
+main level before the gatherers spawn. Never guess a mailbox.
 
 `gog auth list` reads local token metadata and touches no mail, so it
 runs plain — the allowlist below would reject it. Every Gmail call
@@ -218,7 +281,8 @@ total across all four — always sanitized, via
 1. **Programs and frequent airlines** — `from:(<the 26 sender domains
    below>) newer_than:1y`, `--max 100`. Tally sender domains with `jq`:
    the heavy hitters are the frequent airlines and the candidate
-   programs.
+   programs. This query is the main-level pre-spawn step; the
+   remaining three run inside the subagent.
 2. **Status and balances** — the tally-narrowed `from:` list plus
    `subject:(status OR elite OR tier OR statement OR balance OR "miles
    summary") newer_than:1y`, `--max 25`. Take tier strings verbatim;
@@ -279,6 +343,13 @@ enters `learnings`, which is reserved for facts the user states.
 
 This step also runs standalone, outside onboarding — see
 [Refreshing balances](#refreshing-balances).
+
+In onboarding it is the second parallel subagent, spawned beside the
+Gmail gatherer with the host list fixed at spawn time; it returns
+`[{slug, balance, tier}]`, and the Touch ID prompt reaches the user
+from a subagent all the same. Programs the Gmail gatherer surfaces
+after the spawn enter the form as Gmail-sourced placeholders — offer a
+second browser pass only when the user wants exact numbers.
 
 Derive the host list automatically: the Gmail-tally programs, any
 programs the user has named, and the keys already in `balances.programs`
@@ -402,9 +473,10 @@ onboarding:
    `balances.programs` and `statuses` keys, mapped through the
    [slug-to-domain table](#auto-fill-from-gmail).
 2. Run [Balances from airline logins](#balances-from-airline-logins)
-   as-is.
+   as one subagent; it returns `[{slug, balance, tier}]`.
 3. Merge the scraped values into the current `balances` and `statuses`
-   maps and write with `prefs-set` directly — no form round-trip. The
+   maps and write with `prefs-set` at the main level
+   ([one writer](#orchestration)) — no form round-trip. The
    explicit request plus the Touch ID tap are the consent.
 4. Report the per-program deltas, old value to new.
 
@@ -433,6 +505,39 @@ onboarding:
    read it from disk; anything the user states as always-true ("I never
    fly Ethiopian", "never connect through IST", a balance correction) goes
    to `prefs-set` right then instead.
+
+Steps 4–7 are the fan-out core. When the ask spans two or more
+destination buckets or programs, run them as one shot — the shipped
+workflow, args assembled from `prefs` and the plan file:
+
+```
+Workflow({
+  scriptPath: "${CLAUDE_PLUGIN_ROOT}/skills/getaway/plan-trip.js",
+  args: {
+    script: "${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh",
+    scratchpad: "<session scratchpad dir>",
+    startDate: "2026-09-08", endDate: "2026-10-08",
+    origins: ["SFO", "SJC"], cabin: "business",
+    buckets: [{name: "iberia", dests: ["LIS", "BCN", "ATH"]}],
+    programSweeps: [{source: "aeroplan", destRegion: "Africa"}],
+    sources: ["aeroplan", "alaska"],
+    avoidDestinations: ["ICN", "GMP"], avoidTransit: ["IST"],
+    avoidAirlines: [{code: "ET", strength: "soft"}],
+    mileageCeiling: 90000, travelers: 2, maxFinalists: 6,
+    vibe: "warm"
+  }
+})
+```
+
+It sweeps, shortlists, expands, and enriches in parallel agents and
+returns `finalists` ready for the board — surface its `log()` lines as
+they arrive, then pick up at step 8. `sources` keeps only programs the
+user can fund (the `balances.programs` keys; omit to keep all);
+`avoidDestinations` takes the plan's `avoid_final_destinations`;
+`avoidTransit` takes the preference of the same name; leave `vibe` out
+to skip enrichment. A single origin–destination ask, or a session
+without the Workflow tool, runs steps 4–7 by hand instead.
+
 4. Sweep broad, one call per destination bucket, saved to the scratchpad.
    The window, cabin, and regions come from the plan file. A real sweep:
 
@@ -456,15 +561,21 @@ onboarding:
      --take 1000 > africa.jsonl
    ```
 
+   Buckets and per-program sweeps are independent: by hand, spawn one
+   subagent per sweep — each makes exactly the one call it would make
+   anyway and returns `{file, rows, quota}`.
+
 5. Filter offline with the [jq recipes](#jq-recipes) against the saved
    files. Re-filtering is free; never spend an API call to re-ask a
    question the scratchpad already answers.
 6. Expand each finalist with `trip <availability-ID>` (the row's `.ID`).
    The real numbers live there; see
-   [Trip detail](#trip-detail-the-bookable-truth).
+   [Trip detail](#trip-detail-the-bookable-truth). Finalists expand in
+   parallel — one subagent per `trip` call.
 7. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
    seasonal weather, visa rules, and destination color. The API knows
-   seats, not sunshine.
+   seats, not sunshine. One `WebSearch` subagent per shortlisted
+   destination; enrichment spends zero API quota.
 8. Present the shortlist as a [cc-present board](#presenting-options) and
    iterate rounds until the user submits. Log each round's outcome in the
    plan's `decisions`.
@@ -557,7 +668,13 @@ midnight UTC.
 - Big `--take` beats `--pages`: each page is a separate call.
 - Re-filter saved JSONL for every follow-up question; a new call needs a
   new question the scratchpad cannot answer.
-- Tell the user when the remaining quota drops below about 100.
+- Fan-out never adds calls: batch into comma lists first, then
+  parallelize the calls that remain ([Orchestration](#orchestration)).
+- The quota cache is last-writer-wins. After a parallel burst, trust
+  the minimum the subagents reported, or run `quota` once the burst
+  settles — never mid-burst.
+- Tell the user when the remaining quota drops below about 100, and
+  stop fanning out.
 
 ## jq recipes
 
@@ -638,7 +755,8 @@ plugin is; every field is documented in
 - Built-ins carry the rest: a `choice` block for pivots (shift the window,
   swap the region), an `input` block for free-form constraints ("aisle
   seats", "no red-eyes"), a `progress` block while `trip` expansions run
-  in the background.
+  as parallel subagents — update it as each returns, then swap in the
+  finished `getaway.itinerary` blocks.
 - Pack interactions arrive as
   `{"type": "pack.interaction", "blockId": …, "payload": …}` with the
   payloads above.
@@ -651,7 +769,8 @@ batched in one call, when a full board is overkill.
 ## Positioning flights
 
 When the award departs from an airport the user is not at, price the cash
-leg with the `fli` CLI:
+leg with the `fli` CLI. Several gap legs price in parallel — one subagent
+per `fli` call; a single leg runs inline:
 
 ```bash
 uvx --from "flights[mcp]" fli flights SFO YVR 2026-09-08 --class BUSINESS --format json |

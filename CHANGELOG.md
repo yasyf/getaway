@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `skills/getaway/plan-trip.js`: a shipped Workflow script that runs the
+  planning pipeline — sweep, shortlist, expand, enrich — as parallel
+  agents; the planning workflow invokes it for any ask spanning two or
+  more destination buckets or programs.
+
+### Changed
+- Flows fan out by default: a new SKILL.md `## Orchestration` ladder
+  (batch, then parallel subagents, then the shipped workflow, then a
+  team for multi-round multi-city plans), onboarding gatherers spawned
+  as parallel subagents, and parallel trip expansions, enrichment, and
+  positioning quotes.
+
 ## [0.6.0] - 2026-07-11
 
 ### Added
