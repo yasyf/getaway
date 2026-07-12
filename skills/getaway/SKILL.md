@@ -51,8 +51,8 @@ The keys that steer planning:
 
 | Key | Meaning |
 |---|---|
-| `origin_airports` | Explicit IATA codes; the default origin set |
-| `avoid_transit` | Hard drop on connections; enforced against `/trips` segments |
+| `origin_airports` | IATA or region pseudo-codes stored verbatim, `home_airport` likewise; the default origin set |
+| `avoid_transit` | Explicit IATA only — pseudo-codes expand at save; hard drop on connections, enforced against `/trips` segments |
 | `avoid_airlines` | `{code, name, strength}` objects; `soft` demotes, `hard` drops, and matching keys on `code` |
 | `statuses` | Program slug to elite tier, verbatim (`{"united": "1K"}`); ties on mileage cost break toward these carriers |
 | `balances.programs`, `balances.transferable` | Program slug to points; bank currencies |
@@ -403,8 +403,11 @@ The full code list lives in
 
 Trip memory and planner write-backs store explicit IATA codes, so they
 stay valid if the API's expansion shifts. Airport preferences the user
-states as pseudo-codes (`WST`, `QBA`) are stored verbatim — `search`
-re-expands them server-side on every call.
+states as pseudo-codes (`WST`, `QBA`) split by consumer: `home_airport`
+and `origin_airports` store them verbatim — `search` re-expands them
+server-side on every call — while `avoid_transit` expands them to
+member airports at save, since transit enforcement is a literal match
+against `/trips/{id}` segment codes.
 
 ## Quota discipline
 

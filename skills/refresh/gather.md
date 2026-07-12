@@ -131,8 +131,10 @@ gog --account "$ACCT" --readonly --gmail-no-send --no-input --json \
 No `--fail-empty`: an empty result set is a normal path, not an error.
 
 Queries run headers-first. Fetch message bodies sparingly — at most 10
-per flow, always sanitized: `gog … gmail get <id> --sanitize-content
---json`.
+per flow as the shared default, always sanitized: `gog … gmail get
+<id> --sanitize-content --json`. A calling flow may declare a
+dedicated budget for one named question (onboarding's flight-history
+fallback: 25 bodies).
 
 The bank-points query:
 
@@ -172,14 +174,15 @@ total cap: `--all-pages` follows the token chain to exhaustion, and
 2500 keeps a decade of events to a page or two.
 
 `--wrap-untrusted` wraps `summary` and `location` in untrusted-content
-markers; the payload is the line between `---` and the END marker.
-Tally in the pipe — the raw event list never enters the agent's
-context:
+markers; the payload is the line between `---` and the END marker. A
+field without markers unwraps to empty and drops out at the filters —
+external data gets to be messy without crashing the tally. Tally in
+the pipe — the raw event list never enters the agent's context:
 
 ```bash
 … | jq '
-  def unwrap: split("\n---\n")[1]
-    | split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0];
+  def unwrap: split("\n---\n")[1] // ""
+    | split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0] // "";
   [.events[] | select(.summary != null and .location != null)
    | {s: (.summary|unwrap), l: (.location|unwrap)}
    | select(.s|startswith("Flight to"))

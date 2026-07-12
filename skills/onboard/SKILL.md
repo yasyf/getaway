@@ -28,8 +28,8 @@ form is never delegated.
 
 This section is the Gmail subagent's brief. Spawn it with the chosen
 account and the tally-narrowed `from:` list; it returns
-`{programs, statuses, balances, home_airport, origin_candidates}` as
-JSON. Query 1 runs at the main level first, so the tally can seed both
+`{programs, statuses, balances, home_airport, origin_candidates,
+notes}` as JSON. Query 1 runs at the main level first, so the tally can seed both
 gatherers.
 
 Invocation mechanics — gog detection, the lockdown flags, and the
@@ -68,11 +68,15 @@ fallback carries its own 25-body budget):
    project and tally in the pipe so the raw event list never enters
    context. The most frequent departure airport is `home_airport` only
    when it has at least 10 segments and at least twice the runner-up's
-   count; short of either margin, return `home_airport: null` and the
-   form asks. Runners-up in frequency order are `origin_candidates`.
-   Calendar scope missing or denied, or fewer than 10 flight events
-   (0 is a normal path — Gmail auto-extraction can be off): run the
-   flight-history fallback below.
+   count, and the runners-up in frequency order are
+   `origin_candidates`. Short of either margin, return
+   `home_airport: null` with `origin_candidates` as the full
+   frequency-ordered list, leader included, and the top counts and
+   failed margin in `notes` — the orchestrator phrases the label
+   suffix from them ("— Calendar suggests YVR, weak: 2 of 3
+   segments"). Calendar scope missing or denied, or fewer than 10
+   parsed departure segments in the tally (0 is a normal path — Gmail
+   auto-extraction can be off): run the flight-history fallback below.
 4. **Bank points** — the query and its parse rules live in gather.md's
    [Gmail read](../refresh/gather.md#gmail-read-gog-lockdown); senders
    map to `balances.transferable` keys through its bank table.
@@ -88,8 +92,11 @@ alone — a dedicated budget, separate from the shared 10 — stratified
 across years and airlines, preferring PNR-bearing transactional
 subjects ("eTicket Itinerary and Receipt", "Your Flight Receipt",
 "booking confirmation"). Departure airports come from the bodies'
-"City (XXX)" patterns; the same frequency-and-margin rule decides
-`home_airport` and `origin_candidates`.
+"City (XXX)" patterns. Dedupe by PNR plus flight number and date
+before tallying — one physical flight can arrive as confirmation,
+eTicket receipt, boarding pass, and schedule change; the same
+frequency-and-margin rule then decides `home_airport` and
+`origin_candidates`.
 
 ## Balances from logins
 
@@ -135,7 +142,7 @@ This document passes `cc-present push --dry-run`:
     { "id": "home-airport", "type": "input", "label": "Home airport (IATA or seats.aero region code — QBA, WST, NYC…)", "placeholder": "SFO" },
     { "id": "origin-airports", "type": "input", "label": "Origin airports to search from (comma-separated IATA or seats.aero region codes — QBA, WST, NYC…)", "placeholder": "SFO,SJC,SAN,PDX,DEN,LAS,SLC,YVR" },
     { "id": "sec-avoid", "type": "section", "title": "Avoid" },
-    { "id": "avoid-transit", "type": "input", "label": "Airports you never want to connect through — comma-separated IATA or seats.aero region codes (QBA, WST, NYC…)", "placeholder": "none" },
+    { "id": "avoid-transit", "type": "input", "label": "Airports you never want to connect through — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "avoid-airlines", "type": "input", "label": "Airlines to avoid — name:soft or name:hard, comma-separated", "placeholder": "Ethiopian:soft", "multiline": true },
     { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
     { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
@@ -165,8 +172,13 @@ the preference schema differ:
   [docs/seats-aero-api.md](../../docs/seats-aero-api.md) § Region
   pseudo-codes — the same table
   [skills/getaway/SKILL.md](../getaway/SKILL.md#region-pseudo-codes)
-  points at. Reject anything else; store accepted codes verbatim —
-  `getaway.sh search --origin` already resolves pseudo-codes.
+  points at. Reject anything else. Storage splits by how the code is
+  consumed: `home_airport` and `origin_airports` keep pseudo-codes
+  verbatim — `getaway.sh search --origin` re-expands them server-side
+  on every call — while `avoid_transit` expands a pseudo-code to its
+  member airports at save, because transit enforcement matches literal
+  segment IATA codes and a stored `WST` would never match an SFO
+  connection.
 - `avoid-transit` answers are comma-separated airport codes; split them
   into the `avoid_transit` array. A blank field keeps the current list,
   so omit the key; a literal `none` clears it, so send

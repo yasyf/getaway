@@ -56,8 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that counted return legs as origins. Saved preferences always win
   form placeholders — a discovery is a label suffix naming source and
   strength, and blank keeps the saved value — and airport fields
-  accept seats.aero region pseudo-codes (QBA, WST, NYC…) stored
-  verbatim.
+  accept seats.aero region pseudo-codes (QBA, WST, NYC…): home and
+  origin airports store them verbatim, avoid-transit expands them to
+  member airports at save.
 
 ## [0.6.0] - 2026-07-11
 
