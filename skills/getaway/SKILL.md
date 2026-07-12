@@ -76,7 +76,7 @@ party, regions, destinations to skip — live per trip in
 | `plan-list` | 0 | One tab-separated `slug status created` row per plan |
 | `plan-done [<slug>]` | 0 | Set the plan's `status` to `done`; clears the current pointer when it points there; exits 3 when the plan is missing |
 | `search --origin A,B --dest C,D [flags]` | 1 per page | Cached award space via `/search`; origins and destinations take IATA codes or [region pseudo-codes](#region-pseudo-codes) |
-| `availability --source <program> [flags]` | 1 per page | Per-program bulk dump via `/availability`; the only route to continent-wide sweeps |
+| `availability --source <program> [flags]` | 1 per page | Per-program bulk dump via `/availability`; the route for region-level origin filtering, and the continent-sweep fallback when no [pseudo-code](#region-pseudo-codes) fits |
 | `trip <availability-ID>` | 1 | One row's bookable trips via `/trips/{id}`: segments, exact taxes, booking links |
 | `quota` | 0 | Print the last recorded quota from cache; exits 4 before the first API call |
 
@@ -226,18 +226,22 @@ unconfigured
 ```
 
 `unconfigured` (exit 1) means the preferences file is missing or records
-no points balances — and without balances, program selection is
-guesswork. Offer the `getaway:onboard` skill
-([skills/onboard/SKILL.md](../onboard/SKILL.md)) before planning —
+no points balances — and without balances, ranking bias and top-up math
+are guesswork; balances never gate a search. Offer the `getaway:onboard`
+skill ([skills/onboard/SKILL.md](../onboard/SKILL.md)) before planning —
 skippable; a decline means planning proceeds on the current defaults.
 If no file exists yet, run `prefs-init` on the skip path so `prefs` has
 defaults to read. A `PostToolUse` hook (`hooks/onboard.py`, sibling to
 `reflect.py`) backstops the offer once per session and never blocks.
 
 1. Read the globals with `prefs`: the origin set, `avoid_transit`,
-   `avoid_airlines`, and which programs hold points. When mileage costs
-   tie, prefer carriers where `statuses` shows the user holds elite
-   status. Preferences carry nothing trip-shaped — no window, cabin, or
+   `avoid_airlines`, and which programs hold points. Balances bias
+   ordering and feed the
+   [affordability annotations](#affordability-and-top-ups); a zero or
+   missing balance never removes a program from a sweep or a shortlist.
+   When mileage costs tie, prefer carriers where `statuses` shows the
+   user holds elite status. On a business-cabin ask, the hard product
+   joins the ranking — see [Seat quality](#seat-quality). Preferences carry nothing trip-shaped — no window, cabin, or
    destination derivation happens here.
 2. Load or create [trip memory](#trip-memory). `plan-list` first: when an
    open `status: "planning"` plan matches the ask, resume it with
@@ -266,9 +270,8 @@ Workflow({
     scratchpad: "<session scratchpad dir>",
     startDate: "2026-09-08", endDate: "2026-10-08",
     origins: ["SFO", "SJC"], cabin: "business",
-    buckets: [{name: "iberia", dests: ["LIS", "BCN", "ATH"]}],
-    programSweeps: [{source: "aeroplan", destRegion: "Africa"}],
-    sources: ["aeroplan", "alaska"],
+    buckets: [{name: "iberia", dests: ["LIS", "BCN", "ATH"]},
+              {name: "africa", dests: ["QAF"]}],
     avoidDestinations: ["ICN", "GMP"], avoidTransit: ["IST"],
     avoidAirlines: [{code: "ET", strength: "soft"}],
     mileageCeiling: 90000, travelers: 2, maxFinalists: 6,
@@ -279,8 +282,16 @@ Workflow({
 
 It sweeps, shortlists, expands, and enriches in parallel agents and
 returns `finalists` ready for the board — surface its `log()` lines as
-they arrive, then pick up at step 8. `sources` keeps only programs the
-user can fund (the `balances.programs` keys; omit to keep all);
+they arrive, then pick up at step 8. On a business ask it expands
+roughly 1.5× `maxFinalists` candidates, classifies each against
+[seat-quality.md](seat-quality.md), resolves mixed fleets by
+`WebSearch`, and re-ranks before truncating — the buffer's cost is
+covered in [Quota discipline](#quota-discipline). `sources` cuts the shortlist to
+the named programs — an offline filter after the sweep, not fewer API
+calls — and only when the user explicitly asks ("only search united");
+never derive it from balances. `programSweeps`
+(`{source, destRegion}` each) runs the per-program fallback sweeps
+described in step 4.
 `avoidDestinations` takes the plan's `avoid_final_destinations`;
 `avoidTransit` takes the preference of the same name; leave `vibe` out
 to skip enrichment. A single origin–destination ask, or a session
@@ -300,8 +311,16 @@ without the Workflow tool, runs steps 4–7 by hand instead.
    quota remaining: 998
    ```
 
-   For a continent with no pseudo-code (Africa), sweep per program
-   instead, and only the programs where the user holds a balance:
+   Africa is a bucket like any other: sweep it with `--dest QAF`, an
+   undocumented pseudo-code
+   ([Region pseudo-codes](#region-pseudo-codes)). The per-program
+   fallback below handles what `search` cannot — region-level origin
+   filtering, or a day `QAF` misbehaves (empty QAF results mean a fresh
+   pass, by hand or a second Workflow call with `programSweeps`). When
+   assembling that list, include all programs with funded ones first,
+   so a pass capped by [quota discipline](#quota-discipline) spends its
+   calls on the likeliest-bookable options. When quota cuts a sweep
+   short, say which programs went unswept:
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" availability \
@@ -319,11 +338,16 @@ without the Workflow tool, runs steps 4–7 by hand instead.
 6. Expand each finalist with `trip <availability-ID>` (the row's `.ID`).
    The real numbers live there; see
    [Trip detail](#trip-detail-the-bookable-truth). Finalists expand in
-   parallel — one subagent per `trip` call.
+   parallel — one subagent per `trip` call. On a business plan,
+   classify each trip's longest business segment against
+   [seat-quality.md](seat-quality.md) while expanding; `barely`
+   products sink per [Seat quality](#seat-quality).
 7. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
    seasonal weather, visa rules, and destination color. The API knows
    seats, not sunshine. One `WebSearch` subagent per shortlisted
-   destination; enrichment spends zero API quota.
+   destination; enrichment spends zero API quota. Verify-marked seat
+   products resolve here too — one `WebSearch` per mixed-fleet
+   finalist, vibe or no vibe.
 8. Present the shortlist as a [cc-present board](#presenting-options) and
    iterate rounds until the user submits. Log each round's outcome in the
    plan's `decisions`.
@@ -331,8 +355,12 @@ without the Workflow tool, runs steps 4–7 by hand instead.
    the award departs somewhere other than the user's home airport.
 10. Deliver the final plan: per leg, the program, integer miles and exact
     taxes from `/trips/{id}` (never the search strings), remaining seats,
-    the booking link, and the row's `UpdatedAt` — cached snapshots run
-    hours to days old, so always surface freshness.
+    the seat product and verdict on a business leg
+    ([Seat quality](#seat-quality)), the booking link, the row's `UpdatedAt` — cached snapshots run hours
+    to days old, so always surface freshness — and the leg's
+    [affordability line](#affordability-and-top-ups): covered, a
+    transfer suggestion, or a buy estimate citing the rate's source and
+    date.
 
 ## Trip detail: the bookable truth
 
@@ -347,11 +375,12 @@ not inside each trip. A real expansion:
 "${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" trip <availability-ID> |
   jq '{booking: [.booking_links[] | {label, primary}],
        carriers,
-       best: (.data | map(select(.Cabin == "business")) | min_by(.MileageCost)
+       best: ((.data | map(select(.Cabin == "business")) | min_by(.MileageCost)) as $t
+              | if $t == null then null else $t
               | {MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats,
                  FlightNumbers,
                  segments: [.AvailabilitySegments[]
-                   | "\(.FlightNumber) \(.OriginAirport)-\(.DestinationAirport) \(.Cabin) (\(.AircraftName))"]})}'
+                   | "\(.FlightNumber) \(.OriginAirport)-\(.DestinationAirport) \(.Cabin) (\(.AircraftName))"]} end)}'
 ```
 
 ```json
@@ -378,7 +407,66 @@ not inside each trip. A real expansion:
 ```
 
 One `.data[]` array carries every cabin's trips for the row — filter on
-`.Cabin` before `min_by`, or an economy trip wins the sort.
+`.Cabin` before `min_by`, or an economy trip wins the sort. The same
+discipline runs per segment: the [seat-quality](#seat-quality) verdict
+rates the longest *business* segment, never the longest segment —
+connectors on a business award can ride economy.
+
+## Affordability and top-ups
+
+Balances bias and annotate; they never exclude. An unfunded finalist
+keeps its shortlist spot and gains an annotation — dropping it hides an
+option one transfer could fund.
+
+Shortfall per finalist: trip `MileageCost` (the integer from
+`/trips/{id}`, never search's string form) × travelers, minus the
+funding pool — the program balance plus what bank partners can move
+there, each credited at its own ratio;
+[transfer-partners.md](transfer-partners.md) maps each bank's programs
+and ratios.
+
+Transfer first. When a transfer covers the gap, name the bank, the
+amount, and the ratio ("60k of the 80k Chase balance to united at 1:1")
+before any cash option. A small residual shortfall — a judgment call,
+no numeric threshold: small relative to the award's total cost, and
+only when buying is plausibly good value — earns a `WebSearch` for the
+program's current buy-points rate and any active sale or bonus;
+present "buy N points ≈ $X" beside the taxes, citing the rate's source
+and date. And when the top-up cost plus taxes approaches the cash
+fare, say so — the same cash-versus-points check as
+[Positioning flights](#positioning-flights).
+
+Ranking stays mileage-first. When finalists land within roughly 10–15%
+of each other, prefer the one the user can already fund; the rest keep
+their rank and their annotation — covered, a transfer suggestion, or a
+buy estimate.
+
+## Seat quality
+
+Business class spans everything from enclosed suites to seats that
+barely earn the cabin name. The verdict table lives in
+[seat-quality.md](seat-quality.md) — carrier + aircraft to `suite`,
+`solid`, `dated`, or `barely`, with a Verify mark on mixed mid-retrofit
+fleets. The verdict rates the longest business-cabin segment; segments
+carry their own `.Cabin`, so filter before taking the longest — a
+narrowbody positioning leg never drags down a trip.
+
+`barely` soft-demotes, the same mechanic as a soft `avoid_airlines`
+entry: the finalist sinks below every true lie-flat regardless of
+mileage, keeps its spot, and carries an explicit warning. The avoid
+list outranks the seat — a soft-avoided airline sinks harder than a
+`barely` product, so the sort runs (soft, `barely`, mileage). Everything
+else stays mileage-first, and an unknown or unclassified product ranks
+neutral — never demote what the table doesn't condemn. Within the
+[affordability](#affordability-and-top-ups) near-tie band, a better
+product breaks the tie the same way funding does.
+
+A Verify mark means the fleet is mixed — BA's 777s fly both old Club
+World and Club Suite. Resolve the specific flight with a `WebSearch`
+(the carrier's seat map for that flight number and date, recent cabin
+reviews) during enrichment; zero quota. Every business finalist gets a
+product note in presentation; a `barely` verdict reads as a warning,
+not a footnote.
 
 ## Region pseudo-codes
 
@@ -395,11 +483,14 @@ returns over the published table:
 The full code list lives in
 [docs/seats-aero-api.md](../../docs/seats-aero-api.md).
 
-> **Warning:** No Africa pseudo-code exists. An Africa-wide sweep is
-> per-program `availability --dest-region Africa`, one call per source —
-> sweep only the programs where the user holds a balance. The API's Africa
-> bucket also includes Indian Ocean (MRU, MLE) and Canary Islands
-> (FUE, ACE) airports; drop them when the user means the continent.
+> **Warning:** `QAF` (Africa) works on `/search` yet sits in no
+> UI-documented list — verified live 2026-07-12; its observed expansion
+> (CMN, CAI, ADD, CPT, JNB, NBO) is a floor like the table above. The
+> per-program `availability --dest-region Africa` fallback sweeps all
+> programs, ordered funded-first, never trimmed to the funded ones —
+> and that Africa bucket also includes Indian Ocean (MRU, MLE) and
+> Canary Islands (FUE, ACE) airports; drop them when the user means the
+> continent.
 
 Trip memory and planner write-backs store explicit IATA codes, so they
 stay valid if the API's expansion shifts. Airport preferences the user
@@ -423,6 +514,12 @@ midnight UTC.
   new question the scratchpad cannot answer.
 - Fan-out never adds calls: batch into comma lists first, then
   parallelize the calls that remain ([Orchestration](#orchestration)).
+- A business plan expands a buffer — roughly 1.5× `maxFinalists` trip
+  calls, 9 instead of 6 at the defaults — so the
+  [seat-quality](#seat-quality) re-rank sorts real products before
+  truncating. That is the acknowledged price of never ranking a
+  yin-yang seat over a true flat bed; the low-quota path drops the
+  buffer first.
 - The quota cache is last-writer-wins. After a parallel burst, trust
   the minimum the subagents reported, or run `quota` once the burst
   settles — never mid-burst.
@@ -470,6 +567,14 @@ a name substring:
 jq -s 'sort_by(.JAirlines | split(", ") | any(. == "ET"))' sweep.jsonl
 ```
 
+Re-rank expanded finalists by seat quality — the workflow's exact sort,
+manual-path form. `product` comes from classifying each trip against
+[seat-quality.md](seat-quality.md); a missing `product` sorts neutral:
+
+```bash
+jq -s 'sort_by(.soft, .product == "barely", .mileage)' finalists.jsonl
+```
+
 Project a scannable table for eyeballing a sweep:
 
 ```bash
@@ -496,6 +601,14 @@ plugin is; every field is documented in
 - One `getaway.option-picker` for the shortlist — one entry per finalist,
   `optionId` set to the row's availability `ID`. A tap submits
   `{"optionId": …}`: that finalist is the pick.
+- A built-in `section` block ("Points check", `md` body) beside the
+  picker — one line per finalist: covered, a transfer suggestion, or a
+  buy estimate ([Affordability and top-ups](#affordability-and-top-ups)),
+  plus a seat line on business finalists — the product and its
+  [verdict](#seat-quality), a `barely` phrased as a warning ("old Club
+  World — barely business, ranked below every true flat bed"). Pack
+  schemas are closed; neither affordability nor the seat verdict rides
+  as an extra field on a pack block.
 - One `getaway.itinerary` per expanded finalist, fed only from
   `/trips/{id}`: integer miles, minor-unit taxes plus currency, remaining
   seats, the primary booking link, the row's `UpdatedAt`, and the segments

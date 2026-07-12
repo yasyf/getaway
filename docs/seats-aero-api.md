@@ -90,8 +90,12 @@ eight airports without LAX, SEA, or PHX), and an `ASA` destination returned
 NRT, ICN, HND, TPE, PVG, HKG, BKK, and SIN. Treat the airport lists below as
 the documented floor, not the exact expansion.
 
-No Africa pseudo-code exists. Africa-wide coverage means per-source
-`GET /availability?destination_region=Africa` calls instead.
+An Africa pseudo-code exists but is undocumented: `QAF` works on
+`/search` (verified live 2026-07-12) despite having no row in the
+knowledge-base table below — it extends the Q-prefix family of the
+documented `QBA`, `QLA`, and `QMI` metro codes. A 100-row probe
+expanded it to CMN, CAI, ADD, CPT, JNB, and NBO — six airports in five
+countries; treat that as a floor, like the lists below.
 
 The full UI-documented list, from the
 [seats.aero knowledge base](https://docs.seats.aero/article/36-how-to-search-by-airport-city-or-region-code)
@@ -188,11 +192,16 @@ trip data.
 
 ## Sources (mileage programs)
 
-26 as of July 2026: `aeroplan`, `united`, `american`, `delta`, `alaska`,
-`flyingblue`, `lufthansa`, `singapore`, `qatar`, `turkish`, `emirates`,
-`etihad`, `qantas`, `velocity`, `virginatlantic`, `jetblue`, `finnair`,
-`eurobonus`, `aeromexico`, `connectmiles`, `azul`, `smiles`, `ethiopian`,
-`saudia`, `frontier`, `spirit`.
+26 documented as of July 2026: `aeroplan`, `united`, `american`, `delta`,
+`alaska`, `flyingblue`, `lufthansa`, `singapore`, `qatar`, `turkish`,
+`emirates`, `etihad`, `qantas`, `velocity`, `virginatlantic`, `jetblue`,
+`finnair`, `eurobonus`, `aeromexico`, `connectmiles`, `azul`, `smiles`,
+`ethiopian`, `saudia`, `frontier`, `spirit`.
+
+Beta sources ship ahead of the documentation: `british` (BA Club,
+launched ~May 2026) returns live `/search` rows (observed 2026-07-12)
+while missing from the Concepts table above; `iberia` reportedly
+shipped in the same beta but is unconfirmed in API responses.
 
 Coverage varies per program; the table on the docs
 [Concepts page](https://developers.seats.aero/reference/concepts-copy) has

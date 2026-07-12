@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `## Affordability and top-ups` in the getaway skill: per-finalist
+  shortfall math from trip integers, transfer-first suggestions from the
+  new bank map, a judgment-guided "buy N points ≈ $X" estimate citing
+  the rate's source and date, a "Points check" section block beside the
+  picker, and an affordability line per delivered leg.
+- `skills/getaway/transfer-partners.md`: the static bank-to-program
+  transfer map — each bank's partners among the 26 programs with ratios
+  and quirks, plus the 11 programs no bank reaches (verified
+  2026-07-12).
+- `## Seat quality` in the getaway skill: business hard products join
+  the ranking — `barely` products (old BA Club World and its yin-yang
+  kin, 7-across flats, anything angled) soft-demote below every true
+  lie-flat, unknowns rank neutral, the verdict rates the longest
+  business segment, mixed fleets resolve by `WebSearch`, and every
+  business finalist carries a product note with `barely` phrased as a
+  warning.
+- `skills/getaway/seat-quality.md`: the static carrier + aircraft
+  verdict table — `suite` / `solid` / `dated` / `barely` with Verify
+  marks on mid-retrofit fleets (verified 2026-07-12).
+
+### Changed
+- Points balances bias planning instead of gating it: per-program sweeps
+  cover all programs ordered funded-first, `sources` narrows only on an
+  explicit user ask and never derives from balances, and unfunded
+  finalists stay on the shortlist with an affordability annotation.
+- Africa sweeps ride `QAF` on `/search` — an undocumented pseudo-code,
+  verified live 2026-07-12 with expansion observed across CMN, CAI,
+  ADD, CPT, JNB, and NBO — demoting the per-program
+  `--dest-region Africa` sweep to a fallback; the "No Africa
+  pseudo-code exists" claim leaves the skill and API doc.
+- Business plans in `plan-trip.js` expand a ~1.5× finalist buffer,
+  classify each trip's longest business segment against
+  `seat-quality.md` during Expand, resolve Verify-marked fleets in a
+  new zero-quota Verify phase, and re-rank by (soft avoid, `barely`
+  product, mileage) before truncating; the low-quota path drops the
+  buffer first.
+
 ## [0.7.0] - 2026-07-12
 
 ### Fixed

@@ -7,7 +7,8 @@ export const meta = {
   phases: [
     { title: 'Sweep', detail: 'One agent per destination bucket or program runs a single seats.aero search/availability call into a scratchpad JSONL.' },
     { title: 'Shortlist', detail: 'One offline jq pass over every sweep file filters, dedups, and ranks down to the finalists — zero API calls.' },
-    { title: 'Expand', detail: 'One agent per finalist expands its trip ID into bookable truth: integer miles, exact taxes, segments, booking link.' },
+    { title: 'Expand', detail: 'One agent per finalist expands its trip ID into bookable truth: integer miles, exact taxes, segments, booking link — and on business asks, classifies the longest business segment against the seat-quality table.' },
+    { title: 'Verify', detail: 'Business only: one WebSearch agent per mixed-fleet or table-absent candidate resolves the product before the re-rank — no quota spent.' },
     { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per destination adds weather, visa, and appeal color — no quota spent.' },
   ],
 };
@@ -22,6 +23,7 @@ const AIRLINE = /^[A-Z0-9]{2}$/;
 const TRIP_ID = /^[A-Za-z0-9._-]+$/;
 const REGIONS = ['North America', 'South America', 'Africa', 'Asia', 'Europe', 'Oceania'];
 const CABIN_PREFIX = { economy: 'Y', premium: 'W', business: 'J', first: 'F' };
+const PRODUCT = ['suite', 'solid', 'dated', 'barely', 'verify', 'unknown'];
 
 const SWEEP_SCHEMA = {
   type: 'object',
@@ -37,11 +39,11 @@ const SHORTLIST_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'date', 'origin', 'dest', 'source', 'mileage', 'seats', 'airlines', 'direct'],
+        required: ['id', 'date', 'origin', 'dest', 'source', 'mileage', 'seats', 'airlines', 'direct', 'soft'],
         properties: {
           id: { type: 'string' }, date: { type: 'string' }, origin: { type: 'string' }, dest: { type: 'string' },
           source: { type: 'string' }, mileage: { type: 'number' }, seats: { type: 'number' },
-          airlines: { type: 'string' }, direct: { type: 'boolean' },
+          airlines: { type: 'string' }, direct: { type: 'boolean' }, soft: { type: 'boolean' },
         },
       },
     },
@@ -55,6 +57,14 @@ const TRIP_SCHEMA = {
     taxesCurrency: { type: 'string' }, remainingSeats: { type: 'number' }, flightNumbers: { type: 'string' },
     segments: { type: 'array', items: { type: 'string' } }, bookingPrimary: { type: 'string' },
     updatedAt: { type: 'string' }, quota: { type: 'number' },
+    longhaul: { type: ['string', 'null'] }, product: { enum: PRODUCT }, productNote: { type: 'string' },
+  },
+};
+const VERIFY_SCHEMA = {
+  type: 'object',
+  required: ['id', 'product', 'productNote'],
+  properties: {
+    id: { type: 'string' }, product: { enum: PRODUCT.filter(p => p !== 'verify') }, productNote: { type: 'string' },
   },
 };
 const ENRICH_SCHEMA = {
@@ -112,6 +122,8 @@ if (!Number.isInteger(travelers) || travelers < 1) throw new Error('plan-trip: t
 let maxFinalists = a.maxFinalists ?? 6;
 if (!Number.isInteger(maxFinalists) || maxFinalists < 1) throw new Error('plan-trip: maxFinalists must be a positive integer');
 maxFinalists = Math.min(maxFinalists, 10);
+const isBiz = cabin === 'business';
+const expandTarget = isBiz ? Math.min(Math.ceil(maxFinalists * 1.5), 12) : maxFinalists;
 
 if (a.vibe !== undefined && (typeof a.vibe !== 'string' || a.vibe.length === 0)) throw new Error('plan-trip: vibe must be a non-empty string');
 const vibe = a.vibe;
@@ -157,7 +169,7 @@ const quotas = okSweeps.map(r => r.quota).filter(q => q >= 0);
 const minQuota = quotas.length ? Math.min(...quotas) : -1;
 const quotaLow = minQuota >= 0 && minQuota < quotaFloor;
 const enrichRan = Boolean(vibe) && !quotaLow;
-let expandCap = maxFinalists;
+let expandCap = expandTarget;
 let expandTrimmedTo = null;
 if (quotaLow) {
   expandCap = Math.min(maxFinalists, 3, minQuota);
@@ -195,13 +207,13 @@ const shortlistJq =
   `                airlines: ${airlinesF}, direct: ${directF},\n` +
   `                soft: (${airlinesF} | split(", ") | any(. as $c | ${soft} | index($c) != null)) } ]\n` +
   `          | group_by([.origin, .dest, .date, .source]) | map(sort_by(.soft, .mileage) | .[0])\n` +
-  `          | sort_by(.soft, .mileage) | .[0:${maxFinalists}] | map(del(.soft)) ) }' ` +
+  `          | sort_by(.soft, .mileage) | .[0:${expandTarget}] ) }' ` +
   sweepFiles.map(f => `"${f}"`).join(' ');
 
 phase('Shortlist');
 const shortlist = await agent(
   `Run exactly this one Bash command — a single offline jq pass over the sweep files, zero API calls, run no getaway.sh command:\n\n${shortlistJq}\n\n` +
-  `Return its JSON output: considered (total rows scanned) and rows (the ranked finalists, each with id, date, origin, dest, source, mileage, seats, airlines, direct). mileage and seats are numbers; direct is boolean.`,
+  `Return its JSON output: considered (total rows scanned) and rows (the ranked finalists, each with id, date, origin, dest, source, mileage, seats, airlines, direct, soft). mileage and seats are numbers; direct and soft are booleans.`,
   { label: 'shortlist', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
 );
 if (!shortlist || shortlist.rows.length === 0) {
@@ -218,25 +230,73 @@ const transitClause = avoidTransit.length
   ? ` and ([.AvailabilitySegments[1:][].OriginAirport] | all(. as $x | (${JSON.stringify(avoidTransit)} | index($x)) == null))`
   : '';
 
+// Derive the seat-quality doc from the validated script path, never an agent-echoed string.
+const seatDoc = script.replace(/[^/]+$/, 'seat-quality.md');
+const longhaulProj = isBiz
+  ? `,\n        longhaul: ((.AvailabilitySegments | map(select(.Cabin == "${cabin}")) | max_by(.Distance)) as $s\n` +
+    `          | if $s == null then null else "\\($s.FlightNumber) \\($s.OriginAirport)-\\($s.DestinationAirport) (\\($s.AircraftName))" end)`
+  : '';
+
 phase('Expand');
 const trips = await pipeline(rows, row => agent(
-  `Run exactly this one Bash pipeline, nothing else:\n\n` +
+  (isBiz
+    ? `Run exactly this one Bash pipeline, then one local file read — no other getaway.sh command:\n\n`
+    : `Run exactly this one Bash pipeline, nothing else:\n\n`) +
   `"${script}" trip ${row.id} | jq '{ bookingPrimary: ([.booking_links[] | select(.primary) | .label][0]),\n` +
-  `  best: (.data | map(select(.Cabin == "${cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)\n` +
-  `    | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
-  `        segments: [.AvailabilitySegments[] | "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"] }) }'\n\n` +
+  `  best: ((.data | map(select(.Cabin == "${cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)) as $t\n` +
+  `    | if $t == null then null else $t | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
+  `        segments: [.AvailabilitySegments[] | "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"]${longhaulProj} } end) }'\n\n` +
   `It also prints \`quota remaining: N\` to stderr. If \`best\` is null — no trip in that cabin seats ` +
   `${travelers} traveler(s) and clears the connection rules — return only id and quota. Otherwise return:\n` +
   `- id: "${row.id}"\n- mileageCost: best.MileageCost\n- totalTaxes: best.TotalTaxes\n- taxesCurrency: best.TaxesCurrency\n` +
   `- remainingSeats: best.RemainingSeats\n- flightNumbers: best.FlightNumbers\n- segments: best.segments\n` +
-  `- updatedAt: best.UpdatedAt\n- bookingPrimary: bookingPrimary\n- quota: the integer N from the stderr line, or -1 if absent.`,
+  `- updatedAt: best.UpdatedAt\n- bookingPrimary: bookingPrimary\n- quota: the integer N from the stderr line, or -1 if absent.` +
+  (isBiz
+    ? `\n\nThen read the local file ${seatDoc} and classify \`best.longhaul\`, the longest business segment: take the operating carrier from its flight-number prefix plus its aircraft, match that carrier+aircraft against the table, and also return — all three required whenever best is non-null:\n` +
+      `- longhaul: best.longhaul (the segment string, or null)\n` +
+      `- product: that row's Verdict — but \`verify\` when the row is Verify-marked, and \`unknown\` when the carrier+aircraft is absent from the table or best.longhaul is null\n` +
+      `- productNote: the product name plus one clause (e.g. "old Club World — yin-yang 2-3-2, barely business")`
+    : ''),
   { label: `trip:${row.dest}`, phase: 'Expand', schema: TRIP_SCHEMA },
 ));
+
+// Business only, zero quota: resolve Verify-marked and table-absent products against the
+// live seat map before the re-rank truncates, so a resolved `barely` never displaces a true flat.
+const verdictById = {};
+if (isBiz) {
+  const toVerify = rows.map((row, i) => ({ row, trip: trips[i] }))
+    .filter(c => c.trip && (c.trip.product === 'verify' || (c.trip.product === 'unknown' && c.trip.longhaul)));
+  if (toVerify.length) {
+    phase('Verify');
+    const verified = await pipeline(toVerify, ({ row, trip }) => agent(
+      `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to pin down the business hard product on ${trip.longhaul} departing ${row.date}: the carrier's seat map for that flight number and date, recent cabin reviews, retrofit trackers. Return:\n` +
+      `- id: "${row.id}"\n` +
+      `- product: the resolved verdict — one of suite, solid, dated, barely, unknown; return \`unknown\` when sources disagree\n` +
+      `- productNote: the product name plus one clause describing the hard product.`,
+      { label: `verify:${row.dest}`, phase: 'Verify', schema: VERIFY_SCHEMA },
+    ));
+    // Merge by row.id, never index — verify runs over a subset of the finalists.
+    for (let i = 0; i < toVerify.length; i++) if (verified[i]) verdictById[toVerify[i].row.id] = verified[i];
+  }
+}
+
+const candidates = rows.map((row, i) => ({ row, trip: trips[i] })).filter(c => c.trip && typeof c.trip.mileageCost === 'number');
+for (const c of candidates) {
+  const v = verdictById[c.row.id];
+  if (v) { c.trip.product = v.product; c.trip.productNote = v.productNote; }
+}
+// Soft-avoided airlines sink harder than bad seats; only literal `barely` demotes.
+const demoted = c => (c.trip.product === 'barely' ? 1 : 0);
+candidates.sort((a, b) =>
+  (Number(a.row.soft) - Number(b.row.soft)) || (demoted(a) - demoted(b)) || (a.row.mileage - b.row.mileage));
+const kept = candidates.slice(0, maxFinalists);
+const died = rows.length - candidates.length;
+if (died > 0) log(`${died} finalist(s) dropped: expansion agent died or no live trip seats the party`);
 
 const enrichByDest = {};
 if (enrichRan) {
   phase('Enrich');
-  const dests = [...new Set(shortlist.rows.map(r => r.dest))];
+  const dests = [...new Set(kept.map(c => c.row.dest))];
   const enriched = await pipeline(dests, dest => agent(
     `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to research airport ${dest} for travel in ${startDate.slice(0, 7)}. Return:\n` +
     `- dest: "${dest}"\n- weather: the typical weather and season for that window\n` +
@@ -246,13 +306,10 @@ if (enrichRan) {
   for (const e of enriched.filter(Boolean)) enrichByDest[e.dest] = e;
 }
 
-const finalists = rows.map((row, i) => {
-  const trip = trips[i];
-  if (!trip || typeof trip.mileageCost !== 'number') return null;
+const finalists = kept.map(({ row, trip }) => {
   const enrich = enrichByDest[row.dest];
   return enrich ? { ...row, trip, enrich } : { ...row, trip };
-}).filter(Boolean);
-if (rows.length - finalists.length > 0) log(`${rows.length - finalists.length} finalist(s) dropped: expansion agent died or no live trip seats the party`);
+});
 
 const allQuotas = [...quotas, ...trips.filter(Boolean).map(t => t.quota).filter(q => q >= 0)];
 return { finalists, sweepFiles, considered: shortlist.considered, quota: allQuotas.length ? Math.min(...allQuotas) : -1, skipped };
