@@ -1,7 +1,7 @@
 ---
 name: onboard
 description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
-allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Agent
+allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Agent
 ---
 
 # onboard
@@ -14,9 +14,12 @@ When the user accepts onboarding, run auto-fill immediately — announce
 each step, do not ask permission for it. Start at the main level with
 Gmail query 1, the domain tally: the browser gatherer's host list
 derives from it, and the mailbox question below is asked here, before
-any spawn. Then run the gatherers below as parallel subagents in one
-spawn message — the Gmail gatherer (queries 2–4 and body fetches)
-beside one browser gatherer per host. The gatherers degrade
+any spawn. Prime the cookie grant at the main level per gather.md's
+[browser read](../refresh/gather.md#browser-read) — Touch ID denied
+means the spawn goes Gmail-only, no browser gatherers. Then run the
+gatherers below as parallel subagents in one spawn message — the
+Gmail gatherer (queries 2–4 and body fetches) beside one browser
+gatherer per host. The gatherers degrade
 independently: skipping one costs nothing but its answers, and none of
 them writes a byte. The form's Submit is the sole write gate, and the
 form is never delegated.
@@ -37,7 +40,7 @@ trust doctrine — live in gather.md's
 Resolve the account per gather.md's account rule (`gog auth list
 --json`; ask when more than one is configured, never guess). In
 onboarding the mailbox pick happens at the main level before the
-gatherers spawn — the lone question in this flow.
+gatherers spawn — the lone pre-spawn question in this flow.
 
 Run four headers-first queries, fetching at most 10 message bodies
 total across all four per gather.md's body-fetch rule:

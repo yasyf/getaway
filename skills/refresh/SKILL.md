@@ -1,7 +1,7 @@
 ---
 name: refresh
 description: Refreshes getaway points and miles balances. Triggers when the user wants to refresh or update balances ("refresh my balances", "update my Aeroplan balance", "how many points do I have now"), re-check elite status, or pull current credit-card points — Amex Membership Rewards, Chase Ultimate Rewards, Citi ThankYou, Capital One miles. Reads logged-in airline and bank sites first, with a Gmail statement fallback for banks. First-time setup is /getaway:onboard.
-allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Agent
+allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Agent
 ---
 
 # refresh
@@ -29,10 +29,11 @@ read, and the Gmail read.
    every host — then spawn one gatherer per host in parallel per
    gather.md. Aggregate the per-gatherer records into
    `[{slug, balance, tier}]`.
-3. Per failed bank host, run the
+3. Per bank host that skipped `logged-out` or `2fa`, run the
    [Gmail read](gather.md#gmail-read-gog-lockdown) with the bank-points
-   query narrowed to that sender domain. Browser-read numbers override
-   Gmail hints; failed airline hosts stay note-and-skip.
+   query narrowed to that sender domain; `no-cookies` and `hung` skips
+   join the main-level retry offer instead. Browser-read numbers
+   override Gmail hints; failed airline hosts stay note-and-skip.
 4. Merge the results into the current `balances.programs`,
    `balances.transferable`, and `statuses` maps and write with
    `prefs-set` at the main level
