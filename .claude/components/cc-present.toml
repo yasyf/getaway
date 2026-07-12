@@ -1,0 +1,28 @@
+host_api = 1
+name = "getaway"
+version = "0.1.0"
+description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, and an option picker."
+entry = "dist/pack.js"
+reference = "reference/blocks.md"
+
+[blocks.itinerary]
+description = "Renders one bookable award itinerary as a card: route, program, miles plus taxes, seats left, per-leg flights with layovers, and a booking link. Reach for it to show a single multi-segment award the human is deciding on."
+schema = "schema/itinerary.json"
+examples = ["examples/itinerary.json"]
+
+[blocks.flight]
+description = "Renders a single flight leg as a compact card with wall-clock times, duration, flight number, and cabin. Shows aircraft on an award leg or a cash price on a positioning leg. Reach for it to surface one leg on its own."
+schema = "schema/flight.json"
+examples = ["examples/flight.json", "examples/flight-positioning.json"]
+
+[blocks.availability]
+description = "An interactive award-availability calendar: date rows by cabin, each cell showing miles, seats, and nonstop status. The human taps a date-and-cabin cell and the pick streams back. Reach for it to let the human choose when and in which cabin to fly."
+schema = "schema/availability.json"
+interaction = "schema/availability.interaction.json"
+examples = ["examples/availability.json"]
+
+[blocks.option-picker]
+description = "An interactive single-choice picker over competing award options (route, date, program, miles, taxes). The human selects one and the choice streams back. Reach for it to have the human pick between routings or programs."
+schema = "schema/option-picker.json"
+interaction = "schema/option-picker.interaction.json"
+examples = ["examples/option-picker.json"]

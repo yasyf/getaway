@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-11
+
+### Added
+- cc-present block pack at `.claude/components`, installed with the plugin:
+  `getaway.itinerary` (one award option — segments, integer miles,
+  minor-unit taxes plus currency, remaining seats, booking link, and
+  `UpdatedAt` freshness), `getaway.flight` (a single leg, with an optional
+  cash price for positioning flights), `getaway.availability` (interactive
+  date × cabin grid; a tap submits `{date, cabin}`), and
+  `getaway.option-picker` (interactive shortlist; a tap submits
+  `{optionId}`).
+
+### Changed
+- Presenting options now composes the pack blocks — an option picker for
+  the shortlist and an itinerary card per expanded finalist — instead of
+  prose card titles with per-card approval blocks.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added

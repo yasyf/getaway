@@ -1,0 +1,12 @@
+{
+  "id": "flt-sfo-doh-qr738",
+  "type": "getaway.flight",
+  "flightNumber": "QR738",
+  "origin": "SFO",
+  "destination": "DOH",
+  "departsAt": "2026-09-06T17:30",
+  "arrivesAt": "2026-09-07T19:45",
+  "cabin": "business",
+  "durationMinutes": 975,
+  "aircraft": "Boeing 777-300ER"
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "getaway.availability",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "origin", "destination", "rows"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "type": { "const": "getaway.availability" },
+    "origin": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "destination": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "program": { "type": "string", "minLength": 1 },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "cabins"],
+        "properties": {
+          "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+          "cabins": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "economy": { "$ref": "#/$defs/cell" },
+              "premium": { "$ref": "#/$defs/cell" },
+              "business": { "$ref": "#/$defs/cell" },
+              "first": { "$ref": "#/$defs/cell" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["miles", "seats", "direct"],
+      "properties": {
+        "miles": { "type": "integer", "minimum": 1 },
+        "seats": { "type": "integer", "minimum": 0 },
+        "direct": { "type": "boolean" }
+      }
+    }
+  }
+}

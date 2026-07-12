@@ -1,0 +1,33 @@
+{
+  "id": "itin-sfo-cpt-qr",
+  "type": "getaway.itinerary",
+  "program": "Aeroplan",
+  "miles": 88000,
+  "taxes": { "amount": 12050, "currency": "USD" },
+  "remainingSeats": 3,
+  "bookingLink": { "label": "Book on Air Canada", "url": "https://www.aircanada.com/us/en/aco/home/book.html" },
+  "updatedAt": "2026-07-11T02:10:00Z",
+  "totalDurationMinutes": 1655,
+  "segments": [
+    {
+      "flightNumber": "QR738",
+      "origin": "SFO",
+      "destination": "DOH",
+      "departsAt": "2026-09-06T17:30",
+      "arrivesAt": "2026-09-07T19:45",
+      "cabin": "business",
+      "aircraft": "Boeing 777-300ER",
+      "durationMinutes": 975
+    },
+    {
+      "flightNumber": "QR1369",
+      "origin": "DOH",
+      "destination": "CPT",
+      "departsAt": "2026-09-07T21:50",
+      "arrivesAt": "2026-09-08T06:05",
+      "cabin": "business",
+      "aircraft": "Airbus A350-900",
+      "durationMinutes": 555
+    }
+  ]
+}

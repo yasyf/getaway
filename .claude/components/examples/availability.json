@@ -1,0 +1,35 @@
+{
+  "id": "avail-sfo-fra",
+  "type": "getaway.availability",
+  "origin": "SFO",
+  "destination": "FRA",
+  "program": "Aeroplan",
+  "rows": [
+    {
+      "date": "2026-10-05",
+      "cabins": {
+        "economy": { "miles": 42500, "seats": 4, "direct": false },
+        "business": { "miles": 88000, "seats": 2, "direct": false }
+      }
+    },
+    {
+      "date": "2026-10-06",
+      "cabins": {
+        "business": { "miles": 85000, "seats": 1, "direct": true }
+      }
+    },
+    {
+      "date": "2026-10-07",
+      "cabins": {
+        "economy": { "miles": 40000, "seats": 6, "direct": true },
+        "business": { "miles": 92000, "seats": 3, "direct": false }
+      }
+    },
+    {
+      "date": "2026-10-08",
+      "cabins": {
+        "economy": { "miles": 44000, "seats": 2, "direct": false }
+      }
+    }
+  ]
+}

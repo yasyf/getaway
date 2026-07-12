@@ -1,0 +1,12 @@
+{
+  "id": "flt-lax-sfo-positioning",
+  "type": "getaway.flight",
+  "flightNumber": "UA1682",
+  "origin": "LAX",
+  "destination": "SFO",
+  "departsAt": "2026-09-06T12:15",
+  "arrivesAt": "2026-09-06T13:45",
+  "cabin": "economy",
+  "durationMinutes": 90,
+  "price": { "amount": 30500, "currency": "USD" }
+}

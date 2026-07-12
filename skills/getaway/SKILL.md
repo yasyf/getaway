@@ -526,14 +526,31 @@ jq -r '[.Date,.Route.OriginAirport,.Route.DestinationAirport,.Source,
 ## Presenting options
 
 Invoke the `Skill` tool with `cc-present:present` to put the shortlist in
-front of the user as a live approval board:
+front of the user as a live approval board. The plugin ships the `getaway`
+block pack, so the dotted block types below are installed wherever the
+plugin is; every field is documented in
+[the pack reference](../../.claude/components/reference/blocks.md).
 
-- One card per option, titled like `CPT · Aeroplan · 88k + $120 · dep Sun
-  9/6`, with an `approval` block inside each card.
-- One `choice` block for pivots — shift the window, swap the region.
-- One `input` block for free-form constraints ("aisle seats", "no red-eyes").
-- A `progress` block while `trip` expansions run in the background.
-- Iterate rounds — redraft rejected cards, add fresh options — until the
+- One `getaway.option-picker` for the shortlist — one entry per finalist,
+  `optionId` set to the row's availability `ID`. A tap submits
+  `{"optionId": …}`: that finalist is the pick.
+- One `getaway.itinerary` per expanded finalist, fed only from
+  `/trips/{id}`: integer miles, minor-unit taxes plus currency, remaining
+  seats, the primary booking link, the row's `UpdatedAt`, and the segments
+  in `Order`.
+- A `getaway.flight` for each positioning leg — convert the `fli` price to
+  minor units (`305.0` USD becomes `{"amount": 30500, "currency": "USD"}`).
+- A `getaway.availability` grid when the user asks about other dates or
+  cabins — build it from the saved sweep JSONL, no new API calls. A tap
+  submits `{"date": …, "cabin": …}`: expand that cell with `trip`.
+- Built-ins carry the rest: a `choice` block for pivots (shift the window,
+  swap the region), an `input` block for free-form constraints ("aisle
+  seats", "no red-eyes"), a `progress` block while `trip` expansions run
+  in the background.
+- Pack interactions arrive as
+  `{"type": "pack.interaction", "blockId": …, "payload": …}` with the
+  payloads above.
+- Iterate rounds — redraft rejected options, add fresh ones — until the
   user submits.
 
 `AskUserQuestion` stays the lightweight path: up to 4 quick questions,

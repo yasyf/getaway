@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "getaway.itinerary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "program", "miles", "taxes", "remainingSeats", "bookingLink", "updatedAt", "totalDurationMinutes", "segments"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "type": { "const": "getaway.itinerary" },
+    "program": { "type": "string", "minLength": 1 },
+    "miles": { "type": "integer", "minimum": 1 },
+    "taxes": { "$ref": "#/$defs/money" },
+    "remainingSeats": { "type": "integer", "minimum": 0 },
+    "bookingLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "updatedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "totalDurationMinutes": { "type": "integer", "minimum": 1 },
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/segment" }
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "integer", "minimum": 0 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "cabin": { "enum": ["economy", "premium", "business", "first"] },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flightNumber", "origin", "destination", "departsAt", "arrivesAt", "cabin", "aircraft", "durationMinutes"],
+      "properties": {
+        "flightNumber": { "type": "string", "pattern": "^[A-Z0-9]{2}[0-9]{1,4}$" },
+        "origin": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "destination": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "departsAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?$" },
+        "arrivesAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?$" },
+        "cabin": { "$ref": "#/$defs/cabin" },
+        "aircraft": { "type": "string", "minLength": 1 },
+        "durationMinutes": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
