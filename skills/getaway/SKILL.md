@@ -174,7 +174,8 @@ when the rung below cannot express the work:
    default for independent calls that cannot share a batch:
    per-program `availability` sweeps, per-finalist `trip` expansions,
    per-destination `WebSearch` enrichment, per-leg `fli` pricing, the
-   two onboarding gatherers ([../onboard/SKILL.md](../onboard/SKILL.md)).
+   onboarding gatherers — Gmail plus one browser gatherer per host
+   ([../onboard/SKILL.md](../onboard/SKILL.md)).
    Every brief carries the exact commands to
    run and a compact JSON return shape; a brief that spends API quota
    also carries the absolute `getaway.sh` path, the scratchpad file to
@@ -199,8 +200,8 @@ Invariants on every rung:
   anyway.
 - Interactive surfaces stay at the main level: cc-present boards and
   forms, `AskUserQuestion`. (Touch ID lands on the user's screen
-  whichever agent invokes cookiesync, so the balances gatherer may run
-  as a subagent.)
+  whichever agent invokes cookiesync, so the balances gatherers may
+  run as subagents.)
 - One writer for durable state: every `prefs-set` and `plan-set` runs
   at the main level. Subagents read `prefs` and the plan file and
   write only their own scratchpad files; nothing under `~/.getaway` is

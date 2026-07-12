@@ -10,8 +10,9 @@ ONBOARD = (
     "This session is using the getaway skill and ~/.getaway/preferences.json is not configured yet "
     "(the file is missing, or it records no points balances). Before planning a trip, offer "
     "first-run onboarding by invoking the getaway:onboard skill (Skill tool), which runs the "
-    "auto-fill gatherers as parallel subagents (Gmail via gog, airline and bank sites via "
-    "agent-browser-with-cookies), seeds a cc-present preferences form, and writes only on the "
+    "auto-fill gatherers as parallel subagents (Gmail via gog, plus one browser gatherer per "
+    "airline and bank host via agent-browser-with-cookies), seeds a cc-present preferences form, "
+    "and writes only on the "
     "form's Submit. The user may skip onboarding and plan with the current defaults; do not "
     "block on it. If preferences are already configured, ignore this."
 )

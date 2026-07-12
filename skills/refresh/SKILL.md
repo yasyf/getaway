@@ -24,9 +24,11 @@ read, and the Gmail read.
    `balances.transferable` keys — plus any program or bank the user
    names — mapped through the tables in
    [Program and bank domains](gather.md#program-and-bank-domains).
-2. Run the [browser read](gather.md#browser-read) over all hosts as one
-   subagent — one cookie pull, one Touch ID tap, the `--reason` naming
-   every host; it returns `[{slug, balance, tier}]`.
+2. Run the [browser read](gather.md#browser-read): prime the grant at
+   the main level — one `cookiesync auth` tap, its `--reason` naming
+   every host — then spawn one gatherer per host in parallel per
+   gather.md. Aggregate the per-gatherer records into
+   `[{slug, balance, tier}]`.
 3. Per failed bank host, run the
    [Gmail read](gather.md#gmail-read-gog-lockdown) with the bank-points
    query narrowed to that sender domain. Browser-read numbers override

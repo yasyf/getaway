@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   procedures.
 
 ### Changed
+- The browser read fans out per host: one main-level `cookiesync auth`
+  priming tap whose `--reason` names every host, then one gatherer
+  subagent per host in its own `agent-browser` session — the shared
+  per-session grant keeps the fan-out at one tap, and a hung or
+  logged-out host no longer stalls the rest. Replaces the single
+  serial-site-walk subagent.
 - Flows fan out by default: a new SKILL.md `## Orchestration` ladder
   (batch, then parallel subagents, then the shipped workflow, then a
   team for multi-round multi-city plans), onboarding gatherers spawned

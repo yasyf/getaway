@@ -14,11 +14,12 @@ When the user accepts onboarding, run auto-fill immediately — announce
 each step, do not ask permission for it. Start at the main level with
 Gmail query 1, the domain tally: the browser gatherer's host list
 derives from it, and the mailbox question below is asked here, before
-any spawn. Then run the two gatherers below as parallel subagents —
-one message, two Agent calls, Gmail (queries 2–4 and body fetches)
-beside airline logins. The gatherers degrade independently: skipping
-one costs nothing but its answers, and neither writes a byte. The
-form's Submit is the sole write gate, and the form is never delegated.
+any spawn. Then run the gatherers below as parallel subagents in one
+spawn message — the Gmail gatherer (queries 2–4 and body fetches)
+beside one browser gatherer per host. The gatherers degrade
+independently: skipping one costs nothing but its answers, and none of
+them writes a byte. The form's Submit is the sole write gate, and the
+form is never delegated.
 
 ## Auto-fill from Gmail
 
@@ -64,21 +65,23 @@ total across all four per gather.md's body-fetch rule:
 
 ## Balances from logins
 
-This browser read is the second parallel subagent, spawned beside the
-Gmail gatherer with the host list fixed at spawn time; it returns
-`[{slug, balance, tier}]`, and the Touch ID prompt reaches the user
-from a subagent all the same. Programs the Gmail gatherer surfaces
+The browser read fans out per host: after the main-level priming tap,
+spawn one browser gatherer per host beside the Gmail gatherer — all in
+one message, with the host list derived and fixed at spawn time. Each
+gatherer returns one `{slug, balance, tier}` record or a skip note;
+the orchestrator aggregates them. Programs the Gmail gatherer surfaces
 after the spawn enter the form as Gmail-sourced placeholders — offer a
 second browser pass only when the user wants exact numbers.
 
 Derive the host list automatically: the Gmail-tally programs and
 banks, any programs or banks the user has named, and the keys already
-in `balances.programs`, `statuses`, and `balances.transferable` — banks
-ride in the same cookie session — mapped to login domains through the
-tables in gather.md's
+in `balances.programs`, `statuses`, and `balances.transferable` —
+banks need no special casing, since each host gets its own gatherer
+and session and the shared per-session grant keeps the whole fan-out
+at one tap — mapped to login domains through the tables in gather.md's
 [Program and bank domains](../refresh/gather.md#program-and-bank-domains).
-The mechanics — one cookie pull, the Touch ID reason, per-site
-extraction, the failure branches — are gather.md's
+The mechanics — the priming `auth`, the per-host cookie pulls,
+per-site extraction, the failure branches — are gather.md's
 [Browser read](../refresh/gather.md#browser-read).
 
 ## Confirm in the form
