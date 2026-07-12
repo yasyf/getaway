@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   planning pipeline — sweep, shortlist, expand, enrich — as parallel
   agents; the planning workflow invokes it for any ask spanning two or
   more destination buckets or programs.
+- Dedicated `/getaway:onboard` skill: first-run setup where parallel Gmail
+  and airline/bank-login gatherers seed a cc-present form; nothing is
+  written until Submit.
+- Dedicated `/getaway:refresh` skill: re-reads saved award balances and
+  elite statuses on demand from logged-in airline and bank sites — Amex,
+  Chase, Citi, and Capital One transferable points included — falling
+  back to a Gmail statement scan per bank host that fails, and writing
+  results through `prefs-set` directly.
+- `skills/refresh/gather.md`: the shared source for the 26-program and
+  bank domain tables and the browser-read and Gmail lockdown gather
+  procedures.
 
 ### Changed
 - Flows fan out by default: a new SKILL.md `## Orchestration` ladder
@@ -18,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   team for multi-round multi-city plans), onboarding gatherers spawned
   as parallel subagents, and parallel trip expansions, enrichment, and
   positioning quotes.
+- The `getaway` skill slims to planning: the onboarding and
+  balance-refresh trigger phrases move to the new skills' descriptions.
+- Hooks re-aimed: the onboarding nudge points unconfigured sessions at
+  `getaway:onboard`, and session reflection also fires for onboard and
+  refresh sessions.
 
 ## [0.6.0] - 2026-07-11
 

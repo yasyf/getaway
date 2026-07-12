@@ -8,14 +8,11 @@ from captain_hook import Allow, Event, Input, Warn, nudge
 
 ONBOARD = (
     "This session is using the getaway skill and ~/.getaway/preferences.json is not configured yet "
-    "(the file is missing, or it records no points balances). Before planning a trip, offer the "
-    "first-run onboarding form described in the getaway SKILL.md: run auto-fill first — spawn the "
-    "two gatherers as parallel subagents (Agent tool), one scanning Gmail when gog is present, one "
-    "reading airline-site balances when the agent-browser-with-cookies skill is available; each "
-    "degrades on its own tooling, and missing tooling skips only that half — and seed the form "
-    "with what they return; then build the cc-present "
-    "preferences form, invoke cc-present:present with it, and on submit write the answers with "
-    "getaway.sh prefs-set. The user may skip onboarding and plan with the current defaults; do not "
+    "(the file is missing, or it records no points balances). Before planning a trip, offer "
+    "first-run onboarding by invoking the getaway:onboard skill (Skill tool), which runs the "
+    "auto-fill gatherers as parallel subagents (Gmail via gog, airline and bank sites via "
+    "agent-browser-with-cookies), seeds a cc-present preferences form, and writes only on the "
+    "form's Submit. The user may skip onboarding and plan with the current defaults; do not "
     "block on it. If preferences are already configured, ignore this."
 )
 
@@ -43,6 +40,34 @@ GETAWAY_SKILL = {
     },
 }
 
+REFRESH_SKILL = {
+    "type": "assistant",
+    "message": {
+        "content": [
+            {
+                "type": "tool_use",
+                "name": "Skill",
+                "id": "k2",
+                "input": {"skill": "getaway:refresh", "args": "refresh my balances"},
+            }
+        ]
+    },
+}
+
+ONBOARD_SKILL = {
+    "type": "assistant",
+    "message": {
+        "content": [
+            {
+                "type": "tool_use",
+                "name": "Skill",
+                "id": "k3",
+                "input": {"skill": "getaway:onboard", "args": ""},
+            }
+        ]
+    },
+}
+
 GIT_STATUS = {
     "type": "assistant",
     "message": {
@@ -59,11 +84,14 @@ GIT_STATUS = {
 
 nudge(
     ONBOARD,
-    when=lambda evt: evt.ctx.t.has_skill("getaway", "getaway:getaway") and prefs_unconfigured(),
+    when=lambda evt: evt.ctx.t.has_skill("getaway", "getaway:getaway", "getaway:refresh")
+    and prefs_unconfigured(),
     events=Event.PostToolUse,
     max_fires=1,
     tests={
-        Input(transcript=[GETAWAY_SKILL]): Warn(pattern=r"auto-fill"),
+        Input(transcript=[GETAWAY_SKILL]): Warn(pattern=r"getaway:onboard"),
+        Input(transcript=[REFRESH_SKILL]): Warn(pattern=r"getaway:onboard"),
+        Input(transcript=[ONBOARD_SKILL]): Allow(),
         Input(transcript=[GIT_STATUS]): Allow(),
         Input(transcript=[]): Allow(),
     },

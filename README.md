@@ -147,15 +147,19 @@ key. Each trip gets its own memory at `~/.getaway/plans/<slug>.json`, filled
 in as planning pins down the dates, cabin, party, regions, and destinations
 to skip. A destination skipped there is ruled out only as the trip's final
 stop; it stays valid as a connection or positioning stop.
-First use also opens an interactive onboarding form (cc-present) that
-collects the profile up front: home airport, avoid lists, points
-balances, and the 1Password key reference. Skip the form to accept the
-defaults.
+First use offers `/getaway:onboard`, an interactive onboarding form
+(cc-present) that collects the profile up front: home airport, avoid
+lists, points balances, and the 1Password key reference. Skip the form
+to accept the defaults.
 The form arrives pre-filled: [gogcli](https://gogcli.sh) scans Gmail
-read-only for airline emails, and the agent-browser-with-cookies skill
-reads live balances and elite tiers from the airline sites you're already
-logged into, behind one Touch ID tap. Nothing is saved until you confirm
+read-only for airline and bank statement emails, and the
+agent-browser-with-cookies skill reads live balances and elite tiers from
+the airline and bank sites you're already logged into, behind one Touch
+ID tap. Nothing is saved until you confirm
 the form.
+Balances drift, so `/getaway:refresh` re-reads them on demand — airline
+programs and bank transferable points both — from the sites you're
+logged into, and merges the deltas straight back into the profile.
 Both schemas live in [skills/getaway/SKILL.md](skills/getaway/SKILL.md).
 
 ## Reference
