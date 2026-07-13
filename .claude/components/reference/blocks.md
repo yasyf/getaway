@@ -1,6 +1,6 @@
 # getaway pack blocks
 
-Four block types under the `getaway` pack. Reference them by dotted wire
+Five block types under the `getaway` pack. Reference them by dotted wire
 type inside any `Doc.blocks` array or a card's `children`.
 
 Conventions shared by every block:
@@ -266,3 +266,157 @@ Each option:
   ]
 }
 ```
+
+## getaway.stay
+
+One journey's lodging. Content only, no interaction. A `state`
+discriminator picks the shape: `"searched"` carries the rooms.aero walk
+for a paired journey; `"deferred"` names why a journey has no lodging to
+show. Feed one block per board journey from its `stays.json` entry (or its
+`lodging_search` deferral) — see the composition note at the end.
+
+Two conventions differ from the flight blocks. Cash is per-night minor
+units in each room's own `currency` (`cashPerNightCents` + the room's
+`currency`), not a self-contained money object, because a property quotes
+one local currency across all its offers. And a `checkedAt` is a real UTC
+instant — rooms.aero's `last_checked_at` — so it renders as relative
+freshness ("6 hours ago"), free of the wall-clock caveat above.
+
+### state `"searched"`
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `id` | string | yes | Unique block id. |
+| `type` | `"getaway.stay"` | yes | The dotted wire type. |
+| `state` | `"searched"` | yes | The walked shape. |
+| `destination` | string | yes | Header context — the stay's `destination.query` ("Lisbon"). |
+| `airport` | IATA | no | Chip beside the city. |
+| `session` | `"pro"` \| `"anonymous"` | yes | `anonymous` renders a prominent staleness banner — that data can be weeks old. |
+| `checkedAt` | UTC timestamp | yes | Entry-level freshness (`provenance.fetched_at`); renders "N hours ago". |
+| `searchState` | enum | yes | See the state table below. |
+| `interval` | interval | yes | Check-in through check-out. |
+| `rooms` | room[], min 0 | yes | Empty is valid — a `searched_empty` walk found nothing. |
+
+`searchState` is one of `complete`, `searched_empty`, `night_clamped`,
+`bot_wall`, `logged_out`, `date_in_past`, `geocode_miss`, `failed`. With
+rooms present the block renders them; with `rooms` empty and
+`searched_empty` it renders "No award rooms found"; with `rooms` empty and
+any of `bot_wall` / `logged_out` / `date_in_past` / `geocode_miss` /
+`failed` it renders an honest "lookup couldn't complete" notice — a failed
+walk never reads as "no space".
+
+Each interval:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `checkIn`, `checkOut` | `YYYY-MM-DD` | yes | Destination-local dates. |
+| `nights` | integer ≥ 1 | yes | `checkOut − checkIn`; a Tuesday return honestly adds the night. |
+| `nightClamped` | boolean | yes | `true` discloses rooms.aero's 5-night booking cap. |
+| `requestedNights` | integer ≥ 6 | no | Pre-clamp nights. Present renders "first 5 nights of N"; omit and the disclosure reads "capped at rooms.aero's 5-night maximum". |
+
+Each room:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `program` | string | yes | Hotel program display name ("World of Hyatt") — map the registry slug the same way the itinerary block shows a program. |
+| `name` | string | yes | Property name. |
+| `currency` | ISO 4217 | yes | Property-local; every cash figure in this room is in it. |
+| `checkedAt` | UTC timestamp | yes | The row's `last_checked_at`; renders as per-room freshness. |
+| `stale` | boolean | yes | `true` shows a `stale` warning chip. |
+| `offers` | offer[], min 1 | yes | One per award class. |
+
+Each offer:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `awardClass` | `"standard"` \| `"suite"` | yes | |
+| `pointsPerNight` | integer ≥ 1 \| null | yes | `null` on a cash-only offer. |
+| `cashPerNightCents` | integer ≥ 0 \| null | yes | Minor units in the room's `currency`; `null` on a points-only offer. |
+| `centsPerPoint` | number > 0 \| null | yes | Value ratio; renders as a `¢/pt` chip when present. |
+
+At least one of `pointsPerNight` and `cashPerNightCents` must be non-null —
+the schema rejects an offer that is both. Per-night figures are the source
+of truth; the block prints a per-offer estimate (`per-night × nights`)
+labeled "est." and a footer saying so, so no total ever reads as a quote.
+
+```json
+{
+  "id": "stay-jrn-sfo-lis-hyatt",
+  "type": "getaway.stay",
+  "state": "searched",
+  "destination": "Lisbon",
+  "airport": "LIS",
+  "session": "pro",
+  "checkedAt": "2026-07-13T14:20:00Z",
+  "searchState": "complete",
+  "interval": { "checkIn": "2026-09-06", "checkOut": "2026-09-11", "nights": 5, "nightClamped": false },
+  "rooms": [
+    {
+      "program": "World of Hyatt",
+      "name": "Hyatt Regency Lisbon",
+      "currency": "EUR",
+      "checkedAt": "2026-07-13T14:20:00Z",
+      "stale": false,
+      "offers": [
+        { "awardClass": "standard", "pointsPerNight": 12000, "cashPerNightCents": 18500, "centsPerPoint": 1.54 },
+        { "awardClass": "suite", "pointsPerNight": 24000, "cashPerNightCents": 41000, "centsPerPoint": 1.71 }
+      ]
+    },
+    {
+      "program": "Hilton Honors",
+      "name": "Hilton Lisbon",
+      "currency": "EUR",
+      "checkedAt": "2026-06-28T09:00:00Z",
+      "stale": true,
+      "offers": [
+        { "awardClass": "standard", "pointsPerNight": 70000, "cashPerNightCents": null, "centsPerPoint": null },
+        { "awardClass": "suite", "pointsPerNight": null, "cashPerNightCents": 52000, "centsPerPoint": null }
+      ]
+    }
+  ]
+}
+```
+
+### state `"deferred"`
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `id` | string | yes | Unique block id. |
+| `type` | `"getaway.stay"` | yes | The dotted wire type. |
+| `state` | `"deferred"` | yes | The no-lodging shape. |
+| `reason` | enum | yes | `no_checkout`, `date_in_past`, `invalid_interval`, or `not_walked`. |
+| `destination` | string | no | Optional context header. |
+| `airport` | IATA | no | Chip beside the city. |
+
+The block renders an honest one-line reason per code: `no_checkout` (no
+confirmed return date), `date_in_past`, `invalid_interval`, or
+`not_walked` (a walk gap, never "no space").
+
+```json
+{
+  "id": "stay-jrn-sfo-lis-lead",
+  "type": "getaway.stay",
+  "state": "deferred",
+  "reason": "no_checkout",
+  "destination": "Lisbon",
+  "airport": "LIS"
+}
+```
+
+### Composing a stay block
+
+The board threads one lodging disposition onto each journey. Map it to one
+`getaway.stay` block:
+
+- A `stays.json` entry becomes a `"searched"` block. Copy
+  `provenance.session` into `session`, `provenance.fetched_at` into
+  `checkedAt`, `provenance.night_clamped` into `interval.nightClamped`, the
+  entry `search_state` into `searchState`, and `destination.query` into
+  `destination`. Per room, copy `last_checked_at` into the room's
+  `checkedAt` and resolve the registry slug to a program display name. When
+  the interval clamped, pass the journey's true nights as `requestedNights`
+  so the disclosure can name N.
+- A `lodging_search: {state: "deferred", reason}` becomes a `"deferred"`
+  block carrying that `reason`.
+- A walk gap, `{state: "unavailable", reason: "not_walked"}`, becomes a
+  `"deferred"` block with `reason: "not_walked"`.

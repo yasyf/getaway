@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "getaway.stay",
+  "type": "object",
+  "oneOf": [{ "$ref": "#/$defs/searched" }, { "$ref": "#/$defs/deferred" }],
+  "$defs": {
+    "searched": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "state", "destination", "session", "checkedAt", "searchState", "interval", "rooms"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "const": "getaway.stay" },
+        "state": { "const": "searched" },
+        "destination": { "type": "string", "minLength": 1 },
+        "airport": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "session": { "enum": ["pro", "anonymous"] },
+        "checkedAt": { "$ref": "#/$defs/utcStamp" },
+        "searchState": {
+          "enum": ["complete", "searched_empty", "night_clamped", "bot_wall", "logged_out", "date_in_past", "geocode_miss", "failed"]
+        },
+        "interval": { "$ref": "#/$defs/interval" },
+        "rooms": { "type": "array", "minItems": 0, "items": { "$ref": "#/$defs/room" } }
+      }
+    },
+    "deferred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "state", "reason"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "const": "getaway.stay" },
+        "state": { "const": "deferred" },
+        "reason": { "enum": ["no_checkout", "date_in_past", "invalid_interval", "not_walked"] },
+        "destination": { "type": "string", "minLength": 1 },
+        "airport": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkIn", "checkOut", "nights", "nightClamped"],
+      "properties": {
+        "checkIn": { "$ref": "#/$defs/date" },
+        "checkOut": { "$ref": "#/$defs/date" },
+        "nights": { "type": "integer", "minimum": 1 },
+        "nightClamped": { "type": "boolean" },
+        "requestedNights": { "type": "integer", "minimum": 6 }
+      }
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "name", "currency", "checkedAt", "stale", "offers"],
+      "properties": {
+        "program": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "checkedAt": { "$ref": "#/$defs/utcStamp" },
+        "stale": { "type": "boolean" },
+        "offers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/offer" } }
+      }
+    },
+    "offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["awardClass", "pointsPerNight", "cashPerNightCents", "centsPerPoint"],
+      "properties": {
+        "awardClass": { "enum": ["standard", "suite"] },
+        "pointsPerNight": { "type": ["integer", "null"], "minimum": 1 },
+        "cashPerNightCents": { "type": ["integer", "null"], "minimum": 0 },
+        "centsPerPoint": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      },
+      "anyOf": [
+        { "properties": { "pointsPerNight": { "type": "integer" } } },
+        { "properties": { "cashPerNightCents": { "type": "integer" } } }
+      ]
+    },
+    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "utcStamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" }
+  }
+}

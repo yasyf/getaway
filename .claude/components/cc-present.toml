@@ -1,7 +1,7 @@
 host_api = 1
 name = "getaway"
 version = "0.1.0"
-description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, and an option picker."
+description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, an option picker, and a lodging stay."
 entry = "dist/pack.js"
 reference = "reference/blocks.md"
 
@@ -26,3 +26,8 @@ description = "An interactive single-choice picker over competing award options 
 schema = "schema/option-picker.json"
 interaction = "schema/option-picker.interaction.json"
 examples = ["examples/option-picker.json"]
+
+[blocks.stay]
+description = "Renders one journey's lodging: per-hotel award and cash rooms.aero rooms with per-night points and cash in the property-local currency, standard and suite offers, per-room freshness with a stale warning, and a night-clamp disclosure. Renders the honest deferral reason when a journey's lodging was skipped. Reach for it to show where the human sleeps once a journey is paired."
+schema = "schema/stay.json"
+examples = ["examples/stay.json", "examples/stay-deferred.json"]

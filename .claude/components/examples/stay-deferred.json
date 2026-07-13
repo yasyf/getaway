@@ -1,0 +1,8 @@
+{
+  "id": "stay-jrn-sfo-lis-lead",
+  "type": "getaway.stay",
+  "state": "deferred",
+  "reason": "no_checkout",
+  "destination": "Lisbon",
+  "airport": "LIS"
+}

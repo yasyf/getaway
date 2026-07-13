@@ -1,0 +1,40 @@
+{
+  "id": "stay-jrn-sfo-lis-hyatt",
+  "type": "getaway.stay",
+  "state": "searched",
+  "destination": "Lisbon",
+  "airport": "LIS",
+  "session": "pro",
+  "checkedAt": "2026-07-13T14:20:00Z",
+  "searchState": "complete",
+  "interval": {
+    "checkIn": "2026-09-06",
+    "checkOut": "2026-09-11",
+    "nights": 5,
+    "nightClamped": false
+  },
+  "rooms": [
+    {
+      "program": "World of Hyatt",
+      "name": "Hyatt Regency Lisbon",
+      "currency": "EUR",
+      "checkedAt": "2026-07-13T14:20:00Z",
+      "stale": false,
+      "offers": [
+        { "awardClass": "standard", "pointsPerNight": 12000, "cashPerNightCents": 18500, "centsPerPoint": 1.54 },
+        { "awardClass": "suite", "pointsPerNight": 24000, "cashPerNightCents": 41000, "centsPerPoint": 1.71 }
+      ]
+    },
+    {
+      "program": "Hilton Honors",
+      "name": "Hilton Lisbon",
+      "currency": "EUR",
+      "checkedAt": "2026-06-28T09:00:00Z",
+      "stale": true,
+      "offers": [
+        { "awardClass": "standard", "pointsPerNight": 70000, "cashPerNightCents": null, "centsPerPoint": null },
+        { "awardClass": "suite", "pointsPerNight": null, "cashPerNightCents": 52000, "centsPerPoint": null }
+      ]
+    }
+  ]
+}
