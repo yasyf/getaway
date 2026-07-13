@@ -1,0 +1,22 @@
+{
+  "amex": {
+    "name": "American Express",
+    "domain": "americanexpress.com",
+    "dashboard_host": "global.americanexpress.com"
+  },
+  "chase": {
+    "name": "Chase",
+    "domain": "chase.com",
+    "dashboard_host": "secure.chase.com"
+  },
+  "citi": {
+    "name": "Citi",
+    "domain": "citi.com",
+    "dashboard_host": "online.citi.com"
+  },
+  "capitalone": {
+    "name": "Capital One",
+    "domain": "capitalone.com",
+    "dashboard_host": "myaccounts.capitalone.com"
+  }
+}

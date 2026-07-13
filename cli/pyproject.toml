@@ -1,0 +1,34 @@
+[project]
+name = "getaway"
+version = "2.0.0"
+description = "Plan award flights from Claude Code, backed by seats.aero availability across 26 mileage programs."
+requires-python = ">=3.12"
+dependencies = [
+    "click",
+    "httpx",
+]
+
+[project.scripts]
+getaway = "getaway.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.15,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "respx",
+    "ruff",
+    "ty",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

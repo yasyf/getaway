@@ -1,0 +1,198 @@
+{
+  "aeromexico": {
+    "earns_on_redemption": false,
+    "metric": "Qualifying Points",
+    "rate": null,
+    "note": "Aeromexico Rewards qualifying points are the base points earned per dollar spent on paid Aeromexico/SkyTeam fares (8x/$1 for Classic members); an award ticket has no fare spend and earns no base points. Confirmed against the earning model on aeromexico.com and thepointsguy.com/loyalty-programs/ultimate-guide-to-aeromexico-club-premier/ (accessed 2026-07-13); no primary-source sentence names award tickets explicitly.",
+    "confidence": "medium"
+  },
+  "aeroplan": {
+    "earns_on_redemption": false,
+    "metric": "Status Qualifying Credits (SQC)",
+    "rate": null,
+    "note": "SQC accrues per Canadian dollar spent on paid Air Canada fares (2-4 SQC/$1) or via credit-card/partner activity (1 SQC per 5 Aeroplan points); reward tickets booked with Aeroplan points are ineligible for SQC (aircanada.com/aeroplan/status + FlyerTalk 2026 SQC-overhaul thread, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "alaska": {
+    "earns_on_redemption": true,
+    "metric": "Elite-Qualifying Miles (EQMs)",
+    "rate": "1 EQM per mile flown (distance-based) on Alaska and partner award flights, effective January 1 2025",
+    "note": "Alaska's January 2025 Mileage Plan overhaul made award flights EQM-eligible for the first time, earning EQMs by distance flown regardless of fare class (news.alaskaair.com Mileage Plan 2025 announcement, accessed 2026-07-13). A genuine exception among these programs.",
+    "confidence": "high"
+  },
+  "american": {
+    "earns_on_redemption": false,
+    "metric": "Loyalty Points",
+    "rate": null,
+    "note": "Loyalty Points accrue 1:1 with base miles earned on paid tickets and card/partner spend; award tickets earn no AAdvantage miles, so they earn no Loyalty Points (thepointsguy.com/loyalty-programs/loyalty-points-exclusions/, consistent with aa.com's Loyalty Points pages, accessed 2026-07-13). Occasional promos (e.g. 500 LPs per flight, early 2026) can layer on top but are not baseline policy.",
+    "confidence": "high"
+  },
+  "azul": {
+    "earns_on_redemption": true,
+    "metric": "qualifying flown segments (tier path, distinct from R$-spend Qualifying Points)",
+    "rate": "A ticket redeemed with Azul Fidelidade points counts as one qualifying segment toward tier status (Topazio 6, Safira 10, Diamante 12 segments), effective April 1 2024; it earns 0 spend-based Qualifying Points",
+    "note": "Aeroflap's coverage of the April 2024 TudoAzul-to-Azul Fidelidade overhaul states tickets redeemed with points also count as a qualifying segment (aeroflap.com.br, accessed 2026-07-13). A genuine partial exception, sourced from a single aviation-trade outlet rather than voeazul.com.br directly.",
+    "confidence": "medium"
+  },
+  "british": {
+    "earns_on_redemption": false,
+    "metric": "Tier Points",
+    "rate": null,
+    "note": "The British Airways Club (Executive Club rebrand, April 2025) uses spend-based Tier Points (1 per GBP 1 eligible spend); britishairways.com's tier-points-on-flights page states you don't earn Tier Points on Reward Flights (via headforpoints.com summary, Feb 2026, accessed 2026-07-13). Beta seats.aero source, not in gather.md's 26-program table.",
+    "confidence": "high"
+  },
+  "connectmiles": {
+    "earns_on_redemption": false,
+    "metric": "PreferMember qualifying miles / qualifying segments",
+    "rate": null,
+    "note": "ConnectMiles states travel awards do not accrue mileage and do not count as qualifying activity for the PreferProgram (connectmiles.copaair.com award general rules / awardwallet.com ConnectMiles guide, accessed 2026-07-13). Qualifying miles/segments accrue only on paid Copa and Star Alliance flights by fare class.",
+    "confidence": "high"
+  },
+  "delta": {
+    "earns_on_redemption": true,
+    "metric": "Medallion Qualification Dollars (MQDs)",
+    "rate": "1 MQD per 100 SkyMiles redeemed toward the award ticket price (Main Cabin or above, booked through a direct Delta channel; excludes Basic Economy and government taxes/fees)",
+    "note": "Confirmed on delta.com's Medallion how-to-qualify page: MQDs on Delta Award Travel tickets are calculated as miles redeemed toward the award ticket price divided by 100 (delta.com/us/en/skymiles/medallion-program/how-to-qualify, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "emirates": {
+    "earns_on_redemption": false,
+    "metric": "Tier Miles",
+    "rate": null,
+    "note": "Emirates Skywards excludes Classic Reward tickets from Tier Miles (and Skywards Miles) accrual (emirates.com/skywards membership-tiers pages, cross-checked against point.me and NerdWallet guides, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "ethiopian": {
+    "earns_on_redemption": false,
+    "metric": "Status Miles / tier Qualifying Segments",
+    "rate": null,
+    "note": "ShebaMiles' FAQ states award tickets are not eligible to earn any type of miles or tier Qualifying Segments (shebamiles.ethiopianairlines.com FAQ and spend-miles pages, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "etihad": {
+    "earns_on_redemption": true,
+    "metric": "Tier Miles",
+    "rate": "GuestSeat/Saver award redemptions earn 0 Tier Miles; the higher-cost Any Seat Comfort and Deluxe redemption fares (introduced November 2025) earn Tier Miles at 25% and 50% of the normal flown rate",
+    "note": "Business Traveller's coverage of Etihad's November 2025 every-seat-bookable-with-miles overhaul reports Comfort fares earn 25% and Deluxe 50% Tier Miles, with Saver/GuestSeat at 0% (businesstraveller.com, accessed 2026-07-13); etihad.com's own earn-miles page could not be fetched to cross-check.",
+    "confidence": "medium"
+  },
+  "eurobonus": {
+    "earns_on_redemption": false,
+    "metric": "Level points",
+    "rate": null,
+    "note": "flysas.com states members earn neither redeemable Bonus points nor status-qualifying Level points on award trips, on SAS or partner award flights (flysas.com/en/eurobonus and /eurobonus/award-flights, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "finnair": {
+    "earns_on_redemption": false,
+    "metric": "tier points",
+    "rate": null,
+    "note": "Finnair Plus (Avios-based since 2024) states spending Avios on a reward flight doesn't affect tier-point balance or tier progress (finnair.com/finnair-plus/collect-and-use-avios, accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "flyingblue": {
+    "earns_on_redemption": false,
+    "metric": "Experience Points (XP)",
+    "rate": null,
+    "note": "Flying Blue excludes reward tickets from both Miles and XP accrual entirely (flyingblue.us/en/flights/reward-tickets, cross-checked against FlyerTalk consensus, accessed 2026-07-13). Miles+Cash bookings do earn XP normally, unlike pure reward tickets.",
+    "confidence": "high"
+  },
+  "frontier": {
+    "earns_on_redemption": false,
+    "metric": "Elite Status Points",
+    "rate": null,
+    "note": "Elite Status Points accrue only from cash/card spend (up to 20 pts/$1 on flyfrontier.com, 1 pt/$1 on the co-brand card) and partner purchases; no path exists to earn them via mile redemption, though no page states the exclusion verbatim (faq.flyfrontier.com/help/how-are-frontier-miles-and-points-earned, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "iberia": {
+    "earns_on_redemption": false,
+    "metric": "Elite Points (Puntos Elite)",
+    "rate": null,
+    "note": "Elite Points accrue per euro of net fare paid; a ticket redeemed entirely with Avios has no fare paid and earns zero Elite Points. iberia.com's earn-elite-points page blocked automated fetch (HTTP 403), so this rests on secondary aggregator coverage (guialowcost.es, suitespot.es, checked 2026-07-13). Beta seats.aero source, not in gather.md's 26-program table.",
+    "confidence": "medium"
+  },
+  "jetblue": {
+    "earns_on_redemption": false,
+    "metric": "Mosaic tiles",
+    "rate": null,
+    "note": "Tiles accrue only on qualifying cash/card spend (JetBlue flights, Vacations, and credit cards); a TrueBlue-points award booking has no qualifying spend and earns zero tiles (jetblue.com/help/tiles, checked 2026-07-13).",
+    "confidence": "high"
+  },
+  "lufthansa": {
+    "earns_on_redemption": false,
+    "metric": "status miles / HON Circle points",
+    "rate": null,
+    "note": "Miles & More status miles and HON Circle points accrue only on revenue and mixed Cash & Miles tickets; pure all-mile award tickets are excluded. No single official page gave a verbatim quote this pass; rests on consistent secondary coverage (nerdwallet.com, thepointsguy.com, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "qantas": {
+    "earns_on_redemption": true,
+    "metric": "Status Credits",
+    "rate": "Status Credits accrue on Classic/Classic Plus Flight Rewards with a QF flight number only for Points Club or Points Club Plus members, per the Points Club Status Credit Table; base members earn zero",
+    "note": "Conditional exception gated on paid-tier Points Club membership. Qantas is retiring Points Club for a card-based Status-Credits-on-rewards model targeted for late 2026/early 2027 - re-verify near launch (help.qantas.com article dated 2024-04-07 + travelandtourworld.com/flighthacks.com.au overhaul coverage, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "qatar": {
+    "earns_on_redemption": false,
+    "metric": "Qpoints",
+    "rate": null,
+    "note": "Qpoints accrue only on cash-fare tickets; Avios-funded reward bookings earn no Qpoints. Qatar's earn-qpoints page returned HTTP 403 to automated fetch, so this rests on community/expert consensus (flyertalk.com, thepointsguy.com, forbes.com, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "saudia": {
+    "earns_on_redemption": false,
+    "metric": "Tier Miles",
+    "rate": null,
+    "note": "AlFursan's miles-types page states Tier Miles and Reward Miles cannot be earned against Reward Tickets, but the page served a bot-detection interstitial and the statement is via search-engine-indexed text, not a direct fetch (saudia.com miles-types page, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "singapore": {
+    "earns_on_redemption": false,
+    "metric": "Elite miles / PPS Value",
+    "rate": null,
+    "note": "Singapore Airlines' FAQ states verbatim that you will not earn KrisFlyer miles, Elite miles, or PPS Value when redeeming an award ticket; the same applies to redemption upgrades (singaporeair.com KrisFlyer FAQ, checked 2026-07-13).",
+    "confidence": "high"
+  },
+  "smiles": {
+    "earns_on_redemption": true,
+    "metric": "qualifying miles/segments toward Prata/Ouro/Diamante category",
+    "rate": "GOL-operated flights ticketed with redeemed Smiles miles count fully as qualifying segments/miles toward category maintenance or upgrade, identical to a paid GOL ticket; only bonus miles are excluded from qualifying counts",
+    "note": "Genuine earn-on-redemption exception: Smiles' own requalification FAQ confirms GOL flights issued with Smiles miles count as qualifying segments for category status (smiles.com.br/requalificacao-categorias, checked 2026-07-13).",
+    "confidence": "high"
+  },
+  "spirit": {
+    "earns_on_redemption": false,
+    "metric": "Status Qualifying Points (SQP)",
+    "rate": null,
+    "note": "HISTORICAL ONLY: Spirit ceased all operations 2026-05-02 and is in court-supervised liquidation (CNN/NPR/CNBC, confirmed 2026-07-13); Free Spirit is effectively defunct. Historically SQPs accrued only on cash fare/ancillary spend ($1 fare = 1 SQP, $10 card spend = 1 SQP) with no path via points-redeemed awards (Free Spirit T&C, content.spirit.com).",
+    "confidence": "medium"
+  },
+  "turkish": {
+    "earns_on_redemption": false,
+    "metric": "Status Miles",
+    "rate": null,
+    "note": "Miles&Smiles T&C state miles cannot be earned on journeys made with award tickets; Status Miles accrue via the same flight-based mechanism, so the exclusion covers them, though no source names Status Miles explicitly in the award-ticket exclusion (turkishairlines.com Miles&Smiles T&C, checked 2026-07-13).",
+    "confidence": "medium"
+  },
+  "united": {
+    "earns_on_redemption": true,
+    "metric": "Premier Qualifying Points (PQP)",
+    "rate": "1 PQP per 100 MileagePlus miles redeemed for a United-marketed/operated flight or paid seat upgrade; PQP credits to the traveler, and only United legs earn PQP on mixed itineraries",
+    "note": "Established United policy since ~2022, unchanged for the 2026 program year (nerdwallet.com PQP guide, checked 2026-07-13; united.com pages returned fetch errors this pass but the rule is widely corroborated).",
+    "confidence": "high"
+  },
+  "velocity": {
+    "earns_on_redemption": false,
+    "metric": "Status Credits",
+    "rate": null,
+    "note": "Status Credits cannot be earned on Velocity Reward Seat bookings - only paid All Inclusive Fares earn Status Credits (1 per $12-$24 spent by fare, effective 2025-04-02) (velocityfrequentflyer.com/flying-status/use-points-for-flights, checked 2026-07-13).",
+    "confidence": "high"
+  },
+  "virginatlantic": {
+    "earns_on_redemption": true,
+    "metric": "Tier Points",
+    "rate": "25 Tier Points each way on a Virgin Atlantic-operated reward flight booked with Virgin Points (matching the Economy Delight cash rate); no redeemable points earned; Virgin Atlantic metal only, not partner redemptions",
+    "note": "Virgin Atlantic was the first airline to award tier points on pure-miles redemption flights (policy since 2020, still active per 2025 coverage) (virgin.com announcement + headforpoints.com 2025-02-24, checked 2026-07-13).",
+    "confidence": "high"
+  }
+}

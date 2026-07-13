@@ -1,0 +1,657 @@
+[
+  {
+    "airline": "BA",
+    "aircraft_match": "777-200ER",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "Heathrow frames are all Club Suite; Gatwick frames keep yin-yang Club World with no retrofit before 2029 — the base decides"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Retrofit complete"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Retrofit completed early 2026"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "Roughly 4–6 of 18 refitted mid-2026; the rest fly yin-yang until 2027"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Delivered with Club Suite only"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Delivered with Club Suite only"
+  },
+  {
+    "airline": "BA",
+    "aircraft_match": "A380",
+    "cabin": "business",
+    "verdict": "barely",
+    "note": "The whole fleet flies yin-yang until a retrofit running mid-2026 to end-2027; re-check from 2027"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "About 40 of 57 frames carry Qsuite; the rest split old 2-2-2 flats and ex-lease herringbones"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "777-200LR",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "The two non-Qsuite frames' seat is unconfirmed"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Both configs are true flats — the lottery is suite-vs-solid"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Fleet-wide"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "A380",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "No Qsuite on the type"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "No Qsuite on the type"
+  },
+  {
+    "airline": "QR",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Newer non-Qsuite door product"
+  },
+  {
+    "airline": "EK",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "Only ~20% refitted as of 2026; most flights still seat seven across with a middle seat"
+  },
+  {
+    "airline": "EK",
+    "aircraft_match": "777-200LR",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "Config thin in sources; treat as dated until confirmed"
+  },
+  {
+    "airline": "EK",
+    "aircraft_match": "A380",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "S Lounge retrofit begins August 2026 — both configs solid"
+  },
+  {
+    "airline": "EK",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Uniform new-build"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Version lottery, both true flats"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "A380",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "2006-era design, all-aisle but aging"
+  },
+  {
+    "airline": "EY",
+    "aircraft_match": "A321LR",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Every seat window and aisle at once"
+  },
+  {
+    "airline": "JL",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "barely",
+    "note": "Angled 2-2-2 — does not lie flat"
+  },
+  {
+    "airline": "JL",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Door-suite refits land 2028 and later"
+  },
+  {
+    "airline": "JL",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Type retiring through 2026"
+  },
+  {
+    "airline": "JL",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "NH",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Three frames keep the older staggered flat; The Room is a door suite"
+  },
+  {
+    "airline": "NH",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "NH",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The Room FX door suites arrive from August 2026"
+  },
+  {
+    "airline": "CX",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Both true flats; Aria adds doors, full fleet by end-2027"
+  },
+  {
+    "airline": "CX",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "CX",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "CX",
+    "aircraft_match": "A330",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Aria reaches the A330neos from 2026"
+  },
+  {
+    "airline": "LH",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "V-foot 2-2-2 with no aisle access from window seats; Allegris frames rate solid"
+  },
+  {
+    "airline": "LH",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Early Allegris frames had most new seats blocked from sale"
+  },
+  {
+    "airline": "LH",
+    "aircraft_match": "747-8",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Allegris business not before 2027"
+  },
+  {
+    "airline": "LH",
+    "aircraft_match": "A340",
+    "cabin": "business",
+    "verdict": "dated"
+  },
+  {
+    "airline": "LH",
+    "aircraft_match": "A330",
+    "cabin": "business",
+    "verdict": "dated"
+  },
+  {
+    "airline": "TK",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "barely",
+    "note": "Seven across with middle seats; no aisle access from windows"
+  },
+  {
+    "airline": "TK",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "TK",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Ex-Aeroflot frames carry door suites; Crystal suites arrive on new builds from end-2026"
+  },
+  {
+    "airline": "TK",
+    "aircraft_match": "A330",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "A documented subfleet is still angled, and swaps are common"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "767-300ER",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "767-400ER",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "777-200",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The no-Polaris 777-200 subfleet flies domestic only"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The no-Polaris 777-200 subfleet flies domestic only"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "New SFO-based 787-9s add door suites and Polaris Studio from March 2026"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "New SFO-based 787-9s add door suites and Polaris Studio from March 2026"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "New SFO-based 787-9s add door suites and Polaris Studio from March 2026"
+  },
+  {
+    "airline": "UA",
+    "aircraft_match": "757-200",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Transatlantic; no aisle access from the window; A321XLR replaces it from late 2026"
+  },
+  {
+    "airline": "AF",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The lottery is suite-vs-solid"
+  },
+  {
+    "airline": "AF",
+    "aircraft_match": "777-200ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Phasing out through 2026"
+  },
+  {
+    "airline": "AF",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "AF",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "AF",
+    "aircraft_match": "A330-200",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Flat but dense, sliding privacy panel only"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "777-200ER",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Standardized across the 777s by 2026"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "Standardized across the 777s by 2026"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "A330-200",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "No retrofit announced"
+  },
+  {
+    "airline": "KL",
+    "aircraft_match": "A330-300",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "No retrofit announced"
+  },
+  {
+    "airline": "VS",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "No door"
+  },
+  {
+    "airline": "VS",
+    "aircraft_match": "A330-900",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "VS",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Aging; refit not before 2028"
+  },
+  {
+    "airline": "VS",
+    "aircraft_match": "A330-300",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Nearly retired"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "A330-900",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "A330-200",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Door retrofit expected from 2027"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "A330-300",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Door retrofit expected from 2027"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "767-300ER",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Narrow and aging"
+  },
+  {
+    "airline": "DL",
+    "aircraft_match": "767-400ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Partial partitions, no door"
+  },
+  {
+    "airline": "AA",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Retrofit completes 2027; refitted frames rate suite"
+  },
+  {
+    "airline": "AA",
+    "aircraft_match": "777-200ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The 787-8's Concept D is the tightest of the three"
+  },
+  {
+    "airline": "AA",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The 787-8's Concept D is the tightest of the three"
+  },
+  {
+    "airline": "AA",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The 787-8's Concept D is the tightest of the three"
+  },
+  {
+    "airline": "AA",
+    "aircraft_match": "787-9P",
+    "cabin": "business",
+    "verdict": "suite",
+    "note": "High-premium frames delivered since 2024"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "787-8",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "The first ten delivered angled; later frames flat but still 2-2-2 — swaps are random"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "dated",
+    "note": "Notorious for last-minute swaps onto the worse config"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "777-200LR",
+    "cabin": "business",
+    "verdict": "barely",
+    "note": "Middle seats, no aisle access from windows"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "barely",
+    "note": "Middle seats, no aisle access from windows"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "The A350-1000 is the good one; type swaps happen"
+  },
+  {
+    "airline": "ET",
+    "aircraft_match": "A350-1000",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Swap risk to A350-900 configs"
+  },
+  {
+    "airline": "MS",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "suite"
+  },
+  {
+    "airline": "MS",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "barely"
+  },
+  {
+    "airline": "BR",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "BR",
+    "aircraft_match": "787-9",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "BR",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "solid"
+  },
+  {
+    "airline": "BR",
+    "aircraft_match": "A330-300",
+    "cabin": "business",
+    "verdict": "verify",
+    "note": "Regional Asia routes only"
+  },
+  {
+    "airline": "SQ",
+    "aircraft_match": "A380",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Uniform across the long-haul types"
+  },
+  {
+    "airline": "SQ",
+    "aircraft_match": "777-300ER",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Uniform across the long-haul types"
+  },
+  {
+    "airline": "SQ",
+    "aircraft_match": "A350-900",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Uniform across the long-haul types"
+  },
+  {
+    "airline": "SQ",
+    "aircraft_match": "787-10",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "Uniform across the long-haul types"
+  },
+  {
+    "airline": "AC",
+    "aircraft_match": "777",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The incoming 787-10s add Signature Plus door suites"
+  },
+  {
+    "airline": "AC",
+    "aircraft_match": "787",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The incoming 787-10s add Signature Plus door suites"
+  },
+  {
+    "airline": "AC",
+    "aircraft_match": "A330-300",
+    "cabin": "business",
+    "verdict": "solid",
+    "note": "The incoming 787-10s add Signature Plus door suites"
+  }
+]

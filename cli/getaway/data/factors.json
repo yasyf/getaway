@@ -1,0 +1,100 @@
+{
+  "factors": [
+    {
+      "id": "affordability",
+      "kind": "deterministic",
+      "evidence": "rank-time afford over balances + transfer paths",
+      "activation": "always",
+      "default_tier": "primary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "airline_preference",
+      "kind": "deterministic",
+      "evidence": "shortlist soft-avoid flag",
+      "activation": "always",
+      "default_tier": "secondary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "departure_days",
+      "kind": "deterministic",
+      "evidence": "shortlist ordering bias",
+      "activation": "prefs.departure_days non-empty",
+      "default_tier": "note",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "seat_quality",
+      "kind": "deterministic+judgment",
+      "evidence": "expand classification + evidence-verify collector",
+      "activation": "cabin in {business, first}",
+      "default_tier": "primary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "layovers",
+      "kind": "judgment",
+      "evidence": "assess over expand layover data + prefs.layovers",
+      "activation": "always",
+      "default_tier": "secondary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "transit_risk",
+      "kind": "judgment",
+      "evidence": "evidence-transit collector (visa/entry vs documents)",
+      "activation": "prefs.documents non-empty",
+      "default_tier": "secondary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "return_viability",
+      "kind": "judgment",
+      "evidence": "evidence-return collector (cache-only, zero quota)",
+      "activation": "round-trip ask",
+      "default_tier": "secondary",
+      "provenance": "battle-tested"
+    },
+    {
+      "id": "destination_context",
+      "kind": "judgment",
+      "evidence": "evidence-context collector (weather, visa, appeal, events in window)",
+      "activation": "trip.vibe non-empty or per-trip",
+      "default_tier": "secondary",
+      "provenance": "battle-tested (events net-new)"
+    },
+    {
+      "id": "cash_anomaly",
+      "kind": "judgment",
+      "evidence": "evidence-cash collector (current cash fare vs typical for route)",
+      "activation": "cabin in {business, first}",
+      "default_tier": "note",
+      "provenance": "net-new"
+    },
+    {
+      "id": "status_earning",
+      "kind": "deterministic",
+      "evidence": "rank-time lookup in status_earning.json",
+      "activation": "prefs.status_goals non-empty",
+      "default_tier": "secondary",
+      "provenance": "net-new"
+    },
+    {
+      "id": "points_purchase",
+      "kind": "deterministic",
+      "evidence": "rank-time afford --include-purchase over points_pricing.json",
+      "activation": "balance shortfall exists",
+      "default_tier": "note",
+      "provenance": "net-new"
+    },
+    {
+      "id": "trip_credits",
+      "kind": "deterministic",
+      "evidence": "rank-time match of finalists against prefs.credits",
+      "activation": "prefs.credits non-empty",
+      "default_tier": "note",
+      "provenance": "net-new"
+    }
+  ]
+}

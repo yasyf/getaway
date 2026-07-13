@@ -1,0 +1,254 @@
+{
+  "aeromexico": {
+    "sells_points": true,
+    "buy_rate_cents": 1.5,
+    "typical_sale_cents": null,
+    "sale_cadence": null,
+    "annual_cap": null,
+    "note": "Sells points at ~$15/1,000 (1.5c/pt) base rate per business.aeromexicorewards.com and TPG (accessed 2026-07-13). No bonus-sale deal coverage found for Aeromexico specifically, so sale cadence and annual cap are unconfirmed rather than confirmed-absent.",
+    "confidence": "medium"
+  },
+  "aeroplan": {
+    "sells_points": true,
+    "buy_rate_cents": 2.73,
+    "typical_sale_cents": 1.44,
+    "sale_cadence": "frequent - multiple bonus sales per year (Mar, May, Jun 2026 observed), up to 90% bonus",
+    "annual_cap": 1000000,
+    "note": "Base ~CAD 3.75c/pt (~USD 2.73c); a 90% bonus sale in May-Jun 2026 dropped the price to ~1.44c USD/pt. Annual purchase cap 1,000,000 points/calendar year (per-transaction cap doubled to 500k during the promo). Sources: onemileatatime.com, pointsmath.com, loyaltylobby.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "alaska": {
+    "sells_points": true,
+    "buy_rate_cents": 3.5,
+    "typical_sale_cents": 1.88,
+    "sale_cadence": "frequent, near-continuous mystery/flash bonus sales (100% bonus ran through 2026-07-05; fourth sale of 2026)",
+    "annual_cap": 150000,
+    "note": "Points.com sells at $35/1,000 plus 7.5% federal excise tax (~3.76c/mile all-in); 100% bonus sales through 2026 dropped the price to 1.88c/mile (1.79c during a 110% sale). 150,000-mile/year cap for non-elites, uncapped for MVP and above. Sources: loyaltylobby.com, awardwallet.com, upgradedpoints.com (re-verified 2026-07-13).",
+    "confidence": "high"
+  },
+  "american": {
+    "sells_points": true,
+    "buy_rate_cents": 3.76,
+    "typical_sale_cents": 2.23,
+    "sale_cadence": "frequent/near-continuous - a 40%-off promo was still running as of 2026-06-23 with an unclear end date",
+    "annual_cap": 300000,
+    "note": "List price is tiered 2.25c-3.76c/mile by volume even without a named sale; up-to-40% promos drop the price to 2.23c/mile. Annual purchase cap raised from 200,000 to 300,000 miles effective 2026-04-17. Sources: wallethub.com, loyaltylobby.com, thepointcalculator.com (re-verified 2026-07-13).",
+    "confidence": "high"
+  },
+  "azul": {
+    "sells_points": true,
+    "buy_rate_cents": 1.36,
+    "typical_sale_cents": 0.28,
+    "sale_cadence": "frequent, near-continuous bonus promotions (up to 300-340% bonus seen Jun 2026)",
+    "annual_cap": 100000,
+    "note": "BRL-denominated: standard R$0.07/pt, promos as low as R$14.32-15.75/1,000 pts (melhoresdestinos.com.br, passageirodeprimeira.com, 2026-06/07). USD figures converted at ~5.15 BRL/USD spot (2026-07-13), not airline-quoted. Purchase limit 1,000-100,000 pts per rolling 12 months, max 3 purchases/day, per secondary summaries; the official regulamento page would not resolve via fetch.",
+    "confidence": "low"
+  },
+  "british": {
+    "sells_points": true,
+    "buy_rate_cents": 3.25,
+    "typical_sale_cents": 1.64,
+    "sale_cadence": "frequent - 40% bonus flash sales recur several times a year (e.g. 2026-07-09 to 2026-07-16)",
+    "annual_cap": 200000,
+    "note": "Standard price ranges 2.3c-3.25c/Avios by volume; a 40% bonus flash sale (Jul 9-16 2026, live on avios.com's T&Cs) drops it to 1.64c/Avios. Annual cap 200,000 Avios, confirmed on avios.com/collect-avios/buy. Beta seats.aero source, not in gather.md's 26-program table. Sources: onemileatatime.com, thepointcalculator.com, avios.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "connectmiles": {
+    "sells_points": true,
+    "buy_rate_cents": 3,
+    "typical_sale_cents": 1.61,
+    "sale_cadence": "frequent (60% bonus through 2026-03-30, 80% bonus through 2026-06-10)",
+    "annual_cap": null,
+    "note": "Standard $30/1,000 (3c/mile); recent bonus sales as low as 1.61c/mile (80% bonus). Annual cap contradictory across sources (2,000,000/year vs ~500,000/year implied by a 5-transaction limit at 100,000/transaction) - left null pending a copaair.com T&C check. Sources: awardwallet.com, upgradedpoints.com, pointsmath.com (accessed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "delta": {
+    "sells_points": true,
+    "buy_rate_cents": 3.5,
+    "typical_sale_cents": 2.51,
+    "sale_cadence": "rare historically - the Nov 2025 50%-bonus sale was headlined as Delta's first-ever buy-miles bonus; no full 2026 bonus sale confirmed",
+    "annual_cap": 60000,
+    "note": "Standard ~3.5c/mile (3.76c incl. tax/fees); best documented bonus was 50% (2.51c/mile) in Nov 2025, described by press as unprecedented for Delta. Base annual cap 60,000 miles/year, with an additional 60,000 allowed during promo periods. Sources: themilesmarket.com, wallethub.com, upgradedpoints.com (accessed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "emirates": {
+    "sells_points": true,
+    "buy_rate_cents": 3,
+    "typical_sale_cents": 2,
+    "sale_cadence": "periodic (50% bonus ran through 2026-05-31)",
+    "annual_cap": 100000,
+    "note": "Standard $30/1,000 (3c/mile); a 50% bonus sale (2c/mile) ran through 2026-05-31. Annual cap 100,000 miles (Blue/Silver) or 200,000 (Gold/Platinum) - lower non-elite figure used. Sources: onemileatatime.com, upgradedpoints.com, wallethub.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "ethiopian": {
+    "sells_points": true,
+    "buy_rate_cents": 3,
+    "typical_sale_cents": 1.9,
+    "sale_cadence": "annual, early March - observed 2024 and 2025 (50-60% bonus); no 2026 instance found",
+    "annual_cap": 20000,
+    "note": "Base $25/1,000 miles plus a $5 service fee per transaction (~2.5-3.0c/mile depending on fee amortization) per shebamiles.ethiopianairlines.com. Historical March promos gave 50-60% bonus miles (~1.7-2.0c/mile effective, estimated from stated terms); no confirmed 2026 run, so the sale may have lapsed. 20,000-mile/12-month cap. Sources: shebamiles.ethiopianairlines.com, x.com/flyethiopian (accessed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "etihad": {
+    "sells_points": true,
+    "buy_rate_cents": 2,
+    "typical_sale_cents": 1.33,
+    "sale_cadence": "periodic - recurring 30-50% bonuses and monthly route discounts; best documented was 50% bonus Nov 22-Dec 2 2025",
+    "annual_cap": 200000,
+    "note": "Standard $20/1,000 (2c/mile) as of March 2026. The Nov 2025 50% bonus priced maxed-out purchases at 1.33c/mile; a widely reported 2.08c-at-35%-off figure does not reconcile with the 2c base and was discarded as stale/misreported. Cap 200,000 mi/yr (300,000 for Platinum) - lower figure used. Sources: onemileatatime.com, upgradedpoints.com, awardwallet.com (re-verified 2026-07-13).",
+    "confidence": "medium"
+  },
+  "eurobonus": {
+    "sells_points": true,
+    "buy_rate_cents": null,
+    "typical_sale_cents": null,
+    "sale_cadence": null,
+    "annual_cap": null,
+    "note": "SAS confirms a buy-points mechanism (flysas.com FAQ 'Can I buy points and how much do they cost?', points sold in 1,000-point blocks, plus the saseurobonusshop.com storefront), but the pricing pages block automated fetch and no current price surfaced via search (re-verified 2026-07-13); the only concrete figure found (~5.5 euro cents/pt) is from a 2010 FlyerTalk thread and too stale to report.",
+    "confidence": "low"
+  },
+  "finnair": {
+    "sells_points": true,
+    "buy_rate_cents": 2.17,
+    "typical_sale_cents": 1.3,
+    "sale_cadence": "frequent - 40-50% bonus sales in Mar, May, and Jun 2026",
+    "annual_cap": null,
+    "note": "Finnair Plus sells Avios (shared with British Airways). Standard 2.17c USD/Avios; repeated 40-50% bonus sales through 2026 dropped the price to 1.30c/Avios (cheaper still via JPY billing). No annual purchase cap figure surfaced. Sources: onemileatatime.com, loyaltylobby.com, milelion.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "flyingblue": {
+    "sells_points": true,
+    "buy_rate_cents": 3.05,
+    "typical_sale_cents": 1.69,
+    "sale_cadence": "frequent, near back-to-back promos through 2026 (Mar 31-Apr 16, May 12-31, Jul 8-28)",
+    "annual_cap": 100000,
+    "note": "Standard ~3.05c/mile; 80%-bonus promos ran nearly continuously through 2026, dropping the price to 1.69c/mile. Non-elite annual cap 100,000 miles/year (elites uncapped annually, 300,000/transaction during promos). Sources: onemileatatime.com, loyaltylobby.com, upgradedpoints.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "frontier": {
+    "sells_points": true,
+    "buy_rate_cents": 2.68,
+    "typical_sale_cents": 1.61,
+    "sale_cadence": "frequent, several bonus sales/year, no fixed schedule",
+    "annual_cap": null,
+    "note": "Standard ~2.68c/mile; a 100% bonus (1.61c) ran through 2026-07-10 and a 150% bonus (1.08c) through 2026-06-12. No annual cap found; sources conflict on per-transaction max (25k-50k miles). Sources: awardwallet.com, upgradedpoints.com (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "iberia": {
+    "sells_points": true,
+    "buy_rate_cents": 2,
+    "typical_sale_cents": 1.5,
+    "sale_cadence": "periodic (25% and 50% bonus offers found in 2026)",
+    "annual_cap": 200000,
+    "note": "Standard ~2.0c/Avios (cheaper in EUR than USD); bonus sales cut this to ~1.5c (50% bonus) or ~1.82c (25%). Min 2,000/max 200,000 Avios per transaction, cap 200,000/year pre-bonus; buyers must be members 3+ months with 1+ earned Avios. Beta seats.aero source, not in gather.md's 26-program table. Sources: awardwallet.com, onemileatatime.com (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "jetblue": {
+    "sells_points": true,
+    "buy_rate_cents": 3.23,
+    "typical_sale_cents": 1.43,
+    "sale_cadence": "frequent, multiple bonus sales/year",
+    "annual_cap": 200000,
+    "note": "Standard 3.23c/point; a 125% bonus (1.43c) runs through 2026-08-09. Annual cap 200,000 points bought+received combined. Sources: onemileatatime.com, thepointcalculator.com (viewed 2026-07-13).",
+    "confidence": "high"
+  },
+  "lufthansa": {
+    "sells_points": true,
+    "buy_rate_cents": 2,
+    "typical_sale_cents": 1.39,
+    "sale_cadence": "near-monthly tiered Bundle&Go bonus promos (Feb, Mar, May, Jul 2026 found)",
+    "annual_cap": 250000,
+    "note": "Sold as tiered bundles, not a flat per-mile rate: pre-bonus baseline ~1.39-2.44c/mile by bundle size; a 50% bonus through 2026-07-31 brings the large bundle to ~1.39c (a 60% bonus in May 2026 hit 1.29c). Cap 250,000 miles/year via Bundle&Go. Representative single figures - see cadence note. Sources: onemileatatime.com, headforpoints.com (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "qantas": {
+    "sells_points": true,
+    "buy_rate_cents": 1.9,
+    "typical_sale_cents": 1.26,
+    "sale_cadence": "every 2-4 months, capped at 4 purchases per rolling 12 months",
+    "annual_cap": null,
+    "note": "AUD-priced, converted at ~0.695 USD/AUD (2026-07-12 spot). Standard ~2.73 AUD-cents (~1.90 USc)/point; a 50% bonus through 2026-06-27 brought it to ~1.78-1.82 AUD-cents (~1.24-1.27 USc). No fixed annual point cap, but limited to 4 purchases/12mo and 150,000 pts/transaction. Sources: pointhacks.com.au, finder.com.au (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "qatar": {
+    "sells_points": true,
+    "buy_rate_cents": 2.3,
+    "typical_sale_cents": 1.53,
+    "sale_cadence": "several times/year, roughly quarterly (Dec 2025, Feb and May 2026 sales found)",
+    "annual_cap": 250000,
+    "note": "Privilege Club sells Avios. Standard 2.3-2.8c/Avios; 50% bonus sales (1.53c) ran Feb and May 2026, a 65% bonus in Dec 2025. No promo active as of 2026-07-13; next expected by 2026-08-31. Cap 250,000 Avios/year (buy+gift+transfer combined, pre-bonus). Sources: milelion.com, onemileatatime.com (viewed 2026-07-13).",
+    "confidence": "high"
+  },
+  "saudia": {
+    "sells_points": true,
+    "buy_rate_cents": null,
+    "typical_sale_cents": null,
+    "sale_cadence": null,
+    "annual_cap": 80000,
+    "note": "Saudia's official Purchase Miles page confirms the option exists (min 1,000, max 80,000 miles/year) but the page is bot-gated and no secondary source reports an actual price per mile or promo history - pricing unknown, not zero. Sources: saudia.com/loyalty/purchase-miles, 10xtravel.com (viewed 2026-07-13).",
+    "confidence": "low"
+  },
+  "singapore": {
+    "sells_points": false,
+    "buy_rate_cents": null,
+    "typical_sale_cents": null,
+    "sale_cadence": null,
+    "annual_cap": null,
+    "note": "KrisFlyer terms prohibit sale/barter of miles and there is no general buy-points storefront. One narrow exception: members holding 50%+ of an award's miles may top up the shortfall at booking for ~US$40/1,000 (~4c/mile) - a redemption top-up, not a general seller. Sources: cnbc.com, milelion.com (viewed 2026-07-13).",
+    "confidence": "high"
+  },
+  "smiles": {
+    "sells_points": true,
+    "buy_rate_cents": 1.37,
+    "typical_sale_cents": 0.35,
+    "sale_cadence": "very frequent, near-monthly bonus promos up to 200-365% (Mar, Apr, Jun 2026 observed)",
+    "annual_cap": 100000,
+    "note": "BRL-priced; standard R$0.07/mile (~1.37c at ~5.11 BRL/USD, 2026-07-10 spot). Extremely aggressive seller - 200-365% bonus promos run near-monthly, cutting effective cost to ~0.3-0.5c/mile at the top tier. Standard cap 100,000 miles/year; some 2026 promos raised it to 300,000. Sources: smiles.com.br/comprar-milhas, firstclassmilhas.com.br (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "spirit": {
+    "sells_points": false,
+    "buy_rate_cents": null,
+    "typical_sale_cents": null,
+    "sale_cadence": null,
+    "annual_cap": null,
+    "note": "Spirit ceased all operations permanently on 2026-05-02 after a failed federal bailout and is in liquidation (CNN/NPR/CNBC/OMAAT, re-verified 2026-07-13); Free Spirit points purchasing is moot. Historically sold at ~2.68c/mile standard with frequent 80-110% bonus sales (~1.28-1.49c).",
+    "confidence": "high"
+  },
+  "turkish": {
+    "sells_points": true,
+    "buy_rate_cents": 3,
+    "typical_sale_cents": 1.5,
+    "sale_cadence": "periodic, multiple times/year",
+    "annual_cap": 100000,
+    "note": "Standard $30/1,000 miles (3c); a 100% bonus (1.5c) ran 2025-12-08 to 2025-12-22 with no active replacement found as of 2026-07-13. Annual cap 100,000 miles standard, occasionally raised to 250,000 during campaigns. Sources: turkishairlines.com purchasing-miles page, loyaltylobby.com.",
+    "confidence": "medium"
+  },
+  "united": {
+    "sells_points": true,
+    "buy_rate_cents": 3.5,
+    "typical_sale_cents": 1.88,
+    "sale_cadence": "very frequent, near-monthly bonus/discount sales through 2026",
+    "annual_cap": 200000,
+    "note": "Standard ~3.5c/mile; 80-100% bonus sales ran near-continuously through 2026 (100% bonus in Jan and Jun, 50% discount Apr-May), reaching 1.88c. United tightened limits in 2026 to 50,000 miles per rolling 90 days and 200,000/calendar year. Sources: awardwallet.com, loyaltylobby.com (viewed 2026-07-13).",
+    "confidence": "high"
+  },
+  "velocity": {
+    "sells_points": true,
+    "buy_rate_cents": 2.5,
+    "typical_sale_cents": 1.5,
+    "sale_cadence": "periodic (Jun 2026 Points Booster promo found)",
+    "annual_cap": 250000,
+    "note": "AUD-priced, converted at ~0.695 USD/AUD. Standard 3.6 AUD-cents/point (~2.5 USc) at low volumes, cheaper at higher tiers pre-promo (2.34 AUD-cents at 50k pts); the Jun 2026 Points Booster added 20-40% volume discounts (~2.16 AUD-cents ~ 1.5 USc at 120k-250k pts). Cap 250,000 points/year. Sources: velocityfrequentflyer.com/the-basics/buying-points, pointhacks.com.au (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "virginatlantic": {
+    "sells_points": true,
+    "buy_rate_cents": 2.5,
+    "typical_sale_cents": 1.48,
+    "sale_cadence": "frequent, roughly quarterly-plus (sales found Feb-Mar and Jun-Jul 2026)",
+    "annual_cap": 200000,
+    "note": "Standard $25/1,000 points (2.5c) for USD accounts, cheaper in GBP (GBP 15/1,000, ~1.9 USc equivalent). A 70% bonus (1.48c USD / ~1.19c GBP-equivalent) ran through 2026-07-07, matching an earlier 70% sale through 2026-03-31. Cap 200,000 points/year pre-bonus. Sources: loyaltylobby.com, flywith.virginatlantic.com buy-points page (viewed 2026-07-13).",
+    "confidence": "high"
+  }
+}

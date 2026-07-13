@@ -14,3 +14,6 @@
 # Python bytecode (guard hooks are Python even in non-Python repos)
 __pycache__/
 *.py[cod]
+
+# Python project (cli/)
+cli/.venv/

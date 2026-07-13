@@ -1,0 +1,228 @@
+{
+  "aeroplan": {
+    "name": "Aeroplan",
+    "domains": [
+      "aircanada.ca"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "united": {
+    "name": "MileagePlus",
+    "domains": [
+      "united.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "american": {
+    "name": "AAdvantage",
+    "domains": [
+      "aa.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "delta": {
+    "name": "SkyMiles",
+    "domains": [
+      "delta.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "alaska": {
+    "name": "Mileage Plan",
+    "domains": [
+      "alaskaair.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "flyingblue": {
+    "name": "Flying Blue",
+    "domains": [
+      "airfrance.com",
+      "klm.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "lufthansa": {
+    "name": "Miles & More",
+    "domains": [
+      "miles-and-more.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "singapore": {
+    "name": "KrisFlyer",
+    "domains": [
+      "singaporeair.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "qatar": {
+    "name": "Privilege Club",
+    "domains": [
+      "qatarairways.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "turkish": {
+    "name": "Miles&Smiles",
+    "domains": [
+      "turkishairlines.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "emirates": {
+    "name": "Skywards",
+    "domains": [
+      "emirates.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "etihad": {
+    "name": "Etihad Guest",
+    "domains": [
+      "etihad.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "qantas": {
+    "name": "Qantas Frequent Flyer",
+    "domains": [
+      "qantas.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "velocity": {
+    "name": "Velocity Frequent Flyer",
+    "domains": [
+      "velocityfrequentflyer.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "virginatlantic": {
+    "name": "Flying Club",
+    "domains": [
+      "virginatlantic.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "jetblue": {
+    "name": "TrueBlue",
+    "domains": [
+      "jetblue.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "finnair": {
+    "name": "Finnair Plus",
+    "domains": [
+      "finnair.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "eurobonus": {
+    "name": "EuroBonus",
+    "domains": [
+      "flysas.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "aeromexico": {
+    "name": "Aeromexico Rewards",
+    "domains": [
+      "aeromexico.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "connectmiles": {
+    "name": "ConnectMiles",
+    "domains": [
+      "copaair.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "azul": {
+    "name": "TudoAzul",
+    "domains": [
+      "voeazul.com.br"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "smiles": {
+    "name": "Smiles",
+    "domains": [
+      "smiles.com.br"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "ethiopian": {
+    "name": "ShebaMiles",
+    "domains": [
+      "ethiopianairlines.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "saudia": {
+    "name": "Alfursan",
+    "domains": [
+      "saudia.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "frontier": {
+    "name": "Frontier Miles",
+    "domains": [
+      "flyfrontier.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "spirit": {
+    "name": "Free Spirit",
+    "domains": [
+      "spirit.com"
+    ],
+    "seats_aero": true,
+    "beta": false
+  },
+  "british": {
+    "name": "BA Executive Club",
+    "domains": [
+      "ba.com",
+      "britishairways.com"
+    ],
+    "seats_aero": true,
+    "beta": true
+  },
+  "iberia": {
+    "name": "Iberia Plus",
+    "domains": [
+      "iberia.com"
+    ],
+    "seats_aero": true,
+    "beta": true
+  }
+}
