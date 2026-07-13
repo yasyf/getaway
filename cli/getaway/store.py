@@ -241,12 +241,25 @@ class Store:
         sources: Iterable[str] | None = None,
         fresh_within: dt.timedelta | None = None,
         direct_only: bool = False,
+        trip_slug: str | None = None,
+        labels: Iterable[str] | None = None,
     ) -> list[Row]:
         clauses: list[str] = []
         params: list[Any] = []
         origins = list(origins) if origins is not None else None
         dests = list(dests) if dests is not None else None
         sources = list(sources) if sources is not None else None
+        labels = list(labels) if labels is not None else None
+        if trip_slug is not None:
+            placeholders = ",".join("?" for _ in labels) if labels else ""
+            label_clause = f"AND s.label IN ({placeholders})" if labels else ""
+            clauses.append(
+                "a.id IN (SELECT sr.availability_id FROM sweep_rows sr "
+                f"JOIN sweeps s ON s.id = sr.sweep_id WHERE s.trip_slug = ? {label_clause})"
+            )
+            params.append(trip_slug)
+            if labels:
+                params.extend(labels)
         if origins:
             clauses.append(f"a.origin IN ({','.join('?' for _ in origins)})")
             params.extend(origins)

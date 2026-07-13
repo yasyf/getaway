@@ -42,6 +42,7 @@ PLAN_KEYS = frozenset(
         "sources",
         "mileage_ceiling",
         "max_finalists",
+        "round_trip",
     }
 )
 HYBRID_KEYS = frozenset({"gateways", "onward_dests", "max_hybrids"})
@@ -120,6 +121,8 @@ def _factor_ids() -> set[str]:
 
 def _validate_plan(plan: object, merged: dict) -> None:
     plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
+    if "round_trip" in plan and not isinstance(plan["round_trip"], bool):
+        raise UsageError("plan.round_trip must be a boolean")
     if "hybrid" in plan:
         hybrid = require_keys(plan["hybrid"], set(), "plan.hybrid", optional=frozenset(HYBRID_KEYS))
         if "onward_dests" in hybrid:
@@ -325,6 +328,14 @@ def phase_check(
     return fresh, record
 
 
+def phase_fresh(slug: str, key: str, now: Callable[[], datetime] = utcnow) -> bool:
+    record = _load_checkpoints(slug).get(key)
+    if record is None:
+        return False
+    fresh, _ = phase_check(slug, key, record["artifacts"], now=now)
+    return fresh
+
+
 def phase_done(
     slug: str,
     key: str,
@@ -371,6 +382,131 @@ def artifact_list(slug: str) -> list[str]:
     if not directory.exists():
         return []
     return sorted(p.name for p in directory.iterdir() if p.is_file() and ARTIFACT_RE.match(p.name))
+
+
+def existing_artifacts(slug: str, names: list[str]) -> list[str]:
+    present = set(artifact_list(slug))
+    return [name for name in names if name in present]
+
+
+def _optional_artifact(slug: str, name: str) -> dict | None:
+    path = _artifact_path(slug, name)
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _sweep_labels(trip: dict, prefs_doc: dict) -> list[str]:
+    from getaway.sweeps import derive_specs
+
+    labels = [spec["label"] for spec in derive_specs(trip, prefs_doc)]
+    if trip["plan"].get("hybrid"):
+        labels.append("onward")
+    return labels
+
+
+def _judgment_profile(trip: dict, prefs_doc: dict, slug: str) -> dict:
+    from getaway import factors, registry
+
+    profile_doc = factors.derive_profile(trip, prefs_doc, slug=slug)
+    kinds = {f["id"]: f["kind"] for f in registry.factors()}
+    return {fid: spec for fid, spec in profile_doc.items() if "judgment" in kinds[fid]}
+
+
+def _phase_keys(trip: dict, prefs_doc: dict, active_judgment: list[str]) -> list[str]:
+    from getaway.constants import EVIDENCE_COLLECTORS
+
+    plan = trip["plan"]
+    keys = [f"sweep:{label}" for label in _sweep_labels(trip, prefs_doc)]
+    keys.append("shortlist")
+    if plan.get("hybrid"):
+        keys += ["shortlist:gateway", "onward", "bridge"]
+    for fid in active_judgment:
+        collector = EVIDENCE_COLLECTORS.get(fid)
+        if collector is not None:
+            keys.append(f"evidence.{collector}")
+    keys += ["expand", "assess", "rank", "finalize"]
+    return keys
+
+
+def _latest_quota(now: Callable[[], datetime]) -> dict | None:
+    from getaway.paths import cache_db
+    from getaway.store import NoData, connect
+
+    store = connect(cache_db(), now=now)
+    try:
+        return store.latest_quota()
+    except NoData:
+        return None
+
+
+def status(slug: str, now: Callable[[], datetime] = utcnow) -> dict:
+    trip = show(slug)
+    prefs_doc = prefs.show()
+    plan = trip["plan"]
+    judgment_profile = _judgment_profile(trip, prefs_doc, slug)
+    active_judgment = [fid for fid, spec in judgment_profile.items() if spec["active"]]
+    keys = _phase_keys(trip, prefs_doc, active_judgment)
+    phase_map = {key: "fresh" if phase_fresh(slug, key, now=now) else "stale" for key in keys}
+    return {
+        "slug": slug,
+        "sweep_labels": _sweep_labels(trip, prefs_doc),
+        "hybrid": plan.get("hybrid"),
+        "round_trip": plan.get("round_trip", False),
+        "active_factors": active_judgment,
+        "max_finalists": plan.get("max_finalists", 6),
+        "party": trip["party"],
+        "phase_map": phase_map,
+        "quota": _latest_quota(now),
+    }
+
+
+def profile(slug: str) -> dict:
+    from getaway import factors
+
+    trip = show(slug)
+    return factors.derive_profile(trip, prefs.show(), slug=slug)
+
+
+def resume(slug: str, now: Callable[[], datetime] = utcnow) -> str:
+    from getaway import learnings
+
+    trip = show(slug)
+    st = status(slug, now=now)
+    window = trip["window"]
+    lines = [f"Trip {slug} — status: {trip['status']}"]
+    if trip["ask"]:
+        lines.append(f"Ask: {trip['ask']}")
+    lines.append(
+        f"Window: {window['start']} to {window['end']} "
+        f"({window['trip_length_days']}d), cabin {trip['cabin']}, party {trip['party']}"
+    )
+    if trip["vibe"]:
+        lines.append(f"Vibe: {', '.join(trip['vibe'])}")
+    decisions = trip["decisions"][-5:]
+    if decisions:
+        lines.append("Recent decisions:")
+        lines += [f"  - {d['ts']}: {d['text']}" for d in decisions]
+    lines.append("Phase freshness:")
+    lines += [f"  {key}: {state}" for key, state in st["phase_map"].items()]
+    finalists = _optional_artifact(slug, "finalists.json")
+    if finalists is not None:
+        directs = finalists["directs"]
+        hybrids = finalists["hybrids"]
+        lines.append(f"Finalists: {len(directs)} direct, {len(hybrids)} hybrid")
+        for entry in directs[:5]:
+            c = entry["candidate"]
+            lines.append(f"  {c['origin']}-{c['dest']} {c['date']} {c['source']} {c['mileage']} mi")
+    expiring = prefs.credit_list("90d", now=now)
+    if expiring:
+        lines.append("Credits expiring within 90d:")
+        lines += [
+            f"  {c['issuer']} {c['amount']} {c['currency']} — expires {c['expires']}"
+            for c in expiring
+        ]
+    api = learnings.list_(scope="api", n=5)
+    if api:
+        lines.append("Recent api learnings:")
+        lines += [f"  - {entry['text']}" for entry in api]
+    return "\n".join(lines)
 
 
 trip_group = click.Group("trip", help="Per-trip planning memory and artifacts.")
@@ -453,6 +589,36 @@ def _phase_done_cmd(
     slug: str, key: str, artifacts: tuple[str, ...], quota_after: int | None
 ) -> None:
     emit(phase_done(slug, key, list(artifacts), quota_after))
+
+
+@trip_group.command("status")
+@click.argument("slug")
+@map_errors
+def _status_cmd(slug: str) -> None:
+    emit(status(slug))
+
+
+@trip_group.command("profile")
+@click.argument("slug")
+@map_errors
+def _profile_cmd(slug: str) -> None:
+    emit(profile(slug))
+
+
+@trip_group.command("resume")
+@click.argument("slug")
+@map_errors
+def _resume_cmd(slug: str) -> None:
+    click.echo(resume(slug))
+
+
+@trip_group.command("finalize")
+@click.argument("slug")
+@map_errors
+def _finalize_cmd(slug: str) -> None:
+    from getaway import factors
+
+    emit(factors.finalize(slug))
 
 
 @trip_group.group("artifact")

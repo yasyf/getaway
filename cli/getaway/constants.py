@@ -26,6 +26,15 @@ PHASE_TTL_HOURS = {
     "evidence.cash": 24,
 }
 
+# Judgment factors that get their own Evidence-phase collector, keyed factor_id -> collector.
+EVIDENCE_COLLECTORS = {
+    "seat_quality": "verify",
+    "cash_anomaly": "cash",
+    "destination_context": "context",
+    "transit_risk": "transit",
+    "return_viability": "return",
+}
+
 EXIT_OK = 0
 EXIT_NEGATIVE = 1
 EXIT_AUTH = 2

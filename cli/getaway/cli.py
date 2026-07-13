@@ -2,7 +2,18 @@ import sys
 
 import click
 
+from getaway.afford import afford_cmd
 from getaway.constants import EXIT_USAGE
+from getaway.factors import rank_cmd
+from getaway.learnings import learnings_group
+from getaway.prefs import prefs_group
+from getaway.quality import quality_group
+from getaway.registry import registry_group
+from getaway.seats import availability_cmd, expand_cmd, routes_cmd, search_cmd
+from getaway.shortlist import shortlist_group
+from getaway.store import cache_group, quota_cmd
+from getaway.sweeps import sweep_group
+from getaway.trips import trip_group
 
 
 @click.group()
@@ -10,29 +21,28 @@ def cli() -> None:
     """Plan award flights backed by seats.aero availability."""
 
 
-@cli.group()
-def prefs() -> None:
-    """Durable travel preferences."""
+for group in (
+    prefs_group,
+    trip_group,
+    registry_group,
+    cache_group,
+    learnings_group,
+    quality_group,
+    sweep_group,
+    shortlist_group,
+):
+    cli.add_command(group)
 
-
-@cli.group()
-def trip() -> None:
-    """Per-trip planning memory and artifacts."""
-
-
-@cli.group()
-def registry() -> None:
-    """Packaged reference registries."""
-
-
-@cli.group()
-def cache() -> None:
-    """Derived SQLite availability cache."""
-
-
-@cli.group()
-def learnings() -> None:
-    """Append-only planning learnings."""
+for command in (
+    quota_cmd,
+    afford_cmd,
+    search_cmd,
+    availability_cmd,
+    routes_cmd,
+    expand_cmd,
+    rank_cmd,
+):
+    cli.add_command(command)
 
 
 def main() -> None:
