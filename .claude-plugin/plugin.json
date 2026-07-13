@@ -1,6 +1,6 @@
 {
   "name": "getaway",
-  "description": "Plan award flights from Claude Code. getaway sweeps seats.aero across 26 mileage programs and judges every option like you would — seat quality, layovers, status earning, cash-fare anomalies.",
+  "description": "Plan award trips from Claude Code. getaway sweeps seats.aero across 28 mileage programs, composes whole journeys — flights out and home, hotel award nights via rooms.aero — and judges every option like you would: seat quality, layovers, status earning, cash-fare anomalies.",
   "version": "1.0.0",
   "author": {
     "name": "Yasyf Mohamedali",
@@ -9,6 +9,10 @@
   "homepage": "https://github.com/yasyf/getaway",
   "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": [
-    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.9.0" }
+    {
+      "name": "captain-hook",
+      "marketplace": "captain-hook",
+      "version": ">=9.9.0"
+    }
   ]
 }

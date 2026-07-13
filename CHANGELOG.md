@@ -6,8 +6,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The journey engine: one dispatch plans the whole trip — outbound,
+return, hybrids, and hotel stays — as ranked journeys instead of
+annotated outbounds. This is a clean cutover: a pre-v2
+`preferences.json` is rejected loudly and regenerates through
+onboarding, and in-flight v1 trips are discarded, not migrated.
+
+### Added
+- Journeys as the unit of search, ranking, and presentation:
+  `plan.trip_type` (`one_way`/`round_trip`) with in-run returns —
+  return endpoints resolve mid-run from the outbound shortlist plus
+  `onward_dests`, one comma-listed `/search` call sweeps every
+  candidate return — and pairing before ranking. `expand run <slug>`
+  composes concrete journeys (direct, hybrid, round-trip, open-jaw in
+  one representation, hybrid legs typed `award`/`cash`) with
+  CLI-computed fit facts, per-program cost vectors, and mandatory
+  `preference_misses`; `finalists.json` carries ranked journeys,
+  assess-picked notable preference stretches from beyond the cut,
+  unpaired outbound leads with cache ages, and honest per-endpoint
+  search states (`complete`/`searched_empty`/`partial`/`not_run`/
+  `failed`).
+- `plan.preferences` and `plan.constraints` branches: preferences are
+  `{value, priority: primary|secondary|note}` ordinal lanes that order
+  and annotate, never gate; constraints are hard, carry
+  `confirmed: true`, and the same key is rejected from both branches.
+  Durable prefs and the trip doc are structurally disjoint — each
+  write path rejects the other store's keys.
+- `trip compile`/`trip explain`: the plan-derived node graph — per-node
+  inputs, outputs, freshness TTLs, worst-case quota cost, `requires`,
+  ready-made command lines, and `{model, effort}` routing — replacing
+  the static phase map. Checkpoints key by node id.
+- Ranking in lanes: same-program journeys band on scalar bookable
+  mileage; mixed-program and cash-bearing journeys rank as per-program
+  vectors on a Pareto front with cash as its own axis; tier verdicts
+  consume lexicographically; seat sufficiency is judged on the
+  live-expanded `/trips/{id}` row (`sufficient`/`insufficient`/
+  `unknown` — only `insufficient` gates).
+- Hotels: rooms.aero award stays (`stays intervals`/`stays ingest`),
+  scoped by `plan.lodging`, searched after journey composition over
+  real timestamps — a cash hop's check-in comes from the priced
+  quote's observed arrival, unknown checkouts defer with a reason,
+  stays past rooms.aero's five-consecutive-night block cap clamp with
+  the clamp disclosed, and per-night points/cash in the property's
+  local currency are the source of truth. Zero seats.aero quota. The
+  board renders each journey's stays with the new `getaway.stay`
+  block (freshness, staleness, deferral reasons included).
+- One loyalty registry: `programs.json` rows carry
+  `kind: airline|hotel` plus capability fields (`seats_aero`,
+  `rooms_aero`, `sells_points`, `gather_auth`); Hyatt, Hilton,
+  Marriott, IHG, Choice, and Wyndham join with verified bank transfer
+  paths (Chase/Citi/Capital One at 1:1 to Wyndham, Amex 1:2 to
+  Hilton, Citi 1:1.5 to Choice, and the rest) and points-pricing
+  rows. One `balances.programs` map covers airline and hotel programs
+  alike; `registry hosts` emits the browser-read host list with auth
+  classes.
+- `travel_instruments`, a tagged union replacing the `credits` list:
+  `monetary_credit`, `hotel_night_certificate` (program, nights, and
+  a points/category/anytime cap), and `companion_fare` — written
+  through `prefs instrument-add` (one JSON object on stdin) with
+  CLI-generated ids and per-variant validation.
+- Quota reservation at the HTTP boundary: every `SeatsClient` call
+  reserves a unit under the store flock, releases the lock for the
+  network, and reconciles the response header monotonically — parallel
+  processes cannot jointly cross the floor. One knob, `--quota-floor N`
+  (default 100; `0` spends down deliberately); a floor stop exits 1
+  with the work recorded `not_run`, resumable later. Client-boundary
+  numeric normalization: `/search`'s string mileage arrives int
+  downstream.
+- `bridge <slug>`: cash-leg pricing codified over the `flights` (fli)
+  library with the hardening the papercuts documented — the OKA/NAH
+  Airport-enum alias fix on both encode and decode paths, "today"
+  computed in origin-local time, and zero results for a viable route
+  surfacing as `failed {retryability}`, never "no cash fare". Each
+  quote carries its real departure and arrival clocks.
+- `plan-trip.js` rebuilt as the reference graph walker: consumes
+  `compile`/`explain`, preflights `requires` (the seeded rooms.aero
+  session), splices emitted commands token-guarded, enforces emitted
+  routing on every agent (sonnet runners, haiku labels, opus or
+  gpt-5.6-terra research via `researchLane: "terra"`; fable is
+  rejected), trusts CLI checkpoint state over agent prose (unstamped
+  nodes retry once, then fail; null fan-out results take the same
+  path), and returns early with options on a shape surprise. Workflow
+  args accept object or JSON-string form. `references/workflows.md`
+  documents authoring ad-hoc walkers over the same contract.
+- Browser-read auth routing in onboarding/refresh: hosts route by the
+  registry's `gather_auth` class — cookie hosts keep the seeded
+  session fan-out; token/IndexedDB hosts (Delta, AA, United, JetBlue,
+  Aeroplan, Qatar, Singapore, Capital One) and Amex's device wall ride
+  a live Arc CDP attach — with structural-vs-transient failure
+  messaging and a per-host retry ledger so no host silently drops.
+
+### Changed
+- `skills/getaway/SKILL.md`, `references/planning.md`, and
+  `references/doctrine.md` rewritten for the journey engine: the parse
+  table lands preferences/constraints, `## Journeys` and `## Hotels`
+  replace the round-trip prose, presentation maps the four finalists
+  result classes, and the doctrine supersedes its drifted cc-notes
+  records ("Preferences never gate", "The journey is the unit",
+  "Ranking runs in lanes", "Lodging derives from observed clocks",
+  "Quota is reserved at the boundary", "The contract is the CLI; the
+  script is a template").
+- Sweeps request all cabins in one call with `include_filtered=true`;
+  soft dates pad by seven days while confirmed constraints sweep
+  exact; sweep artifacts are JSON envelopes with provenance and
+  search states (`sweep run <slug> outbound:<label>|return`);
+  shortlist takes `--leg outbound|return` and applies no seat,
+  mileage, or cabin gate — pseudo-code feasibility compares
+  server-expanded airports recorded on the leg.
+- The single-row expand command is now `expand detail <id> --cabin`;
+  `expand run <slug>` owns composition.
+- Onboarding and refresh gather hotel balances and tiers, mine
+  instruments (hotel free-night certificates included) instead of
+  credits, and route browser reads by auth class per
+  `skills/refresh/gather.md`.
+- The CLI project gains the `flights` dependency for `bridge`.
+
+### Removed
+- The `return_viability` factor, its evidence collector, and the
+  "returns are a second invocation" flow — returns are pipeline data
+  in the same dispatch.
+- `_verdict_score` and every composite-score residue; the hard
+  mileage-ceiling filters (mileage is a target preference; a real
+  budget is `constraints.mileage_limit`).
+- The 240-minute cash-cabin cutoff (`CASH_CUTOFF_MINUTES`) and its
+  doctrine ruling — cabin per cash leg is model judgment fed by
+  duration fit facts.
+- The separate `hybrids` finalists class — hybrids are journeys.
+- The static phase machinery: `PHASE_ARTIFACT_DEPS`,
+  `_HYBRID_ONLY_ARTIFACTS`, the v1 walker's fourteen phase schemas,
+  its `persist()`/quota-folding bookkeeping, and the prose-maintained
+  guard tables the compiled graph replaces.
+- `prefs credit-add`/`credit-list`/`credit-remove` (superseded by the
+  instruments commands) and the `credits` preference shape.
+
 ### Fixed
 - Region pseudo-code origins now expand against both the packaged airport floor and origins observed in search sweeps, preventing valid shortlist rows from being dropped.
+- Cached `/search` teaser seat counts no longer masquerade as bookable: sufficiency reads the live-expanded row, and stale cached empties render "unverified" instead of "no space".
 
 ## [1.0.0] - 2026-07-13
 

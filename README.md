@@ -1,6 +1,6 @@
 # ![getaway](docs/assets/readme-banner.webp)
 
-**Plan award flights from Claude Code.** getaway sweeps seats.aero across 26 mileage programs and judges every option like you would — seat quality, layovers, status earning, cash-fare anomalies.
+**Plan award trips from Claude Code.** getaway sweeps seats.aero across 28 mileage programs, composes whole journeys — flights out and home, hotel award nights via rooms.aero — and judges every option like you would: seat quality, layovers, status earning, cash-fare anomalies.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/yasyf/getaway/ci.yml?branch=main&label=ci)](https://github.com/yasyf/getaway/actions/workflows/ci.yml)
 [![License: PolyForm-Noncommercial-1.0.0](https://img.shields.io/badge/License-PolyForm--Noncommercial--1.0.0-blue.svg)](https://github.com/yasyf/getaway/blob/main/LICENSE)
