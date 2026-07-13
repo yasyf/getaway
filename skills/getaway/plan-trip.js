@@ -11,6 +11,7 @@ export const meta = {
     { title: 'Bridge', detail: 'Hybrid only: one fli agent per gateway-to-onward pair prices the cash hop — economy first, business when it runs past the cash-cabin cutoff — spending zero seats.aero quota.' },
     { title: 'Expand', detail: 'One agent per direct finalist and per hybrid award leg expands its trip ID into bookable truth at that leg\'s cabin: integer miles, exact taxes, segments, booking link — and on a business leg, classifies the longest business segment against the seat-quality table.' },
     { title: 'Verify', detail: 'Business only: one WebSearch agent per Verify-marked or table-absent business leg — direct finalist or hybrid award leg — pins the hard product against the live seat map before the re-rank truncates.' },
+    { title: 'Judge', detail: 'One agent reads every connection against the layover preferences — duration bands, city appeal from model knowledge, WebSearch only for a 6h+ layover whose exit-worthiness is uncertain — and verdicts each finalist; verdicts reorder only within a mileage band. Zero quota.' },
     { title: 'Transit', detail: 'Documents only: one WebSearch agent per unique same-ticket connection airport and per hybrid gateway (a separate-ticket self-transfer, so an entry check) flags transit-visa or entry risk against the traveler\'s documents — no quota spent.' },
     { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per direct and onward destination adds weather, visa, and appeal color — no quota spent.' },
   ],
@@ -59,7 +60,20 @@ const TRIP_SCHEMA = {
   properties: {
     id: { type: 'string' }, mileageCost: { type: 'number' }, totalTaxes: { type: 'number' },
     taxesCurrency: { type: 'string' }, remainingSeats: { type: 'number' }, flightNumbers: { type: 'string' },
-    segments: { type: 'array', items: { type: 'string' } }, bookingPrimary: { type: 'string' },
+    segments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['flightNumber', 'origin', 'dest', 'departsAt', 'arrivesAt', 'cabin', 'aircraft', 'durationMinutes', 'display'],
+        properties: {
+          flightNumber: { type: 'string' }, origin: { type: 'string' }, dest: { type: 'string' },
+          departsAt: { type: 'string' }, arrivesAt: { type: 'string' }, cabin: { type: 'string' },
+          aircraft: { type: 'string' }, durationMinutes: { type: 'number' }, display: { type: 'string' },
+        },
+      },
+    },
+    layovers: { type: 'array', items: { type: 'object', required: ['airport', 'minutes'], properties: { airport: { type: 'string' }, minutes: { type: 'number' } } } },
+    stops: { type: 'number' }, totalDurationMinutes: { type: 'number' }, bookingPrimary: { type: 'string' },
     updatedAt: { type: 'string' }, quota: { type: 'number' },
     longhaul: { type: ['string', 'null'] }, product: { enum: PRODUCT }, productNote: { type: 'string' },
   },
@@ -69,6 +83,16 @@ const VERIFY_SCHEMA = {
   required: ['id', 'product', 'productNote'],
   properties: {
     id: { type: 'string' }, product: { enum: PRODUCT.filter(p => p !== 'verify') }, productNote: { type: 'string' },
+  },
+};
+const JUDGE_SCHEMA = {
+  type: 'object',
+  required: ['verdicts'],
+  properties: {
+    verdicts: { type: 'array', items: { type: 'object',
+      required: ['id', 'verdict', 'layoverNote'],
+      properties: { id: { type: 'string' }, verdict: { enum: ['promote', 'neutral', 'demote'] },
+        layoverNote: { type: 'string' }, cityNote: { type: 'string' } } } },
   },
 };
 const ENRICH_SCHEMA = {
@@ -152,6 +176,16 @@ if (!Array.isArray(avoidAirlines) || !avoidAirlines.every(x => x && AIRLINE.test
 const avoidTransit = a.avoidTransit ?? [];
 if (!Array.isArray(avoidTransit) || !avoidTransit.every(d => typeof d === 'string' && IATA.test(d))) throw new Error('plan-trip: avoidTransit must be IATA codes');
 
+// Layover preferences steer the Judge re-rank; the IATA regex doubles as the injection guard
+// for the city lists interpolated into the judge prompt.
+const layovers = a.layovers ?? { style: 'minimize', floorMinutes: 75, preferCities: [], avoidCities: [] };
+if (typeof layovers !== 'object' || layovers === null || Array.isArray(layovers)) throw new Error('plan-trip: layovers must be an object');
+if (layovers.style !== 'minimize' && layovers.style !== 'explore') throw new Error('plan-trip: layovers.style must be minimize or explore');
+if (!Number.isInteger(layovers.floorMinutes) || layovers.floorMinutes <= 0) throw new Error('plan-trip: layovers.floorMinutes must be a positive integer');
+for (const [key, list] of [['preferCities', layovers.preferCities], ['avoidCities', layovers.avoidCities]]) {
+  if (!Array.isArray(list) || !list.every(c => typeof c === 'string' && IATA.test(c))) throw new Error(`plan-trip: layovers.${key} must be an array of IATA codes`);
+}
+
 const sources = a.sources ?? [];
 if (!Array.isArray(sources) || !sources.every(s => typeof s === 'string' && SOURCE.test(s))) throw new Error('plan-trip: sources must be program slugs');
 
@@ -162,7 +196,7 @@ let maxFinalists = a.maxFinalists ?? 6;
 if (!Number.isInteger(maxFinalists) || maxFinalists < 1) throw new Error('plan-trip: maxFinalists must be a positive integer');
 maxFinalists = Math.min(maxFinalists, 10);
 const isBiz = cabin === 'business';
-const expandTarget = isBiz ? Math.min(Math.ceil(maxFinalists * 1.5), 12) : maxFinalists;
+const expandTarget = Math.min(Math.ceil(maxFinalists * 2), 12);
 
 if (a.vibe !== undefined && (typeof a.vibe !== 'string' || a.vibe.length === 0)) throw new Error('plan-trip: vibe must be a non-empty string');
 const vibe = a.vibe;
@@ -503,12 +537,16 @@ const expandResults = await pipeline(expandItems, item => agent(
     : `Run exactly this one Bash pipeline, nothing else:\n\n`) +
   `"${script}" trip ${item.id} | jq '{ bookingPrimary: ([.booking_links[] | select(.primary) | .label][0]),\n` +
   `  best: ((.data | map(select(.Cabin == "${item.cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)) as $t\n` +
-  `    | if $t == null then null else $t | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
-  `        segments: [.AvailabilitySegments[] | "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"]${item.cabin === 'business' ? longhaulProjFor(item.cabin) : ''} } end) }'\n\n` +
+  `    | if $t == null then null else ($t.AvailabilitySegments | sort_by(.Order)) as $s | $t | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
+  `        segments: [$s[] | {flightNumber: .FlightNumber, origin: .OriginAirport, dest: .DestinationAirport, departsAt: .DepartsAt, arrivesAt: .ArrivesAt, cabin: .Cabin, aircraft: .AircraftName, durationMinutes: .Duration, display: "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"}],\n` +
+  `        layovers: [range(1; $s | length) as $i | {airport: $s[$i].OriginAirport, minutes: ((($s[$i].DepartsAt | fromdateiso8601) - ($s[$i - 1].ArrivesAt | fromdateiso8601)) / 60 | round)}],\n` +
+  `        stops: $t.Stops, totalDurationMinutes: $t.TotalDuration${item.cabin === 'business' ? longhaulProjFor(item.cabin) : ''} } end) }'\n\n` +
   `It also prints \`quota remaining: N\` to stderr. If \`best\` is null — no trip in that cabin seats ` +
   `${travelers} traveler(s) and clears the connection rules — return only id and quota. Otherwise return:\n` +
   `- id: "${item.id}"\n- mileageCost: best.MileageCost\n- totalTaxes: best.TotalTaxes\n- taxesCurrency: best.TaxesCurrency\n` +
-  `- remainingSeats: best.RemainingSeats\n- flightNumbers: best.FlightNumbers\n- segments: best.segments\n` +
+  `- remainingSeats: best.RemainingSeats\n- flightNumbers: best.FlightNumbers\n` +
+  `- segments: best.segments (the array of objects, each with flightNumber, origin, dest, departsAt, arrivesAt, cabin, aircraft, durationMinutes, and a display string)\n` +
+  `- layovers: best.layovers\n- stops: best.stops\n- totalDurationMinutes: best.totalDurationMinutes\n` +
   `- updatedAt: best.UpdatedAt\n- bookingPrimary: bookingPrimary\n- quota: the integer N from the stderr line, or -1 if absent.` +
   (item.cabin === 'business'
     ? `\n\nThen read the local file ${seatDoc} and classify \`best.longhaul\`, the longest business segment: take the operating carrier from its flight-number prefix plus its aircraft, match that carrier+aircraft against the table, and also return — all three required whenever best is non-null:\n` +
@@ -556,11 +594,75 @@ if (isBiz) {
   }
 }
 
-const candidates = rows.map((row, i) => ({ row, trip: trips[i] })).filter(c => c.trip && typeof c.trip.mileageCost === 'number');
+// A malformed expansion (mileageCost without segments/layovers — TRIP_SCHEMA requires only
+// id+quota) drops like a dead agent; the `died` log line below counts it.
+const seatable = t => t && typeof t.mileageCost === 'number' && Array.isArray(t.segments) && Array.isArray(t.layovers);
+const candidates = rows.map((row, i) => ({ row, trip: trips[i] })).filter(c => seatable(c.trip));
+
+// Judge: one comparative agent weighs each finalist's layovers against the traveler's preferences,
+// spending zero quota; its verdicts reorder only within a mileage band below. Skip when there is
+// nothing to compare — a single candidate or an all-nonstop shortlist.
+const judgeVerdicts = new Map();
+if (candidates.length > 1 && candidates.some(c => c.trip.layovers.length > 0)) {
+  phase('Judge');
+  const options = candidates.map(c => ({
+    id: c.trip.id, date: c.row.date, origin: c.row.origin, dest: c.row.dest,
+    mileage: c.trip.mileageCost, layovers: c.trip.layovers, segments: c.trip.segments.map(s => s.display),
+  }));
+  const judgment = await agent(
+    `Weigh each award option's layovers against one traveler's preferences — zero getaway.sh or API calls, spend no quota. Mileage dominates: a verdict only ever reorders options whose mileage sits within roughly 10-15% of each other, and the orchestrating script enforces that band, so judge each option's layovers purely on their own merits.\n\n` +
+    `Traveler: layover style ${layovers.style}; shortest comfortable connection ${layovers.floorMinutes} minutes; would welcome a long layover in ${layovers.preferCities.join(', ') || 'no listed cities'}; avoids lingering in ${layovers.avoidCities.join(', ') || 'no listed cities'}; trip vibe ${vibe ?? 'none stated'}; the traveler is ${traveler}.\n\n` +
+    `Duration bands — an option's worst layover drives its verdict, and a redeeming second layover never cancels a risky-short one:\n` +
+    `- Under ${layovers.floorMinutes} min is risky-short: demote and name the margin — a misconnected award means days of rebooking, not hours.\n` +
+    `- Floor to ~3h is comfortable: neutral, never demote in this band.\n` +
+    `- ~3-6h is dead time: mild demote, softened when the airport itself passes hours well (DOH, SIN, ICN).\n` +
+    `- Over ~6h forks on style and city: explore-style plus a city that rewards leaving the airport (or a prefer-listed one) is a promote ("7h40 in IST — enough for Sultanahmet and back"); minimize-style, an avoid-listed city, or no feasible exit is a demote harder than the 3-6h band. Overnight gaps count as dead-long unless explore-style and the city warrants it; name the cost either way (hotel or terminal night).\n` +
+    `- A nonstop is neutral — never demote an option for having no layover.\n\n` +
+    `Judge city appeal from your own knowledge first. Use WebSearch ONLY when a 6h+ layover's verdict turns on exit-worthiness facts you are unsure of — whether the traveler can realistically leave, luggage storage, time back through security. Formal transit-visa flags are handled by a later pipeline phase, so do not research visa rules beyond what the verdict needs.\n\n` +
+    `Options as JSON:\n${JSON.stringify(options)}\n\n` +
+    `Return verdicts: one entry per option id — verdict (promote, neutral, or demote), layoverNote (one sentence naming the airport, duration, and reason; "nonstop" for a direct), and cityNote only when WebSearch informed the call.`,
+    { label: 'judge', phase: 'Judge', schema: JUDGE_SCHEMA, model: 'opus' },
+  );
+  const byId = new Map(candidates.map(c => [c.trip.id, c]));
+  const ids = judgment ? judgment.verdicts.map(v => v.id) : [];
+  if (judgment && ids.length === candidates.length && ids.every(id => byId.has(id)) && new Set(ids).size === ids.length)
+    for (const v of judgment.verdicts) judgeVerdicts.set(v.id, { verdict: v.verdict, layoverNote: v.layoverNote, ...(v.cityNote ? { cityNote: v.cityNote } : {}) });
+  else log('judge agent died or returned bad coverage; keeping mileage order');
+}
+
 // Soft-avoided airlines sink harder than bad seats; only literal `barely` demotes.
 const demoted = c => (c.trip.product === 'barely' ? 1 : 0);
 candidates.sort((a, b) =>
-  (Number(a.row.soft) - Number(b.row.soft)) || (demoted(a) - demoted(b)) || (a.row.mileage - b.row.mileage));
+  (Number(a.row.soft) - Number(b.row.soft)) || (demoted(a) - demoted(b)) || (a.trip.mileageCost - b.trip.mileageCost));
+
+// Layover verdicts reorder only within a mileage band (~15%) inside each (soft, barely) tier;
+// bands never chain — each opens at its first member's mileage.
+const RANK = { promote: -1, neutral: 0, demote: 1 };
+if (judgeVerdicts.size > 0) {
+  const rankOf = c => RANK[judgeVerdicts.get(c.trip.id)?.verdict ?? 'neutral'];
+  const reordered = [];
+  let i = 0;
+  while (i < candidates.length) {
+    let tierEnd = i;
+    while (tierEnd < candidates.length
+      && candidates[tierEnd].row.soft === candidates[i].row.soft
+      && demoted(candidates[tierEnd]) === demoted(candidates[i])) tierEnd++;
+    let b = i;
+    while (b < tierEnd) {
+      const bandStart = candidates[b].trip.mileageCost;
+      let bandEnd = b;
+      // Integer math: bandStart * 1.15 wobbles below an exact-15% member.
+      while (bandEnd < tierEnd && candidates[bandEnd].trip.mileageCost * 100 <= bandStart * 115) bandEnd++;
+      const band = candidates.slice(b, bandEnd);
+      band.sort((x, y) => (rankOf(x) - rankOf(y)) || (x.trip.mileageCost - y.trip.mileageCost));
+      reordered.push(...band);
+      b = bandEnd;
+    }
+    i = tierEnd;
+  }
+  candidates.splice(0, candidates.length, ...reordered);
+}
+
 const kept = candidates.slice(0, maxFinalists);
 const died = rows.length - candidates.length;
 if (died > 0) log(`${died} finalist(s) dropped: expansion agent died or no live trip seats the party`);
@@ -572,8 +674,7 @@ const finalHybrids = composed
     const onwardTrip = h.onward.mode === 'award' ? tripByKey[`${h.onward.id}|${h.onward.cabin}`] : null;
     return { ...h, award: { ...h.award, trip: awardTrip }, onward: onwardTrip ? { ...h.onward, trip: onwardTrip } : { ...h.onward } };
   })
-  .filter(h => h.award.trip && typeof h.award.trip.mileageCost === 'number'
-    && (h.onward.mode !== 'award' || (h.onward.trip && typeof h.onward.trip.mileageCost === 'number')));
+  .filter(h => seatable(h.award.trip) && (h.onward.mode !== 'award' || seatable(h.onward.trip)));
 const hybridsDied = composed.length - finalHybrids.length;
 if (hybridsDied > 0) log(`${hybridsDied} hybrid(s) dropped: an award leg did not expand to a seatable trip`);
 
@@ -581,7 +682,7 @@ if (hybridsDied > 0) log(`${hybridsDied} hybrid(s) dropped: an award leg did not
 // gateways (a separate booking self-transfers landside, so an entry check); zero quota, documents-gated.
 const segmentConnections = (t) => {
   if (!Array.isArray(t.segments) || t.segments.length === 0) throw new Error('plan-trip: expanded trip lacks segments');
-  return [...new Set(t.segments.slice(1).map(s => s.split(' ')[1].split('-')[0]))];
+  return [...new Set(t.segments.slice(1).map(s => s.origin))];
 };
 const transitByPoint = {};
 let transitRan = false;
@@ -638,7 +739,8 @@ if (enrichRan) {
 const finalists = kept.map(({ row, trip }) => {
   const enrich = enrichByDest[row.dest];
   const transit = segmentConnections(trip).map(apt => transitByPoint[`${apt}|transit`]).filter(Boolean);
-  return { ...row, trip, ...(transit.length ? { transit } : {}), ...(enrich ? { enrich } : {}) };
+  const judge = judgeVerdicts.get(trip.id);
+  return { ...row, trip, ...(transit.length ? { transit } : {}), ...(judge ? { judge } : {}), ...(enrich ? { enrich } : {}) };
 });
 const hybrids = finalHybrids.map(h => {
   const enrich = enrichByDest[h.dest];

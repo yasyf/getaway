@@ -4,6 +4,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `layovers` preference — style (`minimize` or `explore`), a
+  connection-minutes comfort floor, and cities to prefer or avoid for a
+  long stop — validated by `prefs-set`, collected in a new onboarding
+  form section, and routed by the reflect hook.
+- Judge phase in `plan-trip.js`: one zero-quota agent verdicts each
+  finalist's layovers — promote, neutral, or demote, with a one-sentence
+  note — from duration bands plus layover-city appeal, reaching for
+  `WebSearch` only on a 6h+ layover whose exit-worthiness is uncertain;
+  verdicts reorder finalists only within a ~10–15% mileage band, so
+  mileage stays dominant.
+- Layover-derivation jq recipe and `/trips/{id}` timestamp semantics —
+  local wall-clock stamps with a spurious trailing `Z`, minute
+  durations — in `docs/seats-aero-api.md`, verified live 2026-07-13.
+
+### Changed
+- Trip expansion projects structured segments plus derived layover
+  minutes per finalist.
+- The expansion funnel widens to 2× finalists (cap 12) in every cabin,
+  so the layover re-rank has real candidates.
+- The presentation section block consolidates cost, seat, and layover
+  trade-offs.
+
 ## [0.8.0] - 2026-07-13
 
 ### Added

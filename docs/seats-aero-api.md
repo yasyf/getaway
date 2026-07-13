@@ -199,6 +199,22 @@ and an `AvailabilitySegments` array. Each segment has `FlightNumber`,
 `Cabin`, `FareClass`, `DepartsAt`, `ArrivesAt`, `Duration`, `Distance`, and
 `Order`.
 
+`DepartsAt` and `ArrivesAt` are each airport's local wall-clock time with a
+spurious trailing `Z`, not UTC instants (verified live 2026-07-13 against
+trip `39rPl0klqPT3Mf35bExkNAl2hIE`, SFO–ATH via CLT and JFK).
+`fromdateiso8601` parses them, but a segment's naive `ArrivesAt − DepartsAt`
+differs from `Duration` by exactly the UTC-offset gap between its endpoints.
+`Duration` and `TotalDuration` are minutes, and `TotalDuration` reconciles
+exactly as the sum of segment `Duration`s plus layovers: 993 minutes of
+segments plus 255- and 212-minute layovers gave that trip's 1460.
+
+`AvailabilitySegments` arrives sorted by `Order`; sort defensively anyway.
+The sorted order yields layovers: the layover at connection i is
+`segment[i].DepartsAt − segment[i−1].ArrivesAt`, and because both stamps
+share the connection airport's clock, the subtraction is exact even though
+the timestamps are not UTC. Subtracting stamps across different airports
+mixes clocks; for elapsed time, use `Duration` and `TotalDuration`.
+
 Cached data is crawler-populated, roughly every few hours per route, so
 snapshots range from minutes to a couple of days old. Always check
 `UpdatedAt`.

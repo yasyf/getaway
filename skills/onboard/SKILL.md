@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, travel documents (passports, residency, standing visas), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
+description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
 allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Agent
 ---
 
@@ -155,6 +155,11 @@ This document passes `cc-present push --dry-run`:
     { "id": "sec-avoid", "type": "section", "title": "Avoid" },
     { "id": "avoid-transit", "type": "input", "label": "Airports you never want to connect through — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "avoid-airlines", "type": "input", "label": "Airlines to avoid — name:soft or name:hard, comma-separated", "placeholder": "Ethiopian:soft", "multiline": true },
+    { "id": "sec-layovers", "type": "section", "title": "Layovers" },
+    { "id": "layovers-style", "type": "input", "label": "Layover style — minimize (shortest workable connections) or explore (happy to leave the airport on a long stop)", "placeholder": "minimize" },
+    { "id": "layovers-min-connection", "type": "input", "label": "Shortest acceptable connection, in minutes", "placeholder": "75" },
+    { "id": "layovers-prefer-cities", "type": "input", "label": "Cities worth a long layover — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
+    { "id": "layovers-avoid-cities", "type": "input", "label": "Cities never worth a long layover — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
     { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
     { "id": "balances-transferable", "type": "input", "label": "Transferable points (bank:points, comma-separated)", "placeholder": "amex:150000, chase:80000", "multiline": true },
@@ -202,6 +207,17 @@ the preference schema differ:
   preference stores `{code, name, strength}` objects matched on the IATA
   `code`. Resolve each airline name to its code yourself (Ethiopian is
   ET) and build the full object.
+- Layover answers map to the `layovers` object. The style accepts only
+  `minimize` or `explore` — reject anything else. The shortest
+  connection parses to a positive integer of minutes. The two city
+  lists split on commas, and a region pseudo-code expands to its member
+  airports at save — the `avoid_transit` doctrine, because layover
+  scoring matches literal segment IATA codes. A literal `none` clears a
+  list to `[]`. The merge warning applies here too: the patch replaces
+  the whole `layovers` object and `prefs-set` rejects a partial one, so
+  always send all four fields, merged with the current values — a blank
+  field keeps its current subvalue, and a partially answered section
+  still sends the full object.
 - Balance answers are `program:points` free text. Parse the points to
   integers; resolve program names to seats.aero source slugs (Alaska is
   `alaska`, Aeroplan is `aeroplan`) for `balances.programs` and bank

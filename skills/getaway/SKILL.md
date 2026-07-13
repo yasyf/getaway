@@ -44,7 +44,7 @@ defaults:
 ```
 
 ```json
-{"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"statuses":{},"balances":{"programs":{},"transferable":{}},"documents":{"passports":[],"residency":[],"visas":[]},"learnings":[]}
+{"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"layovers":{"style":"minimize","min_connection_minutes":75,"prefer_cities":[],"avoid_cities":[]},"statuses":{},"balances":{"programs":{},"transferable":{}},"documents":{"passports":[],"residency":[],"visas":[]},"learnings":[]}
 ```
 
 The keys that steer planning:
@@ -54,6 +54,7 @@ The keys that steer planning:
 | `origin_airports` | IATA or region pseudo-codes stored verbatim, `home_airport` likewise; the default origin set |
 | `avoid_transit` | Explicit IATA only — pseudo-codes expand at save; hard drop on connections, enforced against `/trips` segments |
 | `avoid_airlines` | `{code, name, strength}` objects; `soft` demotes, `hard` drops, and matching keys on `code` |
+| `layovers` | `style` is `minimize` or `explore`; `min_connection_minutes` is the comfort floor; `prefer_cities`/`avoid_cities` explicit IATA — pseudo-codes expand at save; absent, the shipped defaults hold; steers [Layover judgment](#layover-judgment) |
 | `statuses` | Program slug to elite tier, verbatim (`{"united": "1K"}`); ties on mileage cost break toward these carriers |
 | `balances.programs`, `balances.transferable` | Program slug to points; bank currencies |
 | `documents` | Free-text `passports`, `residency`, and `visas` arrays; personalize the Enrich visa notes and the transit/entry flags — all empty means US-passport phrasing and no Transit pass |
@@ -192,9 +193,10 @@ when the rung below cannot express the work:
 3. **The Workflow tool.** A planning ask spanning two or more
    destination buckets or programs runs the shipped `plan-trip.js` —
    the invocation lives in the [Planning workflow](#planning-workflow).
-   The script holds the six-phase pipeline — sweep, shortlist,
-   onward, bridge, expand, enrich — and its intermediate results; the
-   conversation holds only the finalists and hybrids.
+   The script holds the whole pipeline — sweep, shortlist, onward,
+   bridge, expand, verify, judge, transit, enrich — and its
+   intermediate results; the conversation holds only the finalists
+   and hybrids.
 4. **A team, for one shape.** A multi-city or multi-traveler plan that
    will span several presentation rounds earns a persistent team
    (`TeamCreate`): a sweeper teammate holds the sweep JSONL and
@@ -266,7 +268,7 @@ defaults to read. A `PostToolUse` hook (`hooks/onboard.py`, sibling to
    fly Ethiopian", "never connect through IST", a balance correction) goes
    to `prefs-set` right then instead.
 
-Steps 4–8 are the fan-out core. When the ask spans two or more
+Steps 4–9 are the fan-out core. When the ask spans two or more
 destination buckets or programs, run them as one shot — the shipped
 workflow, args assembled from `prefs` and the plan file:
 
@@ -282,6 +284,7 @@ Workflow({
               {name: "africa", dests: ["QAF"]}],
     avoidDestinations: ["ICN", "GMP"], avoidTransit: ["IST"],
     avoidAirlines: [{code: "ET", strength: "soft"}],
+    layovers: {style: "minimize", floorMinutes: 75, preferCities: [], avoidCities: []},
     documents: {passports: ["Canada"], residency: ["US green card"], visas: []},
     mileageCeiling: 90000, travelers: 2, maxFinalists: 6,
     vibe: "warm",
@@ -292,14 +295,16 @@ Workflow({
 })
 ```
 
-It sweeps, shortlists, prices onward legs, expands, and enriches in
-parallel agents and returns `finalists` plus `hybrids` ready for the
-board — surface its `log()` lines as they arrive, then pick up at
-step 9. On a business ask it expands
-roughly 1.5× `maxFinalists` candidates, classifies each against
-[seat-quality.md](seat-quality.md), resolves mixed fleets by
-`WebSearch`, and re-ranks before truncating — the buffer's cost is
-covered in [Quota discipline](#quota-discipline). `sources` cuts the shortlist to
+It sweeps, shortlists, prices onward legs, expands, judges, and
+enriches in parallel agents and returns `finalists` plus `hybrids`
+ready for the board — surface its `log()` lines as they arrive, then
+pick up at step 10. It expands a buffer in every cabin — 2×
+`maxFinalists` candidates, capped at 12; a business ask classifies
+each against [seat-quality.md](seat-quality.md) and resolves mixed
+fleets by `WebSearch`; connecting candidates draw a
+[layover verdict](#layover-judgment); the re-rank runs before
+truncating — the buffer's cost is covered in
+[Quota discipline](#quota-discipline). `sources` cuts the shortlist to
 the named programs — an offline filter after the sweep, not fewer API
 calls — and only when the user explicitly asks ("only search united");
 never derive it from balances. `programSweeps`
@@ -311,7 +316,16 @@ to skip enrichment. `documents` takes the preference of the same name:
 omitted or all-empty, visa notes keep the US-passport phrasing and the
 Transit pass is skipped; with documents on file, finalists and hybrids
 routed through a flagged point return a `transit` array of
-`{airport, risk, transitNote}` flags for the board. `hybrid` rides every region- or vibe-scale ask:
+`{airport, risk, transitNote}` flags for the board. `layovers` mirrors
+the preference key with its names camel-cased —
+`min_connection_minutes` becomes `floorMinutes`, `prefer_cities` and
+`avoid_cities` become `preferCities` and `avoidCities`; omit it and
+the shipped defaults judge. When more than one candidate survives
+expansion and any connects, finalists carry
+`judge: {verdict, layoverNote, cityNote?}` per
+[Layover judgment](#layover-judgment); hybrids never judge — a
+gateway stop is a chosen stopover — and a dead judge keeps mileage
+order and says so in the log. `hybrid` rides every region- or vibe-scale ask:
 `gateways` (required, non-empty, concrete IATA — never pseudo-codes)
 is the [gateway set](#gateway-sets); `onwardDests` (optional IATA)
 defaults to the direct shortlist's distinct destinations, top 4;
@@ -322,7 +336,7 @@ defaults to 3, capped at 4. An `onwardDests` airport on
 destination; gateways are waypoints and exempt. Omitting `hybrid`
 skips every hybrid phase — direct awards only. A single
 origin–destination ask, or a session without the Workflow tool, runs
-steps 4–8 by hand instead.
+steps 4–9 by hand instead.
 
 4. Sweep broad, one call per destination bucket, saved to the scratchpad.
    The window, cabin, and regions come from the plan file. A real sweep:
@@ -376,7 +390,15 @@ steps 4–8 by hand instead.
    classify each trip's longest business segment against
    [seat-quality.md](seat-quality.md) while expanding; `barely`
    products sink per [Seat quality](#seat-quality).
-7. Compose routings ([Routing strategies](#routing-strategies)). Price
+7. Judge layovers ([Layover judgment](#layover-judgment)): when more
+   than one finalist survives expansion and any connects, one subagent
+   reads every expanded finalist — mileage, `layovers`, segments —
+   against that section's rubric and returns per finalist a
+   `promote`/`neutral`/`demote` verdict plus its one-sentence note,
+   with `WebSearch` only for a 6h+ layover whose exit-worthiness is
+   unsure; zero quota. Verdicts reorder only within a mileage band
+   inside each (soft, `barely`) tier.
+8. Compose routings ([Routing strategies](#routing-strategies)). Price
    each shortlisted gateway's onward cash leg with `fli` at the cabin
    [the cash-cabin default](#the-cash-cabin-default) picks — legs price
    in parallel, one subagent per call, zero API quota
@@ -386,7 +408,7 @@ steps 4–8 by hand instead.
    beside the directs on total cost — miles plus taxes plus cash. A
    positioning gap — the award departs somewhere other than the user's
    home airport — prices the same way and joins the same total.
-8. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
+9. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
    seasonal weather, visa rules, and destination color. The API knows
    seats, not sunshine. One `WebSearch` subagent per shortlisted
    destination; enrichment spends zero API quota. Visa notes address
@@ -397,12 +419,12 @@ steps 4–8 by hand instead.
    runs the same way by hand: one `WebSearch` subagent per unique
    connection airport and per hybrid gateway, flagging the risky ones —
    a flag never drops a routing.
-9. Present the shortlist as a [cc-present board](#presenting-options) —
-   directs and hybrids together, each with its total-cost line, plus a
-   "Transit check" section when any option carries transit flags — and
-   iterate rounds until the user submits. Log each round's outcome in
-   the plan's `decisions`.
-10. Deliver the final plan: per leg, the program, integer miles and exact
+10. Present the shortlist as a [cc-present board](#presenting-options) —
+    directs and hybrids together, each with its total-cost line, plus a
+    "Transit check" section when any option carries transit flags — and
+    iterate rounds until the user submits. Log each round's outcome in
+    the plan's `decisions`.
+11. Deliver the final plan: per leg, the program, integer miles and exact
     taxes from `/trips/{id}` (never the search strings), remaining seats,
     the seat product and verdict on a business leg
     ([Seat quality](#seat-quality)), the booking link, the row's `UpdatedAt` — cached snapshots run hours
@@ -427,32 +449,60 @@ not inside each trip. A real expansion:
   jq '{booking: [.booking_links[] | {label, primary}],
        carriers,
        best: ((.data | map(select(.Cabin == "business")) | min_by(.MileageCost)) as $t
-              | if $t == null then null else $t
-              | {MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats,
-                 FlightNumbers,
-                 segments: [.AvailabilitySegments[]
-                   | "\(.FlightNumber) \(.OriginAirport)-\(.DestinationAirport) \(.Cabin) (\(.AircraftName))"]} end)}'
+              | if $t == null then null
+                else ($t.AvailabilitySegments | sort_by(.Order)) as $s | $t
+                | {MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats,
+                   FlightNumbers,
+                   segments: [$s[] | {flightNumber: .FlightNumber,
+                     origin: .OriginAirport, dest: .DestinationAirport,
+                     departsAt: .DepartsAt, arrivesAt: .ArrivesAt,
+                     cabin: .Cabin, aircraft: .AircraftName,
+                     durationMinutes: .Duration,
+                     display: "\(.FlightNumber) \(.OriginAirport)-\(.DestinationAirport) \(.Cabin) (\(.AircraftName))"}],
+                   layovers: [range(1; $s | length) as $i
+                     | {airport: $s[$i].OriginAirport,
+                        minutes: ((($s[$i].DepartsAt | fromdateiso8601)
+                                   - ($s[$i - 1].ArrivesAt | fromdateiso8601)) / 60 | round)}],
+                   stops: .Stops, totalDurationMinutes: .TotalDuration} end)}'
 ```
 
 ```json
 {
   "booking": [
-    { "label": "Book via Air France/KLM Flying Blue", "primary": true },
-    { "label": "Book via Delta SkyMiles", "primary": false },
-    { "label": "Book via Virgin Atlantic", "primary": false }
+    { "label": "Book via American AAdvantage", "primary": true },
+    { "label": "Book via Alaska Atmos Rewards", "primary": false },
+    { "label": "Book via British Airways Club", "primary": false },
+    { "label": "Book via Qantas Frequent Flyer", "primary": false },
+    { "label": "Book via Qatar Airways Privilege Club", "primary": false },
+    { "label": "Book via Finnair Plus (must login)", "primary": false }
   ],
-  "carriers": { "AF": "Air France", "DL": "Delta", "KL": "KLM", "VS": "Virgin Atlantic" },
+  "carriers": { "AA": "American Airlines", "AS": "Alaska Airlines", "BA": "British Airways" },
   "best": {
-    "MileageCost": 192500,
-    "TotalTaxes": 36550,
-    "TaxesCurrency": "USD",
-    "RemainingSeats": 1,
-    "FlightNumbers": "DL1862, AF23, AF1832",
+    "MileageCost": 77500,
+    "TotalTaxes": 560,
+    "TaxesCurrency": null,
+    "RemainingSeats": 0,
+    "FlightNumbers": "AA2116, AA1288, AA326",
     "segments": [
-      "DL1862 SFO-LAX business (Boeing 737-800)",
-      "AF23 LAX-CDG business (Boeing 777-300ER)",
-      "AF1832 CDG-ATH business (Airbus A319)"
-    ]
+      { "flightNumber": "AA2116", "origin": "SFO", "dest": "DFW",
+        "departsAt": "2026-09-06T05:30:00Z", "arrivesAt": "2026-09-06T11:10:00Z",
+        "cabin": "business", "aircraft": "Airbus A321", "durationMinutes": 220,
+        "display": "AA2116 SFO-DFW business (Airbus A321)" },
+      { "flightNumber": "AA1288", "origin": "DFW", "dest": "CLT",
+        "departsAt": "2026-09-06T13:19:00Z", "arrivesAt": "2026-09-06T16:59:00Z",
+        "cabin": "business", "aircraft": "Boeing 737-800", "durationMinutes": 160,
+        "display": "AA1288 DFW-CLT business (Boeing 737-800)" },
+      { "flightNumber": "AA326", "origin": "CLT", "dest": "ATH",
+        "departsAt": "2026-09-06T18:40:00Z", "arrivesAt": "2026-09-07T12:15:00Z",
+        "cabin": "business", "aircraft": "Boeing 777-200", "durationMinutes": 635,
+        "display": "AA326 CLT-ATH business (Boeing 777-200)" }
+    ],
+    "layovers": [
+      { "airport": "DFW", "minutes": 129 },
+      { "airport": "CLT", "minutes": 101 }
+    ],
+    "stops": 2,
+    "totalDurationMinutes": 1245
   }
 }
 ```
@@ -461,7 +511,12 @@ One `.data[]` array carries every cabin's trips for the row — filter on
 `.Cabin` before `min_by`, or an economy trip wins the sort. The same
 discipline runs per segment: the [seat-quality](#seat-quality) verdict
 rates the longest *business* segment, never the longest segment —
-connectors on a business award can ride economy.
+connectors on a business award can ride economy. The structured
+`segments[]` and derived `layovers` feed
+[Layover judgment](#layover-judgment) and the `getaway.itinerary`
+blocks, with `display` kept for prose; the timestamps are local wall
+clock wearing a fake `Z` — the [jq recipes](#jq-recipes) warning
+covers what that breaks.
 
 ## Affordability and top-ups
 
@@ -487,10 +542,12 @@ and date. And when the top-up cost plus taxes approaches the cash
 fare, say so — the same cash-versus-points check as
 [Routing strategies](#routing-strategies).
 
-Ranking stays mileage-first. When finalists land within roughly 10–15%
-of each other, prefer the one the user can already fund; the rest keep
-their rank and their annotation — covered, a transfer suggestion, or a
-buy estimate.
+Ranking stays mileage-first. Within a band — finalists landing within
+roughly 10–15% of each other — the [layover verdict](#layover-judgment)
+reorders first, then funding prefers the option the user can already
+cover, then the [seat product](#seat-quality) and `statuses` break what
+remains; every option keeps its annotation — covered, a transfer
+suggestion, or a buy estimate — wherever it settles.
 
 ## Seat quality
 
@@ -518,6 +575,66 @@ World and Club Suite. Resolve the specific flight with a `WebSearch`
 reviews) during enrichment; zero quota. Every business finalist gets a
 product note in presentation; a `barely` verdict reads as a warning,
 not a footnote.
+
+The [layover verdict](#layover-judgment) shuffles finalists only within
+a mileage band beneath this seat tier, so the two never fight.
+
+## Layover judgment
+
+Mileage still dominates. Layover quality reorders finalists only within
+a mileage band — options within roughly 10–15% of each other, the same
+band the [affordability bias](#affordability-and-top-ups) uses. Across
+bands, the cheaper award wins: no layover, however good, lifts an
+option past one costing a third fewer miles, and no layover, however
+bad, drops one off the shortlist — a demoted finalist sinks within its
+band and keeps its annotation. Unlike a [`barely` seat](#seat-quality),
+a layover verdict never crosses a band: the sort stays (soft, `barely`,
+mileage), with the verdict shuffling only inside a band.
+
+Read every connection against the `layovers` preferences and judge by
+duration band:
+
+- **Under the comfort floor** (`min_connection_minutes`, default 75):
+  risky-short. A misconnected award often means days of rebooking, not
+  hours. Demote, and name the margin ("55 min in FRA — one delay from
+  a lost award").
+- **Floor to ~3 hours**: comfortable. Neutral — never demote an option
+  for a connection in this band.
+- **~3–6 hours**: dead time. A mild demotion against an
+  otherwise-equal option, softened when the airport itself passes
+  hours well (DOH, SIN, ICN) — say so when it does.
+- **Over ~6 hours**: forks on style and city. With `style: "explore"`
+  and a city that rewards leaving the airport — or one in
+  `prefer_cities` — the layover is an asset: promote within the band
+  ("7h40 in IST — enough for Sultanahmet and back"). With
+  `style: "minimize"`, a city in `avoid_cities`, or no feasible exit,
+  it is dead weight: demote harder than the 3–6h band.
+- **Overnight gaps** (arrive evening, depart morning) count as
+  dead-long unless the style is explore and the city warrants it;
+  either way, name the cost — a hotel or a terminal night.
+
+An option's worst layover drives its verdict; a redeeming second stop
+never cancels a risky-short one. Nonstops are neutral. `avoid_transit`
+stays a hard veto enforced before judging — never resurface a dropped
+routing. `layovers.avoid_cities` is softer: a long layover there
+demotes, while a tight connection through it stays neutral.
+`prefer_cities` strengthens a promotion and never excuses a connection
+under the floor. A gateway stop in a [hybrid routing](#gateway-hybrids)
+is a chosen stopover, never a judged layover.
+
+City appeal comes from model knowledge first. Fire `WebSearch` only
+when a 6h+ layover's verdict turns on exit-worthiness you are unsure
+of — whether the traveler can realistically leave the airport and be
+back through security in time, luggage storage, the airport-to-city
+hop — and only for options still in contention. Formal transit-visa
+and entry flags belong to the Transit pass in the
+[planning workflow](#planning-workflow); judge against the traveler's
+`documents`, don't re-research them.
+
+The output per finalist is a verdict — `promote`, `neutral`, or
+`demote` — plus one sentence naming the airport, the duration, and the
+reason. This is judgment, not arithmetic: the bands anchor the call and
+the sentence defends it; no scores, no weights.
 
 ## Region pseudo-codes
 
@@ -565,12 +682,13 @@ midnight UTC.
   new question the scratchpad cannot answer.
 - Fan-out never adds calls: batch into comma lists first, then
   parallelize the calls that remain ([Orchestration](#orchestration)).
-- A business plan expands a buffer — roughly 1.5× `maxFinalists` trip
-  calls, 9 instead of 6 at the defaults — so the
-  [seat-quality](#seat-quality) re-rank sorts real products before
-  truncating. That is the acknowledged price of never ranking a
-  yin-yang seat over a true flat bed; the low-quota path drops the
-  buffer first.
+- Every plan expands a buffer — 2× `maxFinalists` trip calls, capped
+  at 12, so 12 instead of 6 at the defaults — letting the
+  [seat-quality](#seat-quality) re-rank and the
+  [layover verdicts](#layover-judgment) sort real products and real
+  connections before truncating. That is the acknowledged price of
+  never ranking a yin-yang seat over a true flat bed; the low-quota
+  path drops the buffer first.
 - The quota cache is last-writer-wins. After a parallel burst, trust
   the minimum the subagents reported, or run `quota` once the burst
   settles — never mid-burst.
@@ -626,6 +744,31 @@ manual-path form. `product` comes from classifying each trip against
 jq -s 'sort_by(.soft, .product == "barely", .mileage)' finalists.jsonl
 ```
 
+Derive layovers from an expanded trip — the workflow's exact jq,
+manual-path form, feeding [Layover judgment](#layover-judgment).
+Segments arrive sorted by `.Order`; a layover is the timestamp gap at
+each same-airport handoff. Against a real SFO–ATH trip
+(`39rPl0klqPT3Mf35bExkNAl2hIE`, connecting in CLT and JFK):
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" trip <availability-ID> |
+  jq -c '(.data[0].AvailabilitySegments | sort_by(.Order)) as $s
+    | [range(1; $s | length) as $i
+       | {airport: $s[$i].OriginAirport,
+          minutes: ((($s[$i].DepartsAt | fromdateiso8601)
+                     - ($s[$i - 1].ArrivesAt | fromdateiso8601)) / 60 | round)}]'
+```
+
+```json
+[{"airport":"CLT","minutes":255},{"airport":"JFK","minutes":212}]
+```
+
+> **Warning:** `DepartsAt` and `ArrivesAt` are each airport's local
+> wall clock wearing a spurious trailing `Z`. `fromdateiso8601` parses
+> them, and a same-airport diff is exact — the fake timezone cancels —
+> but a cross-airport diff is wrong. Elapsed time comes from `Duration`
+> and `TotalDuration`, already minutes.
+
 Project a scannable table for eyeballing a sweep:
 
 ```bash
@@ -652,16 +795,20 @@ plugin is; every field is documented in
 - One `getaway.option-picker` for the shortlist — one entry per finalist,
   hybrids included, `optionId` set to the award row's availability `ID`.
   A tap submits `{"optionId": …}`: that finalist is the pick.
-- A built-in `section` block ("Total cost", `md` body) beside the
+- A built-in `section` block ("Trade-offs", `md` body) beside the
   picker — one line per finalist: miles + taxes + cash onward (zero cash
   on a pure award), the affordability note — covered, a transfer
   suggestion, or a buy estimate
-  ([Affordability and top-ups](#affordability-and-top-ups)) — and a seat
+  ([Affordability and top-ups](#affordability-and-top-ups)) — a seat
   line on business finalists — the product and its
   [verdict](#seat-quality), a `barely` phrased as a warning ("old Club
-  World — barely business, ranked below every true flat bed"). Pack
-  schemas are closed; totals, cash components, affordability, and seat
-  verdicts ride the `md` body, never extra fields on a pack block.
+  World — barely business, ranked below every true flat bed") — and a
+  layover clause on connecting finalists: the
+  [judge verdict](#layover-judgment) with airport and duration, a
+  `demote` phrased as a warning ("4h15 in CLT — dead time"). Pack
+  schemas are closed; totals, cash components, affordability, seat
+  verdicts, and layover verdicts ride the `md` body, never extra fields
+  on a pack block.
 - A "Transit check" `section` block whenever any finalist or hybrid
   carries transit flags — one line per flagged option: the airport,
   transit versus entry, the risk, and what to verify ("MAD entry —
@@ -671,8 +818,11 @@ plugin is; every field is documented in
 - One `getaway.itinerary` per expanded finalist, fed only from
   `/trips/{id}`: integer miles, minor-unit taxes plus currency, remaining
   seats, the primary booking link, the row's `UpdatedAt`, and the segments
-  in `Order`. A hybrid's detail card is one `getaway.itinerary` per award
-  booking — two for a stitch — plus its cash-leg `getaway.flight`s.
+  in `Order` — built straight from the structured `segments[]` objects
+  (`departsAt`, `arrivesAt`, `durationMinutes`), with each segment's
+  `display` string kept for prose. A hybrid's detail card is one
+  `getaway.itinerary` per award booking — two for a stitch — plus its
+  cash-leg `getaway.flight`s.
 - A `getaway.flight` with `price` for each cash leg, positioning or
   gateway-onward — convert the `fli` price to minor units (`305.0` USD
   becomes `{"amount": 30500, "currency": "USD"}`).
