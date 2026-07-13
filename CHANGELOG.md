@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks on mid-retrofit fleets (verified 2026-07-12).
 
 ### Changed
+- The browser read rides agent-browser-with-cookies 0.12.0: each
+  gatherer seeds its own session with `abwc-seed --session <slug>` and
+  carries the override on every `ab` call, `ab close` included —
+  cookies plus web storage in one seed, replacing the raw
+  `agent-browser --session` + `cookiesync cookies` pull.
 - Points balances bias planning instead of gating it: per-program sweeps
   cover all programs ordered funded-first, `sources` narrows only on an
   explicit user ask and never derives from balances, and unfunded

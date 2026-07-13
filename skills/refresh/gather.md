@@ -62,8 +62,10 @@ count and kinds: `getaway: balances + status from 9 airline and bank
 sites`. Either way, one informed tap.
 
 Delegate the mechanics to the `agent-browser-with-cookies` skill
-(macOS-only). When that skill, `cookiesync`, or `agent-browser` is
-missing, skip this step with a one-line note.
+(macOS-only, 0.12.0+ — `abwc-seed` with the per-agent `--session`
+override). When that skill, `cookiesync`, or `agent-browser` is
+missing, or the installed skill predates 0.12.0 (its `abwc-seed`
+takes no `--session`), skip this step with a one-line note.
 
 Prime the grant once, at the main level, before any fan-out:
 
@@ -80,12 +82,17 @@ browser read.
 Then fan out one gatherer subagent per host, all spawned in a single
 message — one per program or bank: a program listing two hosts
 (flyingblue) uses the first, trying the second only when the first
-fails. Each gatherer pulls only its own host — `cookiesync cookies
-<host>`, a bank naming its dashboard host too: `cookiesync cookies
-chase.com secure.chase.com` — into its own named `agent-browser
---session <slug>` session; the per-session grant is shared, so the
-per-host pulls cost no extra taps, and priming replaces the delegated
-skill's own `auth` step — a gatherer never runs `cookiesync auth`. It verifies a logged-in state first — balance and tier usually
+fails. Each gatherer runs the delegated skill's launch step in its own
+named session: `abwc-seed --session <slug> <host>` — the slug is the
+program or bank slug, unique within the spawn — with the same
+`--session <slug>` on every `ab` call after it, `ab close` included
+(an unreleased cloud session lingers until its timeout). A bank names
+its dashboard host in the same seed: `abwc-seed --session chase
+chase.com secure.chase.com`. Priming replaces the delegated skill's
+own `auth` step — a gatherer never runs `cookiesync auth` — and the
+grant stays keyed on the shared requestor, so the per-host seeds cost
+no extra taps; the override names browser sessions only. Each gatherer
+verifies a logged-in state first — balance and tier usually
 sit in the account home's header or profile widget — then extracts
 `{slug, balance (integer), tier (string|null)}` with `get text` or
 `eval --stdin` JSON and returns that one record, or a skip note. Page

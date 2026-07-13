@@ -202,7 +202,7 @@ Invariants on every rung:
   forms, `AskUserQuestion`. (Touch ID lands on the user's screen
   whichever agent invokes cookiesync, so the balances gatherers may
   run as subagents; the priming `auth` itself stays at the main level,
-  gatherers running only post-prime `cookies` pulls.)
+  gatherers running only post-prime `abwc-seed` seeding.)
 - One writer for durable state: every `prefs-set` and `plan-set` runs
   at the main level. Subagents read `prefs` and the plan file and
   write only their own scratchpad files; nothing under `~/.getaway` is
