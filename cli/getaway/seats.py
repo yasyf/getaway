@@ -13,7 +13,7 @@ import click
 import httpx
 
 from getaway import paths
-from getaway.constants import CABIN_PREFIX, EXIT_AUTH
+from getaway.constants import CABIN_PREFIX, EXIT_AUTH, EXIT_NO_DATA
 from getaway.store import NoData, Store, connect, parse_duration
 
 BASE_URL = "https://seats.aero/partnerapi"
@@ -73,8 +73,15 @@ def _layovers(segments: Sequence[Row]) -> list[int]:
     return layovers
 
 
-def _normalize_trip(availability_id: str, payload: Row) -> Row:
-    trip = payload["data"][0]
+def _trip_in_cabin(trip: Row, cabin: str) -> bool:
+    return all(CABIN_PREFIX[seg["Cabin"]] == cabin for seg in trip["AvailabilitySegments"])
+
+
+def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
+    matching = [trip for trip in payload["data"] if _trip_in_cabin(trip, cabin)]
+    if not matching:
+        raise NoData(f"no {cabin} itinerary for {availability_id}")
+    trip = min(matching, key=lambda t: t["MileageCost"])
     segments = sorted(trip["AvailabilitySegments"], key=lambda seg: seg["Order"])
     return {
         "id": availability_id,
@@ -189,14 +196,19 @@ class SeatsClient:
     def routes(self, source: str) -> list[Row]:
         return self._get("/routes", {"source": source})
 
-    def trip_detail(self, availability_id: str) -> Row:
+    def trip_detail(self, availability_id: str, cabin: str) -> Row:
         payload = self._get(f"/trips/{availability_id}", {})
-        return _normalize_trip(availability_id, payload)
+        return _normalize_trip(availability_id, payload, cabin)
 
     def _get(self, path: str, params: Row) -> Any:
         response = self._client.get(f"{BASE_URL}{path}", params=params)
         self._record_quota(path, response)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as err:
+            if response.status_code in (401, 403):
+                raise AuthError("seats.aero rejected the API credential") from err
+            raise
         return response.json()
 
     def _paginate(self, path: str, params: Row, take: int, pages: int) -> list[Row]:
@@ -375,10 +387,17 @@ def routes_cmd(source: str, origin_region: str | None, dest_region: str | None) 
 
 @click.command("expand")
 @click.argument("availability_id")
+@click.option("--cabin", required=True)
 @click.option("--fresh-within", default="6h")
 @click.option("--refresh", is_flag=True)
 @_map_auth
-def expand_cmd(availability_id: str, fresh_within: str, refresh: bool) -> None:
+def expand_cmd(availability_id: str, cabin: str, fresh_within: str, refresh: bool) -> None:
+    """Emit the lowest-mileage bookable itinerary in --cabin for an availability id.
+
+    Selects among the /trips itineraries the cheapest one flown entirely in the
+    requested cabin (Y/W/J/F) and prints the normalized JSON. Exits EXIT_NO_DATA
+    (4) when the availability has no itinerary in that cabin.
+    """
     store = _open_store()
     if not refresh:
         cached = store.trip_detail_get(availability_id, fresh_within=parse_duration(fresh_within))
@@ -386,6 +405,10 @@ def expand_cmd(availability_id: str, fresh_within: str, refresh: bool) -> None:
             click.echo(json.dumps(cached))
             return
     client = SeatsClient(store)
-    normalized = client.trip_detail(availability_id)
+    try:
+        normalized = client.trip_detail(availability_id, cabin)
+    except NoData as err:
+        click.echo(str(err), err=True)
+        raise SystemExit(EXIT_NO_DATA) from err
     store.trip_detail_put(availability_id, normalized)
     click.echo(json.dumps(normalized))

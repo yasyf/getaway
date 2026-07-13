@@ -29,10 +29,6 @@ def _airlines(row: Row) -> list[str]:
     return [a for a in raw.split(", ") if a]
 
 
-def _sweep_artifact(label: str) -> str:
-    return f"sweep-{label}.jsonl"
-
-
 def _direct_labels(trip: dict, prefs_doc: dict) -> list[str]:
     from getaway.sweeps import derive_specs
 
@@ -64,6 +60,8 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
     cabin_letter = CABIN_PREFIX[trip["cabin"]]
     party = trip["party"]
     labels = ["gateways"] if gateway else _direct_labels(trip, prefs_doc)
+    key = "shortlist:gateway" if gateway else "shortlist"
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, key)
 
     store = connect(cache_db(), now=now)
     rows = (
@@ -73,6 +71,7 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
     )
     considered = len(rows)
 
+    origins = set(plan["origins"])
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
     soft = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "soft"}
     ceiling = plan.get("mileage_ceiling")
@@ -87,6 +86,8 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
     candidates: list[Row] = []
     for row in rows:
         if not row["available"]:
+            continue
+        if row["origin"] not in origins:  # feasibility: must depart a planned origin
             continue
         seats = row["remaining_seats"]
         if seats and seats < party:  # seats == 0 is absent data and passes
@@ -122,37 +123,45 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
     kept = grouped[: _buffer(plan)]
 
     name = "shortlist-gateway.json" if gateway else "shortlist.json"
-    key = "shortlist:gateway" if gateway else "shortlist"
     doc = {"candidates": kept, "considered": considered}
     trips.artifact_write(slug, name, json.dumps(doc, separators=(",", ":")))
-    deps = trips.existing_artifacts(slug, [_sweep_artifact(label) for label in labels])
-    trips.phase_done(slug, key, deps, now=now)
+    trips.phase_done(slug, key, inputs_fp=inputs_fp, now=now)
     return doc
 
 
 def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     trip = trips.show(slug)
+    prefs_doc = prefs.show()
     plan = trip["plan"]
     hybrid = plan["hybrid"]
     party = trip["party"]
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "onward")
     gateway_doc = json.loads(trips.artifact_read(slug, "shortlist-gateway.json"))
-    gateways = sorted({c["dest"] for c in gateway_doc["candidates"]})
+    gateway_dates: dict[str, set[str]] = {}
+    for cand in gateway_doc["candidates"]:
+        gateway_dates.setdefault(cand["dest"], set()).add(cand["date"])
     onward_dests = hybrid["onward_dests"]
     letter_to_cabin = {letter: name for name, letter in CABIN_PREFIX.items()}
+    hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
 
     store = connect(cache_db(), now=now)
     rows = store.query_availability(trip_slug=slug, labels=["onward"])
-    minima: dict[tuple[str, str, str], Row] = {}
+    minima: dict[tuple[str, str, str, str], Row] = {}
     for row in rows:
         if not row["available"]:
             continue
-        if row["origin"] not in gateways or row["dest"] not in onward_dests:
+        if row["origin"] not in gateway_dates or row["dest"] not in onward_dests:
             continue
+        if row["date"] < min(gateway_dates[row["origin"]]):
+            continue  # departs before the earliest feasible gateway arrival
         seats = row["remaining_seats"]
         if seats and seats < party:
             continue
+        airlines = _airlines(row)
+        if airlines and all(a in hard for a in airlines):
+            continue
         cabin = letter_to_cabin[row["cabin"]]
-        key = (row["origin"], row["dest"], cabin)
+        key = (row["origin"], row["dest"], cabin, row["date"])
         current = minima.get(key)
         if current is None or row["mileage_cost"] < current["mileage"]:
             minima[key] = {
@@ -168,16 +177,16 @@ def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
                 "direct": row["direct"],
             }
 
+    # One bridge pair per distinct feasible onward date; compose joins minima and cash bridge on
+    # this shared (gateway, onward_dest, date) key.
+    pair_dates = sorted({(m["gateway"], m["onward_dest"], m["date"]) for m in minima.values()})
     bridge_pairs = [
-        {"gateway": g, "onward_dest": d, "cash_cutoff_minutes": CASH_CUTOFF_MINUTES}
-        for g in gateways
-        for d in onward_dests
-        if d != g
+        {"gateway": g, "onward_dest": d, "date": date, "cash_cutoff_minutes": CASH_CUTOFF_MINUTES}
+        for g, d, date in pair_dates
     ]
     doc = {"minima": list(minima.values()), "bridge_pairs": bridge_pairs}
     trips.artifact_write(slug, "onward.json", json.dumps(doc, separators=(",", ":")))
-    deps = trips.existing_artifacts(slug, ["sweep-onward.jsonl", "shortlist-gateway.json"])
-    trips.phase_done(slug, "onward", deps, now=now)
+    trips.phase_done(slug, "onward", inputs_fp=inputs_fp, now=now)
     return doc
 
 

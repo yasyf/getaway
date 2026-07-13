@@ -115,9 +115,13 @@ def write(slug: str, name: str, obj: object) -> None:
     trips.artifact_write(slug, name, json.dumps(obj))
 
 
+def write_rank(slug: str, entries: list[dict]) -> None:
+    write(slug, "rank.json", {"ranked": entries, "dropped": []})
+
+
 def test_hybrid_absent_output_is_directs_only(getaway_home: Path) -> None:
     slug = _new(getaway_home, DIRECT_PLAN)
-    write(slug, "rank.json", [rank_entry("A", 80000), rank_entry("B", 90000)])
+    write_rank(slug, [rank_entry("A", 80000), rank_entry("B", 90000)])
     doc = factors.finalize(slug, now=clock())
     assert doc["hybrids"] == []
     assert [d["candidate"]["id"] for d in doc["directs"]] == ["A", "B"]
@@ -132,15 +136,19 @@ def test_finalize_attaches_trip_detail_from_cache(getaway_home: Path) -> None:
     slug = _new(getaway_home, DIRECT_PLAN)
     detail = {"id": "A", "mileage": 80000, "booking_links": [{"label": "book", "primary": True}]}
     connect(paths.cache_db(), now=clock()).trip_detail_put("A", detail)
-    write(slug, "rank.json", [rank_entry("A", 80000)])
+    write_rank(slug, [rank_entry("A", 80000)])
     doc = factors.finalize(slug, now=clock())
     assert doc["directs"][0]["detail"] == detail
+
+
+def bridge_pair(gateway: str, dest: str, date: str = "2026-09-08") -> dict:
+    return {"gateway": gateway, "onward_dest": dest, "date": date, "cash_cutoff_minutes": 240}
 
 
 @pytest.fixture
 def hybrid(getaway_home: Path) -> str:
     slug = _new(getaway_home, HYBRID_PLAN)
-    write(slug, "rank.json", [rank_entry("D1", 45000)])
+    write_rank(slug, [rank_entry("D1", 45000)])
     write(slug, "shortlist-gateway.json", {"candidates": [gw_cand("GW-NRT", "NRT", 80000),
                                                           gw_cand("GW-ICN", "ICN", 90000)],
                                            "considered": 2})
@@ -153,10 +161,10 @@ def hybrid(getaway_home: Path) -> str:
                 minima("ICN", "KIX", "economy", 25000),
             ],
             "bridge_pairs": [
-                {"gateway": "NRT", "onward_dest": "OKA", "cash_cutoff_minutes": 240},
-                {"gateway": "NRT", "onward_dest": "KIX", "cash_cutoff_minutes": 240},
-                {"gateway": "ICN", "onward_dest": "OKA", "cash_cutoff_minutes": 240},
-                {"gateway": "ICN", "onward_dest": "KIX", "cash_cutoff_minutes": 240},
+                bridge_pair("NRT", "OKA"),
+                bridge_pair("NRT", "KIX"),
+                bridge_pair("ICN", "OKA"),
+                bridge_pair("ICN", "KIX"),
             ],
         },
     )
@@ -184,6 +192,22 @@ def test_gateway_cash_and_two_award_compose_and_rank(hybrid: str) -> None:
     ta = doc["hybrids"][2]
     assert ta["onward"]["mode"] == "award"
     assert ta["onward"]["mileage"] == 30000
+
+
+def test_two_award_join_requires_pair_date_match(hybrid: str) -> None:
+    # The onward minima hold a different date than the bridge pair — a date mismatch never
+    # stitches; onward.json carries gateway-compatible dates and the join is keyed on them.
+    write(
+        hybrid,
+        "onward.json",
+        {
+            "minima": [{**minima("NRT", "OKA", "economy", 30000), "date": "2026-09-12"}],
+            "bridge_pairs": [bridge_pair("NRT", "OKA")],
+        },
+    )
+    write(hybrid, "bridge.json", {"quotes": [quote("NRT", "OKA", "economy", 120.0)]})
+    doc = factors.finalize(hybrid, now=clock())
+    assert kinds(doc) == [("gateway-cash", "NRT", "OKA")]
 
 
 def test_two_award_only_when_bridge_cabin_has_matching_minima(hybrid: str) -> None:

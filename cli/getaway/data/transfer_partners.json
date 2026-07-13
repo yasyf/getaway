@@ -3,53 +3,64 @@
     {
       "program": "aeromexico",
       "ratio": "1:1.6",
+      "increment": null,
       "note": "Transfer takes about a day."
     },
     {
       "program": "aeroplan",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "british",
       "ratio": "1:1",
+      "increment": null,
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "delta",
       "ratio": "1:1",
+      "increment": null,
       "note": "Amex adds a federal excise-tax offset fee (about $0.60 per 1,000 points, capped at $99) on this US carrier. Transfer takes up to 48h."
     },
     {
       "program": "emirates",
       "ratio": "1:0.8",
+      "increment": null,
       "note": "Amex devalued this from 1:1 to 1:0.8 on 2025-09-16."
     },
     {
       "program": "flyingblue",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "jetblue",
       "ratio": "1:0.8",
+      "increment": null,
       "note": "Amex adds a federal excise-tax offset fee (about $0.60 per 1,000 points, capped at $99) on this US carrier."
     },
     {
       "program": "qantas",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "qatar",
       "ratio": "1:1",
+      "increment": null,
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "singapore",
       "ratio": "1:1",
+      "increment": null,
       "note": "Transfer takes 24–48h."
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
+      "increment": null,
       "note": "Books Delta-operated flights without the excise-tax offset fee Amex charges on direct Delta transfers."
     }
   ],
@@ -57,36 +68,43 @@
     {
       "program": "aeroplan",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "british",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "flyingblue",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "jetblue",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "singapore",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Transfer takes 24–48h."
     },
     {
       "program": "united",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
+      "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     }
   ],
@@ -94,110 +112,133 @@
     {
       "program": "american",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "emirates",
       "ratio": "1:0.8",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access. Citi devalued this to 1:0.8 on 2025-07-27."
     },
     {
       "program": "etihad",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "flyingblue",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "jetblue",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "qantas",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "qatar",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access. Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all. Gives Citi an indirect british path via this pool."
     },
     {
       "program": "singapore",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "turkish",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
+      "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     }
   ],
   "capitalone": [
     {
       "program": "aeromexico",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "aeroplan",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "british",
       "ratio": "1:1",
+      "increment": null,
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "emirates",
       "ratio": "1:0.75",
+      "increment": null,
       "note": "1:0.75 is unrelated to the Amex/Citi cuts and unchanged."
     },
     {
       "program": "etihad",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "finnair",
       "ratio": "1:1",
+      "increment": null,
       "note": "Avios currency — Capital One's direct finnair path; also reachable via the british/qatar Avios pool on avios.com."
     },
     {
       "program": "flyingblue",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "jetblue",
-      "ratio": "1:0.6"
+      "ratio": "1:0.6",
+      "increment": null
     },
     {
       "program": "qantas",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "qatar",
       "ratio": "1:1",
+      "increment": null,
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "singapore",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "turkish",
-      "ratio": "1:1"
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
+      "increment": null,
       "note": "Capital One's partner is nominally Virgin Red; linked accounts share one Virgin Points balance that books Flying Club awards directly."
     }
   ]

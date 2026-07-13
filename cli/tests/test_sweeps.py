@@ -7,8 +7,10 @@ import httpx
 import pytest
 import respx
 from _api import api_row
+from click.testing import CliRunner
 
 from getaway import prefs, sweeps, trips
+from getaway.store import NoData
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 SLUG = "2026-09-warm"
@@ -17,6 +19,11 @@ SEARCH_URL = "https://seats.aero/partnerapi/search"
 
 def clock() -> Callable[[], dt.datetime]:
     return lambda: FROZEN
+
+
+@pytest.fixture
+def runner() -> CliRunner:
+    return CliRunner()
 
 
 def make_trip(plan: dict, cabin: str = "business") -> dict:
@@ -214,3 +221,68 @@ def test_run_refresh_forces_http(search_trip: str) -> None:
     sweeps.run(search_trip, "asia", now=clock())
     sweeps.run(search_trip, "asia", refresh=True, now=clock())
     assert route.call_count == 2
+
+
+@respx.mock
+def test_sweep_captures_inputs_fp_at_work_start(search_trip: str) -> None:
+    # A concurrent trip edit lands mid-fetch. The sweep ran against the pre-edit window, so its
+    # checkpoint must fingerprint that pre-edit state and read stale afterward — not stamp the
+    # post-edit fingerprint over rows derived from the old inputs.
+    def edit_then_respond(request: httpx.Request) -> httpx.Response:
+        trips.set_patch(
+            search_trip,
+            {"window": {"start": "2026-10-01", "end": "2026-10-30", "trip_length_days": 12}},
+        )
+        return httpx.Response(
+            200, json={"data": [one_row()], "hasMore": False},
+            headers={"X-RateLimit-Remaining": "900"},
+        )
+
+    respx.get(SEARCH_URL).mock(side_effect=edit_then_respond)
+    sweeps.run(search_trip, "asia", now=clock())
+    assert trips.phase_check(search_trip, "sweep:asia", now=clock())[0] is False
+
+
+@pytest.fixture
+def onward_search_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
+    prefs.init()
+    trips.new(SLUG, now=clock())
+    trips.set_patch(
+        SLUG,
+        {
+            "cabin": "business",
+            "window": {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10},
+            "plan": {
+                "origins": ["SFO"],
+                "hybrid": {"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3},
+            },
+        },
+    )
+    trips.artifact_write(
+        SLUG, "shortlist-gateway.json", json.dumps({"candidates": [], "considered": 0})
+    )
+    return SLUG
+
+
+@respx.mock
+def test_onward_empty_gateway_raises_nodata_without_http(onward_search_trip: str) -> None:
+    # An empty gateway shortlist would derive origins=[] and call /search with origin_airport="".
+    route = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(200, json={"data": [], "hasMore": False})
+    )
+    with pytest.raises(NoData, match="shortlist-gateway.json"):
+        sweeps.run(onward_search_trip, "onward", now=clock())
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_onward_empty_gateway_cli_exits_no_data(
+    onward_search_trip: str, runner: CliRunner
+) -> None:
+    route = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(200, json={"data": [], "hasMore": False})
+    )
+    result = runner.invoke(sweeps.sweep_group, ["run", onward_search_trip, "onward"])
+    assert result.exit_code == 4
+    assert route.call_count == 0

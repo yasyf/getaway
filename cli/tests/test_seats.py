@@ -9,8 +9,9 @@ import respx
 from click.testing import CliRunner
 
 from getaway import paths, seats, store
-from getaway.constants import EXIT_AUTH, EXIT_OK
+from getaway.constants import EXIT_AUTH, EXIT_NO_DATA, EXIT_OK
 from getaway.seats import AuthError, SeatsClient
+from getaway.store import NoData
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -90,12 +91,75 @@ def test_cabin_rows_normalizes_mileage_string_to_int() -> None:
     assert economy["mileage_cost"] == 35000
 
 
+def _trip_payload(*trips: dict) -> dict:
+    return {"data": list(trips), "booking_links": [{"label": "x", "link": "u", "primary": True}]}
+
+
+def _seg(cabin: str, order: int) -> dict:
+    return {
+        "FlightNumber": "AA715",
+        "OriginAirport": "SFO",
+        "DestinationAirport": "JFK",
+        "AircraftName": "Airbus A321",
+        "AircraftCode": "321",
+        "Cabin": cabin,
+        "FareClass": "I",
+        "DepartsAt": "2026-09-01T07:00:00Z",
+        "ArrivesAt": "2026-09-01T15:00:00Z",
+        "Duration": 300,
+        "Distance": 2296,
+        "Order": order,
+    }
+
+
+def _trip(mileage: int, *cabins: str) -> dict:
+    return {
+        "MileageCost": mileage,
+        "TotalTaxes": 100,
+        "TaxesCurrency": "USD",
+        "RemainingSeats": 2,
+        "TotalDuration": 300,
+        "AvailabilitySegments": [_seg(cabin, i) for i, cabin in enumerate(cabins)],
+    }
+
+
+@respx.mock
+def test_trip_detail_selects_lowest_mileage_in_cabin(client: SeatsClient) -> None:
+    # data[0] is a cheaper economy itinerary; requesting business must skip it
+    # and pick the lowest-mileage business itinerary, not the first row.
+    payload = _trip_payload(
+        _trip(20000, "economy"),
+        _trip(90000, "business"),
+        _trip(44000, "business"),
+    )
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(return_value=httpx.Response(200, json=payload))
+    detail = client.trip_detail("AAA", "J")
+    assert detail["mileage"] == 44000
+
+
+@respx.mock
+def test_trip_detail_no_matching_cabin_raises_no_data(client: SeatsClient) -> None:
+    payload = _trip_payload(_trip(20000, "economy"), _trip(30000, "economy"))
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(return_value=httpx.Response(200, json=payload))
+    with pytest.raises(NoData):
+        client.trip_detail("AAA", "J")
+
+
+@respx.mock
+def test_trip_detail_empty_data_raises_no_data(client: SeatsClient) -> None:
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
+        return_value=httpx.Response(200, json={"data": [], "booking_links": []})
+    )
+    with pytest.raises(NoData):
+        client.trip_detail("AAA", "J")
+
+
 @respx.mock
 def test_trip_detail_normalizes_itinerary(client: SeatsClient) -> None:
     respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
         return_value=httpx.Response(200, json=load("trip_detail.json"))
     )
-    detail = client.trip_detail("AAA")
+    detail = client.trip_detail("AAA", "J")
     assert detail["mileage"] == 44000
     assert detail["total_duration"] == 490
     assert [seg["origin"] for seg in detail["segments"]] == ["SFO", "CLT"]
@@ -128,6 +192,7 @@ def test_availability_projects_cabins_and_records_quota(
         "endpoint": "/availability",
         "remaining": 500,
         "recorded_at": FROZEN.isoformat(),
+        "reset": False,
     }
 
 
@@ -167,6 +232,15 @@ def test_non_2xx_raises(client: SeatsClient) -> None:
     respx.get(ROUTES_URL).mock(return_value=httpx.Response(503, json={"error": "unavailable"}))
     with pytest.raises(httpx.HTTPStatusError):
         client.routes("aeroplan")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@respx.mock
+def test_auth_status_raises_auth_error_without_key(client: SeatsClient, status: int) -> None:
+    respx.get(ROUTES_URL).mock(return_value=httpx.Response(status, json={"error": "denied"}))
+    with pytest.raises(AuthError) as excinfo:
+        client.routes("aeroplan")
+    assert "test-key" not in str(excinfo.value)
 
 
 def test_env_key_takes_precedence_over_op_ref(
@@ -291,13 +365,43 @@ def test_expand_command_serves_from_cache_on_repeat(
         return_value=httpx.Response(200, json=load("trip_detail.json"))
     )
     runner = CliRunner()
-    first = runner.invoke(seats.expand_cmd, ["AAA"])
+    first = runner.invoke(seats.expand_cmd, ["AAA", "--cabin", "J"])
     assert first.exit_code == EXIT_OK
     assert json.loads(first.output)["mileage"] == 44000
-    second = runner.invoke(seats.expand_cmd, ["AAA", "--fresh-within", "6h"])
+    second = runner.invoke(seats.expand_cmd, ["AAA", "--cabin", "J", "--fresh-within", "6h"])
     assert second.exit_code == EXIT_OK
     assert json.loads(second.output)["mileage"] == 44000
     assert route.call_count == 1
+
+
+@respx.mock
+def test_expand_command_no_matching_cabin_exits_no_data(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
+        return_value=httpx.Response(200, json=load("trip_detail.json"))
+    )
+    result = CliRunner().invoke(seats.expand_cmd, ["AAA", "--cabin", "Y"])
+    assert result.exit_code == EXIT_NO_DATA
+
+
+def test_expand_command_requires_cabin(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    result = CliRunner().invoke(seats.expand_cmd, ["AAA"])
+    assert result.exit_code != EXIT_OK
+
+
+@respx.mock
+def test_search_command_auth_status_exits_auth(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(401, json={"error": "denied"}))
+    result = CliRunner().invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
+    assert result.exit_code == EXIT_AUTH
 
 
 def test_search_command_without_credentials_exits_auth(

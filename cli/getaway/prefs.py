@@ -83,6 +83,14 @@ def _check_iso_date(value: object, label: str) -> None:
         raise UsageError(f"{label} is not an ISO date: {value!r}") from err
 
 
+def _require_int_dict(value: object, label: str) -> None:
+    if not isinstance(value, dict):
+        raise UsageError(f"{label} must be an object")
+    for key, amount in value.items():
+        if not isinstance(amount, int) or isinstance(amount, bool):
+            raise UsageError(f"{label}[{key}] must be an integer")
+
+
 def _validate_credit(row: object, label: str) -> None:
     row = require_keys(row, set(CREDIT_REQUIRED), label, optional=frozenset({"note"}))
     if row["kind"] not in CREDIT_KINDS:
@@ -131,15 +139,16 @@ def _validate(doc: dict) -> None:
         raise UsageError("status_goals must be a list")
     for row in doc["status_goals"]:
         require_keys(row, {"program", "target", "by"}, "status_goals row")
-    require_keys(doc["balances"], {"programs", "transferable"}, "balances")
+    balances = require_keys(doc["balances"], {"programs", "transferable"}, "balances")
+    _require_int_dict(balances["programs"], "balances.programs")
+    _require_int_dict(balances["transferable"], "balances.transferable")
     if not isinstance(doc["credits"], list):
         raise UsageError("credits must be a list")
     for row in doc["credits"]:
         _validate_credit(row, "credits row")
     require_keys(doc["documents"], {"passports", "residency", "visas"}, "documents")
     for section in ("passports", "residency", "visas"):
-        if not isinstance(doc["documents"][section], list):
-            raise UsageError(f"documents.{section} must be a list")
+        require_str_list(doc["documents"][section], f"documents.{section}")
 
 
 def init() -> dict:
@@ -286,7 +295,10 @@ def _status_cmd() -> None:
 @prefs_group.command("set")
 @map_errors
 def _set_cmd() -> None:
-    patch = json.loads(click.get_text_stream("stdin").read())
+    try:
+        patch = json.loads(click.get_text_stream("stdin").read())
+    except json.JSONDecodeError as err:
+        raise UsageError(f"invalid JSON on stdin: {err}") from err
     emit(set_patch(patch))
 
 

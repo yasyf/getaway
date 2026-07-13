@@ -2,6 +2,7 @@ import datetime as dt
 import json
 import sqlite3
 import stat
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -147,6 +148,28 @@ def test_foreign_application_id_deletes_and_recreates(db_path: Path) -> None:
     assert fresh.stats()["quota_events"] == 0
 
 
+def test_concurrent_first_connect_serializes_bootstrap(db_path: Path) -> None:
+    workers = 32
+    barrier = threading.Barrier(workers)
+    errors: list[Exception] = []
+
+    def boot() -> None:
+        barrier.wait()  # release all threads into connect() at once
+        try:
+            st = store.connect(db_path)
+            st.record_quota("/search", 1)
+        except Exception as err:  # noqa: BLE001 -- the race surfaces OperationalError
+            errors.append(err)
+
+    threads = [threading.Thread(target=boot) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert store.connect(db_path).stats()["quota_events"] == workers
+
+
 def test_ingest_counts_new_rows(db_path: Path) -> None:
     st = store.connect(db_path, now=_clock(FROZEN))
     result = st.ingest(ROWS)
@@ -266,6 +289,35 @@ def test_query_availability_fresh_within_excludes_stale(db_path: Path) -> None:
     assert {row["id"] for row in all_rows} == {"R1", "R2"}
 
 
+def _sweep(label: str, started: dt.datetime, slug: str = "trip") -> dict:
+    return {
+        "trip_slug": slug,
+        "label": label,
+        "kind": "search",
+        "params": {},
+        "started_at": started.isoformat(),
+    }
+
+
+def test_query_trip_scoped_uses_latest_sweep_per_label(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    # first sweep for 'asia' captured all three routes
+    st.ingest(ROWS, sweep=_sweep("asia", FROZEN))
+    # a refreshed sweep for the same label found only R1 still available
+    st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)))
+    rows = st.query_availability(trip_slug="trip", labels=["asia"], cabin="Y")
+    assert {row["id"] for row in rows} == {"R1"}
+
+
+def test_query_trip_scoped_latest_sweep_isolated_per_label(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest([ROWS[0], ROWS[1]], sweep=_sweep("asia", FROZEN))
+    st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)))
+    st.ingest([ROWS[2]], sweep=_sweep("europe", FROZEN))
+    rows = st.query_availability(trip_slug="trip", cabin="Y")
+    assert {row["id"] for row in rows} == {"R1", "R3"}
+
+
 def test_trip_detail_roundtrip_and_freshness(db_path: Path) -> None:
     normalized = {"id": "T1", "mileage": 44000, "segments": []}
     st = store.connect(db_path, now=_clock(FROZEN))
@@ -285,8 +337,36 @@ def test_quota_latest_and_events(db_path: Path) -> None:
         "endpoint": "/trips",
         "remaining": 995,
         "recorded_at": FROZEN.isoformat(),
+        "reset": False,
     }
     assert [event["remaining"] for event in st.quota_events()] == [995, 998]
+
+
+def test_latest_quota_orders_by_recorded_at_not_insertion(db_path: Path) -> None:
+    # a slower response is inserted later (higher rowid) but its rate-limit
+    # snapshot predates the faster one, so it must not win as "latest".
+    late = store.connect(db_path, now=_clock(FROZEN + dt.timedelta(seconds=10)))
+    late.record_quota("/search", 40)
+    early = store.connect(db_path, now=_clock(FROZEN))
+    early.record_quota("/search", 90)
+    assert late.latest_quota()["remaining"] == 40
+    assert late.latest_quota()["recorded_at"] == (FROZEN + dt.timedelta(seconds=10)).isoformat()
+
+
+def test_latest_quota_tiebreak_prefers_lower_remaining(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 40)
+    st.record_quota("/search", 90)  # same recorded_at, inserted later
+    assert st.latest_quota()["remaining"] == 40
+
+
+def test_latest_quota_flags_previous_utc_day_as_reset(db_path: Path) -> None:
+    yesterday = FROZEN - dt.timedelta(days=1)
+    store.connect(db_path, now=_clock(yesterday)).record_quota("/search", 10)
+    today = store.connect(db_path, now=_clock(FROZEN))
+    assert today.latest_quota()["reset"] is True
+    today.record_quota("/search", 8)
+    assert today.latest_quota()["reset"] is False
 
 
 def test_latest_quota_raises_no_data_when_empty(db_path: Path) -> None:
@@ -319,7 +399,24 @@ def test_cache_prune_command_reports_removed(getaway_home: Path) -> None:
     store.connect(getaway_home / "cache.db", now=_clock(ancient)).ingest(ROWS)
     result = CliRunner().invoke(store.cache_group, ["prune", "--older-than", "1h"])
     assert result.exit_code == EXIT_OK
-    assert json.loads(result.output) == {"availability": 3, "trip_details": 0}
+    assert json.loads(result.stdout) == {"availability": 3, "trip_details": 0}
+
+
+def test_cache_prune_warns_about_checkpoint_staleness(getaway_home: Path) -> None:
+    ancient = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
+    store.connect(getaway_home / "cache.db", now=_clock(ancient)).ingest(ROWS)
+    result = CliRunner().invoke(store.cache_group, ["prune", "--older-than", "1h"])
+    assert result.exit_code == EXIT_OK
+    assert "checkpoint" in result.stderr.lower()
+    assert "refresh" in result.stderr.lower()
+
+
+def test_cache_prune_silent_when_nothing_removed(getaway_home: Path) -> None:
+    store.connect(getaway_home / "cache.db", now=_clock(FROZEN)).ingest(ROWS)
+    result = CliRunner().invoke(store.cache_group, ["prune", "--older-than", "999d"])
+    assert result.exit_code == EXIT_OK
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == {"availability": 0, "trip_details": 0}
 
 
 def test_quota_command_prints_latest(getaway_home: Path) -> None:
@@ -346,10 +443,32 @@ def test_quota_command_without_events_exits_no_data(getaway_home: Path) -> None:
 def test_quota_check_floor_gate(
     getaway_home: Path, remaining: int, floor: int, exit_code: int
 ) -> None:
-    st = store.connect(getaway_home / "cache.db", now=_clock(FROZEN))
+    # record on the current UTC day so the reset path stays out of the way; the
+    # command reads with the real clock, so a frozen past date would read as reset.
+    st = store.connect(getaway_home / "cache.db")
     st.record_quota("/search", remaining)
     result = CliRunner().invoke(store.quota_cmd, ["check", "--floor", str(floor)])
     assert result.exit_code == exit_code
+
+
+def test_quota_check_previous_utc_day_reports_reset(getaway_home: Path) -> None:
+    ancient = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
+    st = store.connect(getaway_home / "cache.db", now=_clock(ancient))
+    st.record_quota("/search", 3)  # far below any floor, but from a prior UTC day
+    result = CliRunner().invoke(store.quota_cmd, ["check", "--floor", "100"])
+    assert result.exit_code == EXIT_OK
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["reset"] is True
+    assert "reset" in result.stderr.lower()
+
+
+def test_quota_command_reports_reset_flag(getaway_home: Path) -> None:
+    ancient = dt.datetime(2020, 1, 1, tzinfo=dt.timezone.utc)
+    store.connect(getaway_home / "cache.db", now=_clock(ancient)).record_quota("/search", 3)
+    result = CliRunner().invoke(store.quota_cmd, [])
+    assert result.exit_code == EXIT_OK
+    assert json.loads(result.stdout)["reset"] is True
 
 
 def test_quota_check_without_events_exits_no_data(getaway_home: Path) -> None:

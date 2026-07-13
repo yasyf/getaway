@@ -31,6 +31,8 @@ def add(text: str, scope: str, now: Callable[[], datetime] = utcnow) -> dict:
 
 
 def list_(scope: str | None = None, n: int | None = None) -> list[dict]:
+    if n is not None and n < 1:
+        raise UsageError("n must be at least 1")
     path = learnings_path()
     if not path.exists():
         return []
@@ -55,7 +57,7 @@ def _add_cmd(text: str, scope: str) -> None:
 
 @learnings_group.command("list")
 @click.option("--scope", default=None)
-@click.option("-n", "n", type=int, default=None)
+@click.option("-n", "n", type=click.IntRange(min=1), default=None)
 @map_errors
 def _list_cmd(scope: str | None, n: int | None) -> None:
     emit(list_(scope, n))

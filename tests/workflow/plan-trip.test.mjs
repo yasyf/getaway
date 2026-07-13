@@ -43,30 +43,39 @@ const mkContext = (o = {}) => ({
   phaseMap: o.phaseMap ?? {},
   quotaRemaining: o.quotaRemaining ?? 500,
   quotaLow: o.quotaLow ?? false,
+  cabin: o.cabin ?? 'J',
+  returnStart: o.returnStart ?? '2026-09-17',
+  returnEnd: o.returnEnd ?? '2026-09-24',
 });
 
-const baseScript = (over = {}) => ({
-  load: mkContext(),
-  shortlist: { candidates: CANDIDATES, considered: 40 },
-  'shortlist:gateway': { candidates: GATEWAYS, considered: 10 },
-  onward: { minima: MINIMA, bridge_pairs: BRIDGE_PAIRS, quota_remaining: 400 },
-  'sweep:*': (opts) => ({ label: opts.label.slice('sweep:'.length), rows: 100, quota_remaining: 450 }),
-  'bridge:*': () => ({
-    gateway: 'NRT', onward_dest: 'BKK', cabin: 'business', price: 450, currency: 'USD',
-    airline: 'TG', flight_number: 'TG677', stops: 0, duration_minutes: 360,
-  }),
-  'expand:*': (opts) => mkExpand(opts.label.slice('expand:'.length)),
-  'evidence:verify': { verify: [{ id: 'AV1', product: 'solid', note: 'reverse herringbone' }] },
-  'evidence:cash': { cash: [{ id: 'AV1', route: 'SFO-NRT', cabin: 'business', quoted: 900, typical: 3000, currency: 'USD', anomaly: true, note: 'below typical' }] },
-  'evidence:context': { context: [{ dest: 'NRT', weather: 'mild', visa: 'none', appeal: 'great', events: 'none' }] },
-  'evidence:transit': { transit: [{ airport: 'ICN', kind: 'transit', risk: 'none', note: 'airside ok' }] },
-  'evidence:return': { return: [{ id: 'AV1', dest: 'NRT', origin: 'SFO', verified: true, rows: 5, note: 'cached' }] },
-  assess: { finalists: [{ id: 'AV1', factors: { layovers: { verdict: 'neutral', evidence: 'nonstop' } } }] },
-  'persist:*': { ok: true },
-  rank: { ranked: 2 },
-  finalize: { finalists: 2, hybrids: 1 },
-  ...over,
-});
+const baseScript = (over = {}) => {
+  const load = over.load ?? mkContext();
+  return {
+    load,
+    shortlist: { candidates: CANDIDATES, considered: 40 },
+    'shortlist:gateway': { candidates: GATEWAYS, considered: 10 },
+    onward: { minima: MINIMA, bridge_pairs: BRIDGE_PAIRS, quota_remaining: 400 },
+    'sweep:*': (opts) => ({ label: opts.label.slice('sweep:'.length), rows: 100, quota_remaining: 450 }),
+    // After a sweep that actually ran, the workflow re-reads the phase map; default to the Load
+    // snapshot so a plain sweep re-run leaves downstream skip decisions unchanged.
+    'status:refresh': { phaseMap: load.phaseMap },
+    'bridge:*': () => ({
+      gateway: 'NRT', onward_dest: 'BKK', cabin: 'business', price: 450, currency: 'USD',
+      airline: 'TG', flight_number: 'TG677', stops: 0, duration_minutes: 360,
+    }),
+    'expand:*': (opts) => mkExpand(opts.label.slice('expand:'.length)),
+    'evidence:verify': { verify: [{ id: 'AV1', product: 'solid', note: 'reverse herringbone' }] },
+    'evidence:cash': { cash: [{ id: 'AV1', route: 'SFO-NRT', cabin: 'business', quoted: 900, typical: 3000, currency: 'USD', anomaly: true, note: 'below typical' }] },
+    'evidence:context': { context: [{ dest: 'NRT', weather: 'mild', visa: 'none', appeal: 'great', events: 'none' }] },
+    'evidence:transit': { transit: [{ airport: 'ICN', kind: 'transit', risk: 'none', note: 'airside ok' }] },
+    'evidence:return': { return: [{ id: 'AV1', dest: 'NRT', origin: 'SFO', verified: true, rows: 5, note: 'cached' }] },
+    assess: { finalists: [{ id: 'AV1', factors: { layovers: { verdict: 'neutral', evidence: 'nonstop' } } }] },
+    'persist:*': { ok: true },
+    rank: { ranked: 2 },
+    finalize: { finalists: 2, hybrids: 1, quota_remaining: 300 },
+    ...over,
+  };
+};
 
 test('fresh-skip: every phase fresh dispatches zero sweep agents', async () => {
   const load = mkContext({
@@ -185,4 +194,177 @@ test('injection regression: a shell-metacharacter id is rejected, never spliced'
   });
   const shortlist = { candidates: [candidate('AV1; rm -rf /', 'NRT', 75000)], considered: 1 };
   await assert.rejects(runWorkflow(ARGS, baseScript({ load, shortlist })), /unsafe availability id/);
+});
+
+const findCall = (calls, label) => calls.find((c) => c.opts.label === label);
+
+// #1 stale-phase-map-snapshot: a sweep that actually ran must re-read the phase map so downstream
+// phases the fresh sweep invalidated stop skipping as "fresh".
+test('post-sweep refresh: a sweep that ran re-reads the phase map and re-stales downstream', async () => {
+  const load = mkContext({
+    sweepLabels: [{ label: 'beach', fresh: false }],
+    phaseMap: { expand: 'fresh', assess: 'fresh' },
+  });
+  const { result, called } = await runWorkflow(ARGS, baseScript({
+    load,
+    'sweep:*': (opts) => ({ label: opts.label.slice('sweep:'.length), rows: 100, quota_remaining: 450, skipped: false }),
+    'status:refresh': { phaseMap: { expand: 'stale', assess: 'stale' } },
+  }));
+
+  assert.ok(called('status:refresh'));
+  assert.ok(called('expand:AV1'));
+  assert.ok(called('expand:AV2'));
+  assert.ok(!result.skipped.includes('expand'));
+  assert.ok(!result.skipped.includes('assess'));
+});
+
+// #1 the other arm: when every dispatched sweep self-skipped, nothing new was ingested — keep the
+// Load snapshot and skip the extra trip-status call.
+test('post-sweep refresh: every sweep self-skipping keeps the Load snapshot and skips the refresh call', async () => {
+  const load = mkContext({
+    sweepLabels: [{ label: 'beach', fresh: false }],
+    phaseMap: { expand: 'fresh', assess: 'fresh' },
+  });
+  const { result, called } = await runWorkflow(ARGS, baseScript({
+    load,
+    'sweep:*': (opts) => ({ label: opts.label.slice('sweep:'.length), rows: 0, quota_remaining: null, skipped: true }),
+  }));
+
+  assert.ok(!called('status:refresh'));
+  assert.ok(!called('expand:AV1'));
+  assert.ok(result.skipped.includes('expand'));
+  assert.ok(result.skipped.includes('assess'));
+});
+
+// #2 refresh-onward-missing: --refresh must reach the onward sweep, not just the bucket sweeps.
+test('refresh: --refresh reaches both bucket sweeps and the onward sweep', async () => {
+  const load = mkContext({
+    hybrid: true,
+    sweepLabels: [{ label: 'beach', fresh: true }, { label: 'warm', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale' },
+  });
+  const { calls } = await runWorkflow({ ...ARGS, refresh: true }, baseScript({ load }));
+
+  const buckets = calls.filter((c) => c.opts.label.startsWith('sweep:'));
+  assert.ok(buckets.length >= 1);
+  for (const c of buckets) assert.match(c.prompt, /sweep run my-trip \S+ --refresh/);
+  assert.match(findCall(calls, 'onward').prompt, /sweep run my-trip onward --refresh/);
+});
+
+// #3 assess-missing-layover-prefs: the assessor must read the traveler's layover preferences.
+test('assess: the assessor reads the traveler layover preferences alongside trip guidance', async () => {
+  const load = mkContext({
+    activeFactors: ['layovers'],
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale' },
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const assess = findCall(calls, 'assess');
+  assert.match(assess.prompt, /getaway prefs show/);
+  assert.match(assess.prompt, /layovers\.style/);
+  assert.match(assess.prompt, /min_connection_minutes/);
+});
+
+// #4 return-cache-underconstrained: the return query must reverse the route and constrain window,
+// cabin, party seats, and freshness — and an empty result flags, never filters.
+test('return-viability: the cache query carries reversed route, return window, cabin, party, freshness', async () => {
+  const load = mkContext({
+    activeFactors: ['return_viability', 'layovers'],
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale', 'evidence.return': 'stale' },
+    cabin: 'J', party: 3, returnStart: '2026-09-17', returnEnd: '2026-09-24',
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const ret = findCall(calls, 'evidence:return');
+  assert.match(
+    ret.prompt,
+    /cache query --origin <dest> --dest <origin> --date-start 2026-09-17 --date-end 2026-09-24 --cabin J --min-seats 3 --fresh-within 24h/,
+  );
+  assert.match(ret.prompt, /never drop it/);
+});
+
+// #5 expansion-quota-unreported: the reported quota comes from the Finalize agent's live quota read,
+// not the folded sweep/onward headers (which never saw expansion spend).
+test('finalize: the workflow reports the final recorded quota from the Finalize agent', async () => {
+  const load = mkContext({
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'fresh', assess: 'fresh' },
+    quotaRemaining: 500,
+  });
+  const { result, calls } = await runWorkflow(ARGS, baseScript({
+    load,
+    finalize: { finalists: 2, hybrids: 1, quota_remaining: 137 },
+  }));
+  assert.match(findCall(calls, 'finalize').prompt, /getaway quota\n/);
+  assert.strictEqual(result.quota, 137);
+});
+
+// #6 booking-link-key: the persisted booking link keys off the API "link" field, not "url".
+test('expand: the booking contract keys off the API link field, not url', async () => {
+  const load = mkContext({
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale' },
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const expand = calls.find((c) => c.opts.label.startsWith('expand:'));
+  assert.match(expand.prompt, /primary booking link's link/);
+  assert.doesNotMatch(expand.prompt, /booking link's url/);
+});
+
+// #7 transit-nonhybrid-artifact: the transit collector must not read the gateway artifact (which
+// does not exist) for a non-hybrid trip, and must read it for a hybrid one.
+test('transit-nonhybrid: the transit collector omits the gateway artifact read for non-hybrid trips', async () => {
+  const load = mkContext({
+    hybrid: false,
+    activeFactors: ['transit_risk', 'layovers'],
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale', 'evidence.transit': 'stale' },
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const transit = findCall(calls, 'evidence:transit');
+  assert.doesNotMatch(transit.prompt, /shortlist-gateway\.json/);
+  assert.doesNotMatch(transit.prompt, /for each gateway determine entry risk/);
+});
+
+test('transit-hybrid: the transit collector reads the gateway artifact for hybrid trips', async () => {
+  const load = mkContext({
+    hybrid: true,
+    activeFactors: ['transit_risk', 'layovers'],
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale', 'evidence.transit': 'stale' },
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const transit = findCall(calls, 'evidence:transit');
+  assert.match(transit.prompt, /shortlist-gateway\.json/);
+  assert.match(transit.prompt, /for each gateway determine entry risk/);
+});
+
+// #8 expand --cabin (cross-lane): every expand command passes the trip cabin letter and the record
+// contract carries bookable seats for that cabin.
+test('expand: every expand command passes the trip cabin letter and records bookable seats', async () => {
+  const load = mkContext({
+    hybrid: true,
+    activeFactors: ['layovers'],
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale' },
+    cabin: 'J',
+  });
+  const { calls } = await runWorkflow(ARGS, baseScript({ load }));
+  const expands = calls.filter((c) => c.opts.label.startsWith('expand:'));
+  assert.ok(expands.length > 0);
+  for (const c of expands) {
+    assert.match(c.prompt, /getaway expand \S+ --cabin J\b/);
+    assert.match(c.prompt, /seats \(remaining_seats when/);
+  }
+});
+
+// #8 the cabin value obeys the interpolation allowlist: a cabin that is not a Y/W/J/F letter is
+// rejected before any command line is built.
+test('cabin guard: a non Y/W/J/F cabin is rejected before any command line is built', async () => {
+  const load = mkContext({
+    sweepLabels: [{ label: 'beach', fresh: true }],
+    phaseMap: { expand: 'stale', assess: 'stale' },
+    cabin: 'business',
+  });
+  await assert.rejects(runWorkflow(ARGS, baseScript({ load })), /unsafe cabin business/);
 });

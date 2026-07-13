@@ -19,7 +19,7 @@ USER_VERSION = 1
 BUSY_TIMEOUT_MS = 5000
 
 SCHEMA_SQL = """
-CREATE TABLE availability (
+CREATE TABLE IF NOT EXISTS availability (
     id TEXT PRIMARY KEY,
     origin TEXT NOT NULL,
     dest TEXT NOT NULL,
@@ -31,10 +31,10 @@ CREATE TABLE availability (
     fetched_at TEXT NOT NULL,
     raw TEXT NOT NULL
 );
-CREATE INDEX availability_route ON availability(origin, dest, date);
-CREATE INDEX availability_source_date ON availability(source, date);
+CREATE INDEX IF NOT EXISTS availability_route ON availability(origin, dest, date);
+CREATE INDEX IF NOT EXISTS availability_source_date ON availability(source, date);
 
-CREATE TABLE availability_cabin (
+CREATE TABLE IF NOT EXISTS availability_cabin (
     id TEXT NOT NULL,
     cabin TEXT NOT NULL,
     available INTEGER NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE availability_cabin (
     FOREIGN KEY (id) REFERENCES availability(id) ON DELETE CASCADE
 );
 
-CREATE TABLE sweeps (
+CREATE TABLE IF NOT EXISTS sweeps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trip_slug TEXT,
     label TEXT NOT NULL,
@@ -55,7 +55,7 @@ CREATE TABLE sweeps (
     started_at TEXT NOT NULL
 );
 
-CREATE TABLE sweep_rows (
+CREATE TABLE IF NOT EXISTS sweep_rows (
     sweep_id INTEGER NOT NULL,
     availability_id TEXT NOT NULL,
     PRIMARY KEY (sweep_id, availability_id),
@@ -63,13 +63,13 @@ CREATE TABLE sweep_rows (
     FOREIGN KEY (availability_id) REFERENCES availability(id) ON DELETE CASCADE
 );
 
-CREATE TABLE trip_details (
+CREATE TABLE IF NOT EXISTS trip_details (
     id TEXT PRIMARY KEY,
     normalized TEXT NOT NULL,
     fetched_at TEXT NOT NULL
 );
 
-CREATE TABLE quota_events (
+CREATE TABLE IF NOT EXISTS quota_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     endpoint TEXT NOT NULL,
     remaining INTEGER NOT NULL,
@@ -126,22 +126,23 @@ def _delete_db(path: Path) -> None:
 
 
 def connect(path: Path, now: Clock = _utcnow) -> Store:
-    conn = _open(path)
-    app_id = conn.execute("PRAGMA application_id").fetchone()[0]
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if app_id == 0:
-        _create_schema(conn)
-    elif app_id == APPLICATION_ID and version == USER_VERSION:
-        pass
-    else:
-        conn.close()
-        _delete_db(path)
+    with paths.locked(path):
         conn = _open(path)
-        _create_schema(conn)
-    for suffix in ("-wal", "-shm"):
-        sidecar = Path(str(path) + suffix)
-        if sidecar.exists():
-            sidecar.chmod(0o600)
+        app_id = conn.execute("PRAGMA application_id").fetchone()[0]
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if app_id == 0:
+            _create_schema(conn)
+        elif app_id == APPLICATION_ID and version == USER_VERSION:
+            pass
+        else:
+            conn.close()
+            _delete_db(path)
+            conn = _open(path)
+            _create_schema(conn)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(path) + suffix)
+            if sidecar.exists():
+                sidecar.chmod(0o600)
     return Store(conn, now=now)
 
 
@@ -253,9 +254,13 @@ class Store:
         if trip_slug is not None:
             placeholders = ",".join("?" for _ in labels) if labels else ""
             label_clause = f"AND s.label IN ({placeholders})" if labels else ""
+            # Only the latest sweep per (trip_slug, label) counts: a refreshed
+            # sweep's smaller result set must supersede the prior one, not union.
             clauses.append(
                 "a.id IN (SELECT sr.availability_id FROM sweep_rows sr "
-                f"JOIN sweeps s ON s.id = sr.sweep_id WHERE s.trip_slug = ? {label_clause})"
+                "WHERE sr.sweep_id IN ("
+                "SELECT MAX(s.id) FROM sweeps s "
+                f"WHERE s.trip_slug = ? {label_clause} GROUP BY s.label))"
             )
             params.append(trip_slug)
             if labels:
@@ -331,16 +336,28 @@ class Store:
         self._conn.commit()
 
     def latest_quota(self) -> Row:
+        # Order by recorded_at, not insertion id: a slower response recorded
+        # later can carry a staler (higher) remaining count. Tie-break to the
+        # lower remaining so a concurrent burst reports the conservative value.
         row = self._conn.execute(
-            "SELECT endpoint, remaining, recorded_at FROM quota_events ORDER BY id DESC LIMIT 1"
+            "SELECT endpoint, remaining, recorded_at FROM quota_events "
+            "ORDER BY recorded_at DESC, remaining ASC LIMIT 1"
         ).fetchone()
         if row is None:
             raise NoData("no quota events recorded")
+        recorded_at = row["recorded_at"]
+        # The seats.aero allowance resets at midnight UTC, so an event from a
+        # prior UTC day no longer reflects today's remaining allowance.
+        reset = dt.datetime.fromisoformat(recorded_at) < self._day_start()
         return {
             "endpoint": row["endpoint"],
             "remaining": row["remaining"],
-            "recorded_at": row["recorded_at"],
+            "recorded_at": recorded_at,
+            "reset": reset,
         }
+
+    def _day_start(self) -> dt.datetime:
+        return self._now().replace(hour=0, minute=0, second=0, microsecond=0)
 
     def quota_events(self, limit: int | None = None) -> list[Row]:
         sql = "SELECT endpoint, remaining, recorded_at FROM quota_events ORDER BY id DESC"
@@ -467,7 +484,14 @@ def cache_stats(trip: str | None) -> None:
 @click.option("--older-than", required=True)
 def cache_prune(older_than: str) -> None:
     store = connect(paths.cache_db())
-    click.echo(json.dumps(store.prune(parse_duration(older_than))))
+    result = store.prune(parse_duration(older_than))
+    if result["availability"] or result["trip_details"]:
+        click.echo(
+            "warning: trip checkpoints may now report fresh over pruned rows; "
+            "re-run the workflow with refresh to rebuild affected phases",
+            err=True,
+        )
+    click.echo(json.dumps(result))
 
 
 @click.group("quota", invoke_without_command=True)
@@ -495,6 +519,12 @@ def quota_check(floor: int) -> None:
         click.echo(str(err), err=True)
         raise SystemExit(EXIT_NO_DATA) from err
     remaining = latest["remaining"]
+    if latest["reset"]:
+        click.echo(
+            "quota allowance reset at midnight UTC; last event predates today", err=True
+        )
+        click.echo(json.dumps({"remaining": remaining, "floor": floor, "ok": True, "reset": True}))
+        return
     if remaining < floor:
         click.echo(f"quota remaining {remaining} is below floor {floor}", err=True)
         raise SystemExit(EXIT_NEGATIVE)

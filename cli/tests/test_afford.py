@@ -54,6 +54,31 @@ def test_transfer_ratio_arithmetic(bank: str, ratio: str, expected_required: int
     assert path["points_required"] == expected_required
 
 
+def test_chase_transfer_rounds_up_to_increment() -> None:
+    # Chase moves in 1,000-point increments: 60,500 points cannot cover a
+    # 60,500-mile 1:1 shortfall — the transfer must round up to 61,000.
+    result = afford.afford("united", 60500, _prefs({}, {"chase": 60500}))
+    chase = next(p for p in result["transfer_paths"] if p["bank"] == "chase")
+    assert chase["ratio"] == "1:1"
+    assert chase["points_required"] == 61000
+    assert chase["covers"] is False
+
+
+def test_chase_increment_already_on_boundary_unchanged() -> None:
+    result = afford.afford("united", 60000, _prefs({}, {"chase": 60000}))
+    chase = next(p for p in result["transfer_paths"] if p["bank"] == "chase")
+    assert chase["points_required"] == 60000
+    assert chase["covers"] is True
+
+
+def test_non_chase_bank_has_no_increment_rounding() -> None:
+    # Amex has no transfer increment, so 60,500 required stays exact.
+    result = afford.afford("aeroplan", 60500, _prefs({}, {"amex": 60500}))
+    amex = next(p for p in result["transfer_paths"] if p["bank"] == "amex")
+    assert amex["points_required"] == 60500
+    assert amex["covers"] is True
+
+
 def test_include_purchase_costs_from_typical_sale_cents() -> None:
     result = afford.afford("aeroplan", 100000, _prefs(), include_purchase=True)
     assert result["purchase"] == {

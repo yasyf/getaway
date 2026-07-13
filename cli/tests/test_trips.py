@@ -270,6 +270,49 @@ def test_plan_allowlist_rejects_unknown_key(ready: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("week_end", id="underscore-breaks-artifact-regex"),
+        pytest.param("Asia", id="uppercase"),
+        pytest.param("-asia", id="leading-hyphen"),
+        pytest.param("asia.jp", id="dot"),
+        pytest.param("a" * 33, id="too-long"),
+        pytest.param("", id="empty"),
+        pytest.param("gateways", id="reserved-gateways"),
+        pytest.param("onward", id="reserved-onward"),
+    ],
+)
+def test_plan_bucket_name_validated(ready: Path, name: str) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"buckets": [{"name": name, "dests": ["NRT"]}]}})
+
+
+def test_plan_bucket_valid_name_accepted(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(
+        SLUG, {"plan": {"buckets": [{"name": "asia-1", "dests": ["NRT"]}]}}
+    )
+    assert doc["plan"]["buckets"] == [{"name": "asia-1", "dests": ["NRT"]}]
+
+
+def test_plan_bucket_shape_validated(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"buckets": [{"name": "asia"}]}})  # missing dests
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"buckets": [{"name": "asia", "dests": "NRT"}]}})
+
+
+def test_trip_set_cli_malformed_json_exits_usage(ready: Path, runner: CliRunner) -> None:
+    # A stdin body that is not valid JSON maps to a usage error (exit 64), not a raw
+    # JSONDecodeError traceback (exit 1).
+    trips.new(SLUG)
+    result = runner.invoke(trips.trip_group, ["set", SLUG], input="{not valid json")
+    assert result.exit_code == 64
+
+
+@pytest.mark.parametrize(
     ("name", "content"),
     [
         pytest.param("shortlist.json", '{"finalists": ["BKK", "SIN"]}', id="json"),

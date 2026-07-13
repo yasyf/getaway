@@ -14,7 +14,7 @@ from getaway.paths import (
     utcnow,
 )
 from getaway.seats import AuthError, SeatsClient
-from getaway.store import connect
+from getaway.store import NoData, connect
 
 SWEEP_TAKE = 1000
 
@@ -90,6 +90,8 @@ def _onward_spec(slug: str, trip: dict) -> Spec:
     hybrid = plan["hybrid"]
     gateway_doc = json.loads(trips.artifact_read(slug, "shortlist-gateway.json"))
     gateways = sorted({c["dest"] for c in gateway_doc["candidates"]})
+    if not gateways:
+        raise NoData(f"onward sweep for {slug!r} has no gateways: shortlist-gateway.json is empty")
     window = trip["window"]
     # Onward legs span every cabin — the economy/business economics resolve downstream.
     params = {
@@ -153,9 +155,10 @@ def run(
     key = f"sweep:{label}"
     name = _artifact_name(label)
     if not refresh:
-        fresh, _ = trips.phase_check(slug, key, [name], now=now)
+        fresh, _ = trips.phase_check(slug, key, now=now)
         if fresh:
             return {"label": label, "skipped": True, "rows": _line_count(slug, name)}
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, key)  # before the network fetch
     store = connect(cache_db(), now=now)
     client = SeatsClient(store)
     rows = _call(client, spec)
@@ -170,13 +173,11 @@ def run(
     content = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
     trips.artifact_write(slug, name, content)
     quota = _quota_remaining(store)
-    trips.phase_done(slug, key, [name], quota_after=quota, now=now)
+    trips.phase_done(slug, key, quota_after=quota, inputs_fp=inputs_fp, now=now)
     return {"label": label, "rows": result["rows"], "new": result["new"], "quota_remaining": quota}
 
 
 def _quota_remaining(store: Any) -> int | None:
-    from getaway.store import NoData
-
     try:
         return store.latest_quota()["remaining"]
     except NoData:
@@ -206,10 +207,13 @@ def _plan_cmd(slug: str) -> None:
 @click.option("--refresh", is_flag=True)
 @map_errors
 def _run_cmd(slug: str, label: str, refresh: bool) -> None:
+    from getaway.constants import EXIT_AUTH, EXIT_NO_DATA
+
     try:
         emit(run(slug, label, refresh=refresh))
     except AuthError as err:
-        from getaway.constants import EXIT_AUTH
-
         click.echo(str(err), err=True)
         raise SystemExit(EXIT_AUTH) from err
+    except NoData as err:
+        click.echo(str(err), err=True)
+        raise SystemExit(EXIT_NO_DATA) from err

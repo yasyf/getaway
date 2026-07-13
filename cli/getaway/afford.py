@@ -52,6 +52,9 @@ def afford(
                 continue
             a, b = _parse_ratio(entry["ratio"])
             points_required = math.ceil(shortfall * a / b)
+            increment = entry["increment"]
+            if increment:
+                points_required = math.ceil(points_required / increment) * increment
             bank_balance = bank_balances.get(bank, 0)
             transfer_paths.append(
                 {

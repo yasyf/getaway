@@ -46,6 +46,23 @@ def test_list_empty_when_no_file(getaway_home: Path) -> None:
     assert learnings.list_() == []
 
 
+def test_list_rejects_n_below_one(
+    getaway_home: Path, frozen_clock: Callable[[], dt.datetime]
+) -> None:
+    learnings.add("first", "api", now=frozen_clock)
+    learnings.add("second", "api", now=frozen_clock)
+    with pytest.raises(UsageError):
+        learnings.list_(n=0)
+    with pytest.raises(UsageError):
+        learnings.list_(n=-2)
+
+
+def test_cli_list_rejects_n_zero(getaway_home: Path, runner: CliRunner) -> None:
+    learnings.add("first", "api")
+    result = runner.invoke(learnings.learnings_group, ["list", "-n", "0"])
+    assert result.exit_code != 0
+
+
 def test_add_creates_file_0600(getaway_home: Path) -> None:
     learnings.add("rate limit is 100/min", "api")
     assert stat.S_IMODE(learnings_path().stat().st_mode) == 0o600

@@ -32,6 +32,8 @@ from getaway.paths import (
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 ARTIFACT_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.(json|jsonl)$")
+BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+RESERVED_BUCKET_NAMES = frozenset({"gateways", "onward"})
 RESERVED_KEYS = frozenset({"slug", "created"})
 PLAN_KEYS = frozenset(
     {
@@ -69,6 +71,32 @@ PREFS_FP_KEYS = (
 )
 PREFS_RANK_KEYS = ("balances", "statuses", "credits", "status_goals")
 RANK_PHASES = frozenset({"rank", "finalize"})
+
+# Placeholders resolved per trip: direct-shortlist sweep artifacts, active-collector evidence.
+_SWEEP_DEPS = "@sweeps"
+_EVIDENCE_DEPS = "@evidence"
+# Deps that only exist on the hybrid gateway/onward/bridge path.
+_HYBRID_ONLY_ARTIFACTS = frozenset(
+    {"sweep-gateways.jsonl", "shortlist-gateway.json", "onward.json", "bridge.json"}
+)
+
+# Source of truth for each phase's upstream deps. A dep that should exist but is absent hashes as
+# a sentinel, so its later arrival flips the fingerprint. Keys absent here (sweeps) run on inputs.
+PHASE_ARTIFACT_DEPS: dict[str, list[str]] = {
+    "shortlist": [_SWEEP_DEPS],
+    "shortlist:gateway": ["sweep-gateways.jsonl"],
+    "onward": ["shortlist-gateway.json"],
+    "bridge": ["onward.json"],
+    "expand": ["shortlist.json", "shortlist-gateway.json"],
+    "evidence.verify": ["expand.json"],
+    "evidence.cash": ["expand.json"],
+    "evidence.context": ["shortlist.json"],
+    "evidence.transit": ["expand.json", "shortlist-gateway.json"],
+    "assess": ["expand.json", _EVIDENCE_DEPS],
+    "rank": ["shortlist.json", "expand.json", "assess.json"],
+    "finalize": ["rank.json", "onward.json", "bridge.json"],
+}
+_ABSENT = b"\x00ABSENT\x00"
 
 
 def _template() -> dict:
@@ -119,10 +147,25 @@ def _factor_ids() -> set[str]:
     return {f["id"] for f in data["factors"]}
 
 
+def _validate_bucket(bucket: object) -> None:
+    bucket = require_keys(bucket, {"name", "dests"}, "plan.buckets row")
+    name = require_str(bucket["name"], "plan.buckets.name")
+    if not BUCKET_NAME_RE.match(name):
+        raise UsageError(f"plan.buckets.name must match {BUCKET_NAME_RE.pattern!r}: {name!r}")
+    if name in RESERVED_BUCKET_NAMES:
+        raise UsageError(f"plan.buckets.name is a reserved label: {name!r}")
+    require_str_list(bucket["dests"], "plan.buckets.dests")
+
+
 def _validate_plan(plan: object, merged: dict) -> None:
     plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
     if "round_trip" in plan and not isinstance(plan["round_trip"], bool):
         raise UsageError("plan.round_trip must be a boolean")
+    if "buckets" in plan:
+        if not isinstance(plan["buckets"], list):
+            raise UsageError("plan.buckets must be a list")
+        for bucket in plan["buckets"]:
+            _validate_bucket(bucket)
     if "hybrid" in plan:
         hybrid = require_keys(plan["hybrid"], set(), "plan.hybrid", optional=frozenset(HYBRID_KEYS))
         if "onward_dests" in hybrid:
@@ -275,7 +318,14 @@ def _phase_base(key: str) -> str:
     return key.split(":", 1)[0]
 
 
-def _inputs_fp(trip: dict, prefs_doc: dict, key: str) -> str:
+def capture_inputs_fp(trip: dict, prefs_doc: dict, key: str) -> str:
+    """Fingerprint the trip+prefs inputs of a phase, captured at work start.
+
+    The CLI-internal stampers (sweeps.run, shortlist, factors.rank, factors.finalize) call this
+    before their long-running work and hand the result to ``phase_done(inputs_fp=...)``, so a
+    concurrent trip/prefs edit mid-work marks the phase stale rather than stamping the new
+    fingerprint over rows derived from the old inputs.
+    """
     payload = {
         "trip": {k: trip[k] for k in TRIP_FP_KEYS},
         "prefs": {k: prefs_doc[k] for k in PREFS_FP_KEYS},
@@ -285,12 +335,56 @@ def _inputs_fp(trip: dict, prefs_doc: dict, key: str) -> str:
     return _sha(payload)
 
 
-def _upstream_fp(slug: str, deps: list[str] | None) -> str | None:
+def _direct_sweep_artifacts(trip: dict, prefs_doc: dict) -> list[str]:
+    from getaway.sweeps import derive_specs
+
+    return [
+        f"sweep-{spec['label']}.jsonl"
+        for spec in derive_specs(trip, prefs_doc)
+        if spec["label"] != "gateways"
+    ]
+
+
+def _evidence_artifacts(trip: dict, prefs_doc: dict, slug: str) -> list[str]:
+    from getaway.constants import EVIDENCE_COLLECTORS
+
+    profile = _judgment_profile(trip, prefs_doc, slug)
+    return [
+        f"evidence-{EVIDENCE_COLLECTORS[fid]}.json"
+        for fid, spec in profile.items()
+        if spec["active"] and fid in EVIDENCE_COLLECTORS
+    ]
+
+
+def _resolve_deps(slug: str, key: str, trip: dict, prefs_doc: dict) -> list[str]:
+    template = PHASE_ARTIFACT_DEPS.get(key)
+    if template is None:
+        return []
+    hybrid = bool(trip["plan"].get("hybrid"))
+    deps: list[str] = []
+    for item in template:
+        if item == _SWEEP_DEPS:
+            deps.extend(_direct_sweep_artifacts(trip, prefs_doc))
+        elif item == _EVIDENCE_DEPS:
+            deps.extend(_evidence_artifacts(trip, prefs_doc, slug))
+        elif item in _HYBRID_ONLY_ARTIFACTS and not hybrid:
+            continue
+        else:
+            deps.append(item)
+    return deps
+
+
+def _upstream_fp(slug: str, key: str, trip: dict, prefs_doc: dict) -> str | None:
+    deps = _resolve_deps(slug, key, trip, prefs_doc)
     if not deps:
         return None
     digest = hashlib.sha256()
     for name in deps:
-        digest.update(_artifact_path(slug, name).read_bytes())
+        path = _artifact_path(slug, name)
+        digest.update(name.encode())
+        digest.update(b"\x00")
+        digest.update(path.read_bytes() if path.exists() else _ABSENT)
+        digest.update(b"\x00")
     return digest.hexdigest()
 
 
@@ -308,10 +402,7 @@ def _load_checkpoints(slug: str) -> dict:
 
 
 def phase_check(
-    slug: str,
-    key: str,
-    artifact_deps: list[str] | None = None,
-    now: Callable[[], datetime] = utcnow,
+    slug: str, key: str, now: Callable[[], datetime] = utcnow
 ) -> tuple[bool, dict | None]:
     _valid_slug(slug)
     record = _load_checkpoints(slug).get(key)
@@ -319,38 +410,37 @@ def phase_check(
         return False, None
     trip = show(slug)
     prefs_doc = prefs.show()
-    upstream = record["upstream_fp"]
     fresh = (
-        record["inputs_fp"] == _inputs_fp(trip, prefs_doc, key)
-        and (upstream is None or upstream == _upstream_fp(slug, artifact_deps))
+        record["inputs_fp"] == capture_inputs_fp(trip, prefs_doc, key)
+        and record["upstream_fp"] == _upstream_fp(slug, key, trip, prefs_doc)
         and _ttl_ok(record, key, now)
     )
     return fresh, record
 
 
 def phase_fresh(slug: str, key: str, now: Callable[[], datetime] = utcnow) -> bool:
-    record = _load_checkpoints(slug).get(key)
-    if record is None:
-        return False
-    fresh, _ = phase_check(slug, key, record["artifacts"], now=now)
-    return fresh
+    return phase_check(slug, key, now=now)[0]
 
 
 def phase_done(
     slug: str,
     key: str,
-    artifacts: list[str],
+    artifacts: list[str] | None = None,
     quota_after: int | None = None,
     now: Callable[[], datetime] = utcnow,
+    inputs_fp: str | None = None,
 ) -> dict:
+    # ``artifacts`` is accepted for the CLI --artifact flag and factors.py's positional call, but
+    # upstream deps now come from PHASE_ARTIFACT_DEPS, so it no longer feeds the fingerprint.
     _valid_slug(slug)
     trip = show(slug)
     prefs_doc = prefs.show()
+    if inputs_fp is None:
+        inputs_fp = capture_inputs_fp(trip, prefs_doc, key)
     record = {
         "completed_at": now().isoformat(),
-        "inputs_fp": _inputs_fp(trip, prefs_doc, key),
-        "upstream_fp": _upstream_fp(slug, artifacts),
-        "artifacts": artifacts,
+        "inputs_fp": inputs_fp,
+        "upstream_fp": _upstream_fp(slug, key, trip, prefs_doc),
     }
     if quota_after is not None:
         record["quota_after"] = quota_after
@@ -524,7 +614,10 @@ def _new_cmd(slug: str, ask: str | None) -> None:
 @click.argument("slug")
 @map_errors
 def _set_cmd(slug: str) -> None:
-    patch = json.loads(click.get_text_stream("stdin").read())
+    try:
+        patch = json.loads(click.get_text_stream("stdin").read())
+    except json.JSONDecodeError as err:
+        raise UsageError(f"invalid JSON on stdin: {err}") from err
     emit(set_patch(slug, patch))
 
 
@@ -570,10 +663,9 @@ def _log_cmd(slug: str, text: str) -> None:
 @trip_group.command("phase-check")
 @click.argument("slug")
 @click.argument("key")
-@click.option("--dep", "deps", multiple=True)
 @map_errors
-def _phase_check_cmd(slug: str, key: str, deps: tuple[str, ...]) -> None:
-    fresh, record = phase_check(slug, key, list(deps) or None)
+def _phase_check_cmd(slug: str, key: str) -> None:
+    fresh, record = phase_check(slug, key)
     emit({"fresh": fresh, "record": record})
     if not fresh:
         raise NegativePredicate("phase stale")

@@ -27,6 +27,7 @@ const FACTOR = /^[a-z_]+$/;
 const AVAIL_ID = /^[A-Za-z0-9._-]+$/;
 const IATA = /^[A-Z]{3}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const CABIN = /^[YWJF]$/;
 
 // Active judgment factor -> Evidence-phase collector (mirrors cli/getaway/constants.py EVIDENCE_COLLECTORS).
 const COLLECTOR_OF = {
@@ -39,7 +40,7 @@ const COLLECTOR_OF = {
 
 const CONTEXT_SCHEMA = {
   type: 'object',
-  required: ['sweepLabels', 'hybrid', 'roundTrip', 'activeFactors', 'maxFinalists', 'party', 'phaseMap', 'quotaRemaining', 'quotaLow'],
+  required: ['sweepLabels', 'hybrid', 'roundTrip', 'activeFactors', 'maxFinalists', 'party', 'phaseMap', 'quotaRemaining', 'quotaLow', 'cabin', 'returnStart', 'returnEnd'],
   properties: {
     sweepLabels: {
       type: 'array',
@@ -53,7 +54,15 @@ const CONTEXT_SCHEMA = {
     phaseMap: { type: 'object' },
     quotaRemaining: { type: ['number', 'null'] },
     quotaLow: { type: 'boolean' },
+    cabin: { type: 'string' },
+    returnStart: { type: 'string' },
+    returnEnd: { type: 'string' },
   },
+};
+const STATUS_SCHEMA = {
+  type: 'object',
+  required: ['phaseMap'],
+  properties: { phaseMap: { type: 'object' } },
 };
 const SWEEP_SCHEMA = {
   type: 'object',
@@ -115,7 +124,7 @@ const EXPAND_SCHEMA = {
   required: ['id', 'mileage', 'segments', 'layovers'],
   properties: {
     id: { type: 'string' }, mileage: { type: 'number' }, total_taxes: { type: ['number', 'null'] },
-    taxes_currency: { type: ['string', 'null'] }, remaining_seats: { type: ['number', 'null'] },
+    taxes_currency: { type: ['string', 'null'] }, remaining_seats: { type: ['number', 'null'] }, seats: { type: ['number', 'null'] },
     total_duration: { type: ['number', 'null'] }, segments: { type: 'array' }, layovers: { type: 'array' },
     booking: { type: ['string', 'null'] }, product: { type: ['string', 'null'] }, product_note: { type: ['string', 'null'] },
   },
@@ -151,7 +160,7 @@ const ASSESS_SCHEMA = {
   properties: { finalists: { type: 'array', items: { type: 'object', required: ['id', 'factors'], properties: { id: { type: 'string' }, factors: { type: 'object' } } } } },
 };
 const RANK_SCHEMA = { type: 'object', required: ['ranked'], properties: { ranked: { type: 'number' } } };
-const FINALIZE_SCHEMA = { type: 'object', required: ['finalists', 'hybrids'], properties: { finalists: { type: 'number' }, hybrids: { type: 'number' } } };
+const FINALIZE_SCHEMA = { type: 'object', required: ['finalists', 'hybrids', 'quota_remaining'], properties: { finalists: { type: 'number' }, hybrids: { type: 'number' }, quota_remaining: { type: ['number', 'null'] } } };
 const PERSIST_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } };
 
 // Validate the four args off the wire; everything else comes from disk via the CLI.
@@ -165,6 +174,7 @@ if (!Number.isInteger(quotaFloor)) throw new Error('plan-trip: quotaFloor must b
 const project = args.project;
 const slug = args.slug;
 const CLI = `uv run --project ${project} getaway`;
+const refreshFlag = refresh ? ' --refresh' : '';
 
 // Every value below is re-validated with its regex const immediately before it is spliced into a prompt.
 const gLabel = (v) => { if (!LABEL.test(v)) throw new Error(`plan-trip: unsafe sweep label ${v}`); return v; };
@@ -172,10 +182,13 @@ const gFactor = (v) => { if (!FACTOR.test(v)) throw new Error(`plan-trip: unsafe
 const gId = (v) => { if (typeof v !== 'string' || !AVAIL_ID.test(v)) throw new Error(`plan-trip: unsafe availability id ${v}`); return v; };
 const gIata = (v) => { if (!IATA.test(v)) throw new Error(`plan-trip: unsafe airport code ${v}`); return v; };
 const gDate = (v) => { if (!DATE.test(v)) throw new Error(`plan-trip: unsafe date ${v}`); return v; };
+const gCabin = (v) => { if (!CABIN.test(v)) throw new Error(`plan-trip: unsafe cabin ${v}`); return v; };
 const uniq = (xs) => [...new Set(xs)];
 
 const skipped = [];
-const stale = (key) => refresh || context.phaseMap[key] !== 'fresh';
+// The freshness snapshot the workflow branches on; re-read after a sweep that actually ran (Phase 1).
+let phaseMap;
+const stale = (key) => refresh || phaseMap[key] !== 'fresh';
 
 let quotaRemaining = null;
 let quotaLow = false;
@@ -201,11 +214,13 @@ const persist = (name, phaseKey, phaseTitle, json, deps) =>
 // ── Phase 0: Load ──────────────────────────────────────────────────────────
 phase('Load');
 const context = await agent(
-  `Run these two commands and shape their output into one CONTEXT object — run no other getaway command.\n` +
+  `Run these three commands and shape their output into one CONTEXT object — run no other getaway command.\n` +
   `1. ${CLI} trip status ${slug}\n` +
   `   Emits JSON with keys: slug, sweep_labels, hybrid, round_trip, active_factors, max_finalists, party, phase_map, quota.\n` +
   `2. ${CLI} quota check --floor ${quotaFloor}\n` +
-  `   Exits 0 when quota is at or above the floor, 1 when it is below, 4 when no quota has been recorded yet.\n\n` +
+  `   Exits 0 when quota is at or above the floor, 1 when it is below, 4 when no quota has been recorded yet.\n` +
+  `3. ${CLI} trip show ${slug}\n` +
+  `   Emits the trip record, including cabin (one of economy/premium/business/first) and window {start, end, trip_length_days}.\n\n` +
   `Return CONTEXT:\n` +
   `- sweepLabels: for every label in sweep_labels EXCEPT the reserved "onward" label, {label, fresh: phase_map["sweep:"+label] === "fresh"}\n` +
   `- hybrid: true when status.hybrid is a non-null object, else false\n` +
@@ -215,14 +230,22 @@ const context = await agent(
   `- party: status.party\n` +
   `- phaseMap: status.phase_map verbatim\n` +
   `- quotaRemaining: status.quota is null ? null : status.quota.remaining\n` +
-  `- quotaLow: true ONLY when command 2 exited 1; false on exit 0 or exit 4.`,
+  `- quotaLow: true ONLY when command 2 exited 1; false on exit 0 or exit 4.\n` +
+  `- cabin: the seats.aero cabin letter for command 3's cabin — economy→"Y", premium→"W", business→"J", first→"F"\n` +
+  `- returnStart: command 3's window.end, a YYYY-MM-DD string\n` +
+  `- returnEnd: command 3's window.end advanced by window.trip_length_days days, a YYYY-MM-DD string.`,
   { label: 'load', phase: 'Load', schema: CONTEXT_SCHEMA },
 );
 quotaRemaining = context.quotaRemaining;
 quotaLow = context.quotaLow;
+phaseMap = context.phaseMap;
 const activeFactors = context.activeFactors.map(gFactor);
 const hybrid = context.hybrid;
 const maxFinalists = context.maxFinalists;
+const party = context.party;
+const cabin = gCabin(context.cabin);
+const returnStart = gDate(context.returnStart);
+const returnEnd = gDate(context.returnEnd);
 const classifyProduct = activeFactors.includes('seat_quality');
 // Active judgment factors that own an Evidence collector; their evidence files exist by Assess time.
 const activeCollectors = uniq(activeFactors.map((f) => COLLECTOR_OF[f]).filter(Boolean));
@@ -234,16 +257,27 @@ for (const s of context.sweepLabels) if (s.fresh && !refresh) skipped.push(`swee
 if (quotaLow) sweepTargets = sweepTargets.slice(0, 1); // quota-low: only the first (bucket) label
 if (sweepTargets.length) {
   phase('Sweep');
-  const flag = refresh ? ' --refresh' : '';
   const sweeps = await pipeline(sweepTargets, (label) =>
     agent(
       `Run exactly this one command, then report its JSON — run no other getaway command:\n` +
-      `${CLI} sweep run ${slug} ${gLabel(label)}${flag}\n` +
-      `It ingests one seats.aero call into the cache and writes the sweep artifact. Return label, rows, and quota_remaining from its JSON (quota_remaining may be null when no header was seen).`,
+      `${CLI} sweep run ${slug} ${gLabel(label)}${refreshFlag}\n` +
+      `It ingests one seats.aero call into the cache and writes the sweep artifact. Return label, rows, quota_remaining (may be null when no header was seen), and skipped (true when the sweep was still fresh and self-skipped, spending zero quota).`,
       { label: `sweep:${label}`, phase: 'Sweep', schema: SWEEP_SCHEMA },
     ),
   );
   for (const s of sweeps) foldQuota(s.quota_remaining);
+  // A sweep that actually ran re-ingests rows and stales the phases downstream of it; the Load
+  // snapshot would still call them fresh, so re-read the phase map. When every sweep self-skipped
+  // (nothing new ingested) the Load snapshot still holds and we skip the extra call.
+  if (sweeps.some((s) => !s.skipped)) {
+    const refreshed = await agent(
+      `Run exactly this one command and return its phase map — run no other getaway command:\n` +
+      `${CLI} trip status ${slug}\n` +
+      `Return {"phaseMap": status.phase_map verbatim}.`,
+      { label: 'status:refresh', phase: 'Sweep', schema: STATUS_SCHEMA },
+    );
+    phaseMap = refreshed.phaseMap;
+  }
 }
 
 // ── Phase 2: Shortlist ─────────────────────────────────────────────────────
@@ -280,7 +314,7 @@ if (hybrid && !quotaLow) {
   phase('Onward');
   const onward = await agent(
     `Run exactly these two commands in order, then return their combined JSON — run no other getaway command.\n` +
-    `1. ${CLI} sweep run ${slug} onward\n` +
+    `1. ${CLI} sweep run ${slug} onward${refreshFlag}\n` +
     `   The onward sweep; it self-skips (spending zero quota) when still fresh, otherwise spends one seats.aero call.\n` +
     `2. ${CLI} shortlist onward ${slug}\n` +
     `   Offline onward minima and bridge pairs.\n\n` +
@@ -338,14 +372,14 @@ if (expandIds.length && stale('expand')) {
   const records = await pipeline(expandIds, (id) =>
     agent(
       `Expand one availability id into bookable truth — run only the commands named here.\n` +
-      `Run: ${CLI} expand ${gId(id)}\n` +
-      `It returns id, mileage (bookable integer miles), total_taxes, taxes_currency, remaining_seats, total_duration, segments (each with origin, dest, departs_local, arrives_local, flight_number, carrier, aircraft, duration_minutes, cabin as a Y/W/J/F letter), layovers (minutes), and booking_links.\n` +
+      `Run: ${CLI} expand ${gId(id)} --cabin ${gCabin(cabin)}\n` +
+      `It returns id, mileage (bookable integer miles), total_taxes, taxes_currency, remaining_seats (bookable seats left in the cabin, or null), total_duration, segments (each with origin, dest, departs_local, arrives_local, flight_number, carrier, aircraft, duration_minutes, cabin as a Y/W/J/F letter), layovers (minutes), and booking_links (each {label, link, primary}).\n` +
       (classifyProduct
         ? `Then classify the hard product: pick the longest-duration segment whose cabin letter is "J" (business); if one exists, run\n` +
           `${CLI} quality classify --airline <that segment's carrier> --aircraft <that segment's aircraft>\n` +
           `and set product to its verdict and product_note to its product name plus its note; leave product "verify" when the verdict is verify and "unknown" when no business segment exists.\n`
         : ``) +
-      `Return: id "${id}", mileage, total_taxes, taxes_currency, remaining_seats, total_duration, segments, layovers, booking (the primary booking link's url, else the first link's url)` +
+      `Return: id "${id}", mileage, total_taxes, taxes_currency, remaining_seats, seats (remaining_seats when the expand output reports a non-null remaining_seats, omit this key otherwise), total_duration, segments, layovers, booking (the primary booking link's link, else the first link's link)` +
       (classifyProduct ? `, product, product_note.` : `.`),
       { label: `expand:${id}`, phase: 'Expand', schema: EXPAND_SCHEMA },
     ),
@@ -391,8 +425,10 @@ const COLLECTORS = {
       `Flag transit-visa and entry risk against the traveler's documents — WebSearch only, zero seats.aero quota, run only the getaway commands named here.\n` +
       `Read the traveler documents (passports, residency, standing visas):\n${CLI} prefs show\n` +
       `Read the expanded legs — the origin of every segment after the first is a same-ticket connection airport:\n${CLI} trip artifact read ${slug} expand.json\n` +
-      `Read the hybrid gateways — each candidate's dest is a separate-ticket landside self-transfer, an entry rather than airside transit:\n${CLI} trip artifact read ${slug} shortlist-gateway.json\n` +
-      `For each unique connection airport determine transit (airside) visa risk; for each gateway determine entry risk. Prefer official government and airport sources.\n` +
+      (hybrid
+        ? `Read the hybrid gateways — each candidate's dest is a separate-ticket landside self-transfer, an entry rather than airside transit:\n${CLI} trip artifact read ${slug} shortlist-gateway.json\n`
+        : ``) +
+      `For each unique connection airport determine transit (airside) visa risk${hybrid ? '; for each gateway determine entry risk' : ''}. Prefer official government and airport sources.\n` +
       `Return transit: an array of {airport, kind ("transit" or "entry"), risk ("none", "possible", or "required"), note}.`,
   },
   return: {
@@ -400,9 +436,10 @@ const COLLECTORS = {
     prompt:
       `Check return-direction award viability for each finalist — zero API calls, cache only, run only the getaway commands named here.\n` +
       `Read the finalists: ${CLI} trip artifact read ${slug} shortlist.json\n` +
-      `For each finalist query the cache for return-direction space (dest -> origin): ${CLI} cache query --origin <dest> --dest <origin>\n` +
-      `A finalist whose return direction has no cached rows is unverified — flag it rather than spending quota.\n` +
-      `Return return: an array of {id, dest, origin, verified (true when cached return rows exist), rows (count), note}.`,
+      `For each finalist query the cache for return-direction space, reversing origin and dest and constraining the return window, cabin, party seats, and freshness:\n` +
+      `${CLI} cache query --origin <dest> --dest <origin> --date-start ${gDate(returnStart)} --date-end ${gDate(returnEnd)} --cabin ${gCabin(cabin)} --min-seats ${party} --fresh-within 24h\n` +
+      `An empty result means the return direction is unverified — flag that finalist, never drop it or spend quota to backfill.\n` +
+      `Return return: an array of {id, dest, origin, verified (true when the query returned rows), rows (count), note}.`,
   },
 };
 const staleCollectors = activeCollectors.filter((c) => {
@@ -430,6 +467,7 @@ if (candidates.length && stale('assess')) {
   const assessment = await agent(
     `Weigh every finalist against the trip's judgment factors and return per-finalist per-factor verdicts — zero seats.aero quota, run only the getaway commands named here.\n` +
     `Read the trip's guidance (use judgment.guidance and judgment.factors):\n${CLI} trip show ${slug}\n` +
+    `Read the traveler's layover preferences (use layovers.style, layovers.min_connection_minutes, layovers.prefer_cities, layovers.avoid_cities):\n${CLI} prefs show\n` +
     `Read the finalists:\n${CLI} trip artifact read ${slug} shortlist.json\n` +
     `Read the expanded legs:\n${CLI} trip artifact read ${slug} expand.json\n` +
     (evidenceReads ? `Read the collected evidence:\n${evidenceReads}\n` : ``) +
@@ -459,11 +497,14 @@ await agent(
 // ── Phase 9: Finalize ──────────────────────────────────────────────────────
 phase('Finalize');
 const finalized = await agent(
-  `Run exactly this one offline command (zero seats.aero quota) and return its counts — run no other getaway command:\n` +
-  `${CLI} trip finalize ${slug}\n` +
-  `It merges directs and composes hybrids into finalists.json. Return {"finalists": <directs length>, "hybrids": <hybrids length>}.`,
+  `Run exactly these two commands in order (zero seats.aero quota), then return their combined result — run no other getaway command.\n` +
+  `1. ${CLI} trip finalize ${slug}\n` +
+  `   It merges directs and composes hybrids into finalists.json.\n` +
+  `2. ${CLI} quota\n` +
+  `   It prints the latest recorded quota as JSON ({endpoint, remaining, ...}), or exits 4 when no quota has ever been recorded.\n\n` +
+  `Return {"finalists": <command 1's directs length>, "hybrids": <command 1's hybrids length>, "quota_remaining": <command 2's remaining, or null when it exited 4>}.`,
   { label: 'finalize', phase: 'Finalize', schema: FINALIZE_SCHEMA },
 );
 
-log(`plan-trip ${slug}: ${finalized.finalists} finalist(s), ${finalized.hybrids} hybrid(s), quota ${quotaRemaining ?? 'unknown'}`);
-return { slug, finalists: finalized.finalists, hybrids: finalized.hybrids, quota: quotaRemaining, skipped };
+log(`plan-trip ${slug}: ${finalized.finalists} finalist(s), ${finalized.hybrids} hybrid(s), quota ${finalized.quota_remaining ?? 'unknown'}`);
+return { slug, finalists: finalized.finalists, hybrids: finalized.hybrids, quota: finalized.quota_remaining, skipped };

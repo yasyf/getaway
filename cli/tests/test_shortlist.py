@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -50,6 +51,116 @@ def run(slug: str, rows: list[dict], gateway: bool = False, label: str = "asia")
 
 def ids(doc: dict) -> list[str]:
     return [c["id"] for c in doc["candidates"]]
+
+
+def onward_row(
+    rid: str, origin: str, dest: str, date: str, mileage: str, airlines: str = "NH"
+) -> dict:
+    return api_row(
+        rid, origin, dest, date, "aeroplan",
+        {"J": {"mileage": mileage, "seats": 2, "airlines": airlines}},
+    )
+
+
+def gw(cid: str, dest: str, date: str, mileage: int) -> dict:
+    return {
+        "id": cid, "date": date, "origin": "SFO", "dest": dest, "source": "united",
+        "mileage": mileage, "seats": 2, "airlines": "UA", "direct": True,
+        "soft": False, "departure_day_match": False,
+    }
+
+
+def write_gateways(slug: str, cands: list[dict]) -> None:
+    trips.artifact_write(
+        slug, "shortlist-gateway.json",
+        json.dumps({"candidates": cands, "considered": len(cands)}),
+    )
+
+
+def run_onward(slug: str, gateway_cands: list[dict], onward_rows: list[dict]) -> dict:
+    write_gateways(slug, gateway_cands)
+    seed(slug, "onward", "search", onward_rows, clock())
+    return shortlist.onward_minima(slug, now=clock())
+
+
+def test_direct_mode_filters_origin_outside_plan(base: str) -> None:
+    # A dest-region program sweep can return rows from any origin; a row not departing an origin
+    # in plan.origins is infeasible and must be dropped even when it is the cheapest.
+    rows = [
+        api_row("HOME", "SFO", "NRT", "2026-09-05", "united", biz("80000")),
+        api_row("FOREIGN", "FRA", "NRT", "2026-09-06", "united", biz("70000")),
+    ]
+    doc = run(base, rows)
+    assert ids(doc) == ["HOME"]
+
+
+def test_gateway_mode_filters_origin_outside_plan(base: str) -> None:
+    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+    rows = [
+        api_row("G-HOME", "SFO", "NRT", "2026-09-05", "united", biz("80000")),
+        api_row("G-FOREIGN", "FRA", "NRT", "2026-09-06", "united", biz("70000")),
+    ]
+    doc = run(base, rows, gateway=True, label="gateways")
+    assert ids(doc) == ["G-HOME"]
+
+
+def test_onward_drops_rows_before_earliest_gateway_date(base: str) -> None:
+    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+    # gateway award to NRT arrives 09-12; an onward NRT->OKA on 09-10 departs before arrival.
+    doc = run_onward(
+        base,
+        [gw("GW", "NRT", "2026-09-12", 80000)],
+        [
+            onward_row("EARLY", "NRT", "OKA", "2026-09-10", "30000"),
+            onward_row("LATER", "NRT", "OKA", "2026-09-13", "35000"),
+        ],
+    )
+    keys = {(m["gateway"], m["onward_dest"], m["date"], m["id"]) for m in doc["minima"]}
+    assert keys == {("NRT", "OKA", "2026-09-13", "LATER")}
+
+
+def test_onward_keys_minima_per_date(base: str) -> None:
+    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+    doc = run_onward(
+        base,
+        [gw("GW", "NRT", "2026-09-10", 80000)],
+        [
+            onward_row("D13", "NRT", "OKA", "2026-09-13", "35000"),
+            onward_row("D15", "NRT", "OKA", "2026-09-15", "40000"),
+        ],
+    )
+    # One minimum per compatible date — not a single (gateway, dest, cabin) collapse.
+    assert sorted(m["date"] for m in doc["minima"]) == ["2026-09-13", "2026-09-15"]
+
+
+def test_onward_bridge_pairs_carry_each_onward_date(base: str) -> None:
+    # Compose joins minima and bridge on a shared (gateway, dest, date), so bridge_pairs carry the
+    # onward-leg date (>= earliest gateway arrival), one per distinct feasible onward date.
+    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+    doc = run_onward(
+        base,
+        [gw("GW", "NRT", "2026-09-08", 80000)],
+        [
+            onward_row("OW1", "NRT", "OKA", "2026-09-10", "30000"),
+            onward_row("OW2", "NRT", "OKA", "2026-09-14", "35000"),
+        ],
+    )
+    pairs = {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]}
+    assert pairs == {("NRT", "OKA", "2026-09-10"), ("NRT", "OKA", "2026-09-14")}
+
+
+def test_onward_drops_all_hard_avoided_airlines(base: str) -> None:
+    prefs.set_patch({"avoid_airlines": [{"code": "AA", "name": "American", "strength": "hard"}]})
+    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+    doc = run_onward(
+        base,
+        [gw("GW", "NRT", "2026-09-05", 80000)],
+        [
+            onward_row("ALLAA", "NRT", "OKA", "2026-09-10", "30000", airlines="AA"),
+            onward_row("CLEAN", "NRT", "OKA", "2026-09-10", "40000", airlines="UA"),
+        ],
+    )
+    assert {m["id"] for m in doc["minima"]} == {"CLEAN"}
 
 
 def test_soft_avoid_sorts_never_filters(base: str) -> None:

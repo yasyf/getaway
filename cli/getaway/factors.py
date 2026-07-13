@@ -101,8 +101,11 @@ def _is_expiring(expires: str, now: Callable[[], dt.datetime]) -> bool:
 def _trip_credits_fact(cand: Row, prefs_doc: dict, now: Callable[[], dt.datetime]) -> list[dict]:
     airlines = {a for a in cand["airlines"].split(", ") if a}
     program = cand["source"]
+    today = now().date()
     matches = []
     for credit in prefs_doc["credits"]:
+        if dt.date.fromisoformat(credit["expires"]) < today:
+            continue
         issuer = credit["issuer"]
         if issuer.lower() == program.lower() or issuer.upper() in airlines:
             matches.append(
@@ -148,6 +151,39 @@ def _verdict_score(factors_map: dict, factor_ids: set[str]) -> int:
     )
 
 
+def _affordability_verdict(fact: dict) -> str:
+    if fact["covered"]:
+        return "promote"
+    if any(path["covers"] for path in fact["transfer_paths"]):
+        return "neutral"
+    return "demote"
+
+
+def _deterministic_verdicts(cand: Row, facts: dict, active: set[str]) -> dict:
+    # points_purchase and departure_days stay note-tier annotations, never verdicts.
+    verdicts = {"affordability": _affordability_verdict(facts["afford"])}
+    if cand["soft"]:
+        verdicts["airline_preference"] = "demote"
+    if "status_earning" in active:
+        fact = facts["status_earning"]
+        if fact["matches_goal"] and fact["earns_on_redemption"]:
+            verdicts["status_earning"] = "promote"
+    if "trip_credits" in active and facts["trip_credits"]:
+        verdicts["trip_credits"] = "promote"
+    return {fid: {"verdict": verdict} for fid, verdict in verdicts.items()}
+
+
+def _infeasible(record: Row | None, party: int, ceiling: int | None) -> str | None:
+    if record is None:
+        return None
+    seats = record.get("seats")
+    if seats and seats < party:  # absent or zero seat data passes
+        return f"expanded seats {seats} below party {party}"
+    if ceiling is not None and record["mileage"] > ceiling:
+        return f"expanded mileage {record['mileage']} above ceiling {ceiling}"
+    return None
+
+
 def _reorder(entries: list[Row], tiers: dict, active: set[str]) -> list[Row]:
     entries.sort(key=lambda e: e["_mileage"])
     primary = {fid for fid, tier in tiers.items() if tier == "primary" and fid in active}
@@ -163,9 +199,9 @@ def _reorder(entries: list[Row], tiers: dict, active: set[str]) -> list[Row]:
         band = entries[i:j]
         band.sort(
             key=lambda e: (
-                _verdict_score(e["factors"], primary),
+                _verdict_score(e["_verdicts"], primary),
                 1 if e["_product"] == "barely" else 0,
-                _verdict_score(e["factors"], secondary),
+                _verdict_score(e["_verdicts"], secondary),
                 e["_mileage"],
             )
         )
@@ -178,6 +214,8 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
+    party = trip["party"]
+    ceiling = plan.get("mileage_ceiling")
     profile = derive_profile(trip, prefs_doc, slug=slug)
     active = {fid for fid, spec in profile.items() if spec["active"]}
     tiers = _tiers(trip)
@@ -186,6 +224,7 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     assess = _optional_artifact(slug, "assess.json") or {}
 
     entries: list[Row] = []
+    dropped: list[Row] = []
     for row in shortlist_doc["candidates"]:
         record = expand.get(row["id"])
         # Ranking currency is the bookable trip mileage once a candidate is expanded; an
@@ -194,11 +233,19 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
             cand = {**row, "mileage": record["mileage"], "sweep_mileage": row["mileage"]}
         else:
             cand = row
+        # The shortlist's two hard feasibility constraints, re-applied against expanded truth.
+        reason = _infeasible(record, party, ceiling)
+        if reason is not None:
+            dropped.append({"candidate": cand, "reason": reason})
+            continue
+        facts = _facts(cand, prefs_doc, active, now)
+        judged = assess.get(cand["id"], {})
         entries.append(
             {
                 "candidate": cand,
-                "factors": assess.get(cand["id"], {}),
-                "facts": _facts(cand, prefs_doc, active, now),
+                "factors": judged,
+                "facts": facts,
+                "_verdicts": {**_deterministic_verdicts(cand, facts, active), **judged},
                 "_product": (record or {}).get("product"),
                 "_mileage": cand["mileage"],
             }
@@ -208,7 +255,8 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
         {"candidate": e["candidate"], "factors": e["factors"], "facts": e["facts"]}
         for e in ranked
     ]
-    trips.artifact_write(slug, "rank.json", json.dumps(out, separators=(",", ":")))
+    doc = {"ranked": out, "dropped": dropped}
+    trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))
     deps = trips.existing_artifacts(slug, ["shortlist.json", "expand.json", "assess.json"])
     trips.phase_done(slug, "rank", deps, now=now)
     return out
@@ -223,7 +271,7 @@ def _compose_hybrids(slug: str, trip: dict, store: Any) -> list[dict]:
         gateway_by_dest.setdefault(cand["dest"], cand)
     onward_doc = json.loads(trips.artifact_read(slug, "onward.json"))
     minima_by_key = {
-        (m["gateway"], m["onward_dest"], m["cabin"]): m for m in onward_doc["minima"]
+        (m["gateway"], m["onward_dest"], m["date"], m["cabin"]): m for m in onward_doc["minima"]
     }
     bridge_doc = _optional_artifact(slug, "bridge.json") or {"quotes": []}
     bridge_by_pair = {(q["gateway"], q["onward_dest"]): q for q in bridge_doc["quotes"]}
@@ -246,7 +294,7 @@ def _compose_hybrids(slug: str, trip: dict, store: Any) -> list[dict]:
                 "onward": {"mode": "cash", **cash},
             }
         )
-        onward_award = minima_by_key.get((gateway, dest, cash["cabin"]))
+        onward_award = minima_by_key.get((gateway, dest, pair["date"], cash["cabin"]))
         if onward_award is not None:
             composed.append(
                 {
@@ -278,7 +326,7 @@ def _compose_hybrids(slug: str, trip: dict, store: Any) -> list[dict]:
 def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     trip = trips.show(slug)
     plan = trip["plan"]
-    ranked = json.loads(trips.artifact_read(slug, "rank.json"))
+    ranked = json.loads(trips.artifact_read(slug, "rank.json"))["ranked"]
     store = connect(cache_db(), now=now)
     directs = [
         {

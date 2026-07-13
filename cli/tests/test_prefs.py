@@ -244,6 +244,30 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
             {"documents": {"passports": "US", "residency": [], "visas": []}},
             id="documents-section-not-list",
         ),
+        pytest.param(
+            {"documents": {"passports": [5], "residency": [], "visas": []}},
+            id="documents-section-element-not-string",
+        ),
+        pytest.param(
+            {"balances": {"programs": [], "transferable": {}}},
+            id="balances-programs-not-dict",
+        ),
+        pytest.param(
+            {"balances": {"programs": {}, "transferable": []}},
+            id="balances-transferable-not-dict",
+        ),
+        pytest.param(
+            {"balances": {"programs": {"united": "lots"}, "transferable": {}}},
+            id="balances-program-value-not-int",
+        ),
+        pytest.param(
+            {"balances": {"programs": {"united": True}, "transferable": {}}},
+            id="balances-program-value-bool-not-int",
+        ),
+        pytest.param(
+            {"balances": {"programs": {}, "transferable": {"amex": 1.5}}},
+            id="balances-transferable-value-not-int",
+        ),
     ],
 )
 def test_set_patch_rejects_invalid(ready: Path, patch: dict) -> None:
@@ -253,6 +277,13 @@ def test_set_patch_rejects_invalid(ready: Path, patch: dict) -> None:
 
 def test_set_patch_cli_rejects_invalid_with_usage_exit(ready: Path, runner: CliRunner) -> None:
     result = runner.invoke(prefs.prefs_group, ["set"], input='{"nope": 1}')
+    assert result.exit_code == 64
+
+
+def test_set_patch_cli_malformed_json_exits_usage(ready: Path, runner: CliRunner) -> None:
+    # A stdin body that is not valid JSON maps to a usage error (exit 64), not a raw
+    # JSONDecodeError traceback (exit 1).
+    result = runner.invoke(prefs.prefs_group, ["set"], input="{not valid json")
     assert result.exit_code == 64
 
 

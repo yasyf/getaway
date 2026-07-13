@@ -143,9 +143,12 @@ def do_rank(
     assess: dict | None = None,
     expand: dict | None = None,
     max_finalists: int = 6,
+    mileage_ceiling: int | None = None,
 ) -> list[dict]:
     plan = {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}],
             "max_finalists": max_finalists}
+    if mileage_ceiling is not None:
+        plan["mileage_ceiling"] = mileage_ceiling
     trips.set_patch(slug, {"plan": plan})
     shortlist_doc = {"candidates": candidates, "considered": len(candidates)}
     trips.artifact_write(slug, "shortlist.json", json.dumps(shortlist_doc))
@@ -202,6 +205,79 @@ def test_secondary_breaks_primary_ties(biz_trip: str) -> None:
               "B": {"layovers": {"verdict": "promote", "evidence": "nonstop"}}}
     ranked = do_rank(biz_trip, candidates, assess=assess)
     assert order(ranked) == ["B", "A"]
+
+
+def test_funded_preferred_outranks_unfunded_soft_avoided(biz_trip: str) -> None:
+    # The review scenario: with affordability primary and airline_preference secondary, a
+    # funded preferred 82k option must outrank an unfunded soft-avoided 80k one in the band.
+    prefs.set_balance("united", 90000)
+    candidates = [cand("UNFUNDED", 80000, source="delta", soft=True), cand("FUNDED", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["FUNDED", "UNFUNDED"]
+
+
+def test_soft_avoid_sinks_within_band(biz_trip: str) -> None:
+    candidates = [cand("SOFT", 80000, soft=True), cand("CLEAN", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["CLEAN", "SOFT"]  # secondary demote-equivalent, never a filter
+
+
+def test_transfer_path_coverage_is_neutral_not_demote(biz_trip: str) -> None:
+    prefs.set_balance("chase", 100000)  # covers the united shortfall via the 1:1 transfer path
+    candidates = [cand("UNFUNDED", 80000, source="delta"), cand("TRANSFER", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["TRANSFER", "UNFUNDED"]
+
+
+def test_status_earning_toward_goal_promotes_within_band(biz_trip: str) -> None:
+    prefs.set_patch(
+        {"status_goals": [{"program": "united", "target": "1K", "by": "2026-12-31"}]}
+    )
+    candidates = [cand("OTHER", 80000, source="delta"), cand("GOAL", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["GOAL", "OTHER"]
+
+
+def test_matching_credit_promotes_when_retiered_secondary(biz_trip: str) -> None:
+    prefs.credit_add("voucher", "united", 250, "USD", "2026-12-01")
+    trips.set_patch(
+        biz_trip, {"judgment": {"factors": {"trip_credits": {"priority": "secondary"}}}}
+    )
+    candidates = [cand("NOCREDIT", 80000, source="delta"), cand("CREDIT", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["CREDIT", "NOCREDIT"]
+
+
+def test_deterministic_note_tier_never_reorders(biz_trip: str) -> None:
+    prefs.credit_add("voucher", "united", 250, "USD", "2026-12-01")
+    candidates = [cand("NOCREDIT", 80000, source="delta"), cand("CREDIT", 82000)]
+    ranked = do_rank(biz_trip, candidates)
+    assert order(ranked) == ["NOCREDIT", "CREDIT"]  # trip_credits stays note tier by default
+
+
+def test_expanded_seats_below_party_dropped(biz_trip: str) -> None:
+    candidates = [cand("COLLAPSED", 80000), cand("KEPT", 82000)]
+    expand = {"COLLAPSED": {"mileage": 80000, "seats": 1}, "KEPT": {"mileage": 82000, "seats": 2}}
+    ranked = do_rank(biz_trip, candidates, expand=expand)  # biz_trip party is 2
+    assert order(ranked) == ["KEPT"]
+    doc = json.loads(trips.artifact_read(biz_trip, "rank.json"))
+    assert [d["candidate"]["id"] for d in doc["dropped"]] == ["COLLAPSED"]
+    assert "seats" in doc["dropped"][0]["reason"]
+
+
+def test_expanded_mileage_above_ceiling_dropped(biz_trip: str) -> None:
+    candidates = [cand("BLOWN", 90000), cand("KEPT", 95000)]
+    expand = {"BLOWN": {"mileage": 130000}, "KEPT": {"mileage": 95000}}
+    ranked = do_rank(biz_trip, candidates, expand=expand, mileage_ceiling=120000)
+    assert order(ranked) == ["KEPT"]
+    doc = json.loads(trips.artifact_read(biz_trip, "rank.json"))
+    assert [d["candidate"]["id"] for d in doc["dropped"]] == ["BLOWN"]
+    assert doc["dropped"][0]["candidate"]["mileage"] == 130000  # carries the expanded mileage
+
+
+def test_absent_expand_seat_data_passes(biz_trip: str) -> None:
+    ranked = do_rank(biz_trip, [cand("A", 80000)], expand={"A": {"mileage": 80000}})
+    assert order(ranked) == ["A"]  # absent seat data still passes per doctrine
 
 
 def test_ranking_currency_uses_bookable_mileage(biz_trip: str) -> None:
@@ -272,3 +348,9 @@ def test_trip_credits_fact_matches_issuer_and_flags_expiry(biz_trip: str) -> Non
     matches = ranked[0]["facts"]["trip_credits"]
     assert [m["issuer"] for m in matches] == ["united"]
     assert matches[0]["expiring"] is True
+
+
+def test_expired_credit_never_matches(biz_trip: str) -> None:
+    prefs.credit_add("voucher", "united", 250, "USD", "2026-07-01")  # expired before frozen now
+    ranked = do_rank(biz_trip, [cand("A", 80000, source="united")])
+    assert ranked[0]["facts"]["trip_credits"] == []
