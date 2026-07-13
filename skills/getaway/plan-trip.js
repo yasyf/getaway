@@ -1,758 +1,469 @@
 export const meta = {
-  name: 'getaway-plan-trip',
+  name: 'plan-trip',
   description:
-    'Award-trip planning fan-out: parallel seats.aero sweeps, an offline jq shortlist, per-finalist trip expansion, optional vibe enrichment, and transit-visa flags for connections and self-transfer gateways.',
-  whenToUse:
-    'Invoked by the getaway skill for planning asks spanning 2+ destination buckets or programs. Args come from stored preferences plus AskUserQuestion answers. Returns the merged finalists; the calling session builds the cc-present board.',
+    'Award-trip planning fan-out over the frozen getaway CLI: quota-aware seats.aero sweeps, offline SQL shortlists, optional hybrid gateway/onward/bridge stitching, per-finalist expansion, zero-quota evidence collectors, and a judgment-shaped assess/rank/finalize tail. State lives on disk under ~/.getaway; phase checkpoints let a killed run resume without re-spending quota.',
   phases: [
-    { title: 'Sweep', detail: 'One agent per destination bucket or program runs a single seats.aero search/availability call into a scratchpad JSONL; a hybrid ask adds one gateway sweep from the origins to the gateway set.' },
-    { title: 'Shortlist', detail: 'Offline jq over the sweep files filters, dedups, and ranks the direct finalists, and separately shortlists each gateway\'s best award — zero API calls.' },
-    { title: 'Onward', detail: 'Hybrid only: one search from the top gateways to the onward destinations, jq-projected to per-(origin, dest, cabin) award minimums — the two-award-stitch sweep across every program in one call.' },
-    { title: 'Bridge', detail: 'Hybrid only: one fli agent per gateway-to-onward pair prices the cash hop — economy first, business when it runs past the cash-cabin cutoff — spending zero seats.aero quota.' },
-    { title: 'Expand', detail: 'One agent per direct finalist and per hybrid award leg expands its trip ID into bookable truth at that leg\'s cabin: integer miles, exact taxes, segments, booking link — and on a business leg, classifies the longest business segment against the seat-quality table.' },
-    { title: 'Verify', detail: 'Business only: one WebSearch agent per Verify-marked or table-absent business leg — direct finalist or hybrid award leg — pins the hard product against the live seat map before the re-rank truncates.' },
-    { title: 'Judge', detail: 'One agent reads every connection against the layover preferences — duration bands, city appeal from model knowledge, WebSearch only for a 6h+ layover whose exit-worthiness is uncertain — and verdicts each finalist; verdicts reorder only within a mileage band. Zero quota.' },
-    { title: 'Transit', detail: 'Documents only: one WebSearch agent per unique same-ticket connection airport and per hybrid gateway (a separate-ticket self-transfer, so an entry check) flags transit-visa or entry risk against the traveler\'s documents — no quota spent.' },
-    { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per direct and onward destination adds weather, visa, and appeal color — no quota spent.' },
+    { title: 'Load', detail: 'One agent reads trip status and the quota floor into a CONTEXT the workflow branches on.' },
+    { title: 'Sweep', detail: 'One agent per stale sweep label spends one seats.aero call; low quota trims to the first bucket label.' },
+    { title: 'Shortlist', detail: 'Offline SQL shortlist of direct finalists, plus a gateway shortlist on hybrid asks.' },
+    { title: 'Onward', detail: 'Hybrid and quota permitting: the onward sweep plus offline onward minima and bridge pairs.' },
+    { title: 'Bridge', detail: 'Hybrid and quota permitting: one fli cash-pricing agent per bridge pair, zero seats.aero quota.' },
+    { title: 'Expand', detail: 'One agent per unique finalist and hybrid leg id expands bookable truth and classifies business product.' },
+    { title: 'Evidence', detail: 'Heterogeneous parallel: one zero-quota collector per active judgment factor whose evidence phase is stale.' },
+    { title: 'Assess', detail: 'One agent turns artifacts and guidance into per-finalist per-factor verdicts with evidence lines.' },
+    { title: 'Rank', detail: 'The CLI applies deterministic facts and judgment tiers within mileage bands.' },
+    { title: 'Finalize', detail: 'The CLI merges directs and composes hybrids into the final finalists artifact.' },
   ],
 };
 
-const ABS_PATH = /^\/[^"`$;|&\n<>()\\]*$/;
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const IATA = /^[A-Z]{3}$/;
-const BUCKET = /^[a-z0-9-]+$/;
-const SOURCE = /^[a-z0-9_]+$/;
-const CABIN = /^[a-z]+$/;
-const AIRLINE = /^[A-Z0-9]{2}$/;
-const TRIP_ID = /^[A-Za-z0-9._-]+$/;
-const DOC = /^[A-Za-z0-9][A-Za-z0-9 ()./+-]*$/;
-const REGIONS = ['North America', 'South America', 'Africa', 'Asia', 'Europe', 'Oceania'];
-const CABIN_PREFIX = { economy: 'Y', premium: 'W', business: 'J', first: 'F' };
-const PRODUCT = ['suite', 'solid', 'dated', 'barely', 'verify', 'unknown'];
+// papercut 6d2e0ad: the harness sometimes hands args JSON-stringified; reparse (user-approved workaround).
+if (typeof args === 'string') args = JSON.parse(args);
 
+// The regexes double as the injection guard for every value spliced into an agent command line.
+const ABS_PATH = /^\/[^"`$;|&\n<>()\\]*$/;
+const SLUG = /^[a-z0-9][a-z0-9-]{1,63}$/;
+const LABEL = /^[a-z0-9][a-z0-9_-]*$/;
+const FACTOR = /^[a-z_]+$/;
+const AVAIL_ID = /^[A-Za-z0-9._-]+$/;
+const IATA = /^[A-Z]{3}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Active judgment factor -> Evidence-phase collector (mirrors cli/getaway/constants.py EVIDENCE_COLLECTORS).
+const COLLECTOR_OF = {
+  seat_quality: 'verify',
+  cash_anomaly: 'cash',
+  destination_context: 'context',
+  transit_risk: 'transit',
+  return_viability: 'return',
+};
+
+const CONTEXT_SCHEMA = {
+  type: 'object',
+  required: ['sweepLabels', 'hybrid', 'roundTrip', 'activeFactors', 'maxFinalists', 'party', 'phaseMap', 'quotaRemaining', 'quotaLow'],
+  properties: {
+    sweepLabels: {
+      type: 'array',
+      items: { type: 'object', required: ['label', 'fresh'], properties: { label: { type: 'string' }, fresh: { type: 'boolean' } } },
+    },
+    hybrid: { type: 'boolean' },
+    roundTrip: { type: 'boolean' },
+    activeFactors: { type: 'array', items: { type: 'string' } },
+    maxFinalists: { type: 'number' },
+    party: { type: 'number' },
+    phaseMap: { type: 'object' },
+    quotaRemaining: { type: ['number', 'null'] },
+    quotaLow: { type: 'boolean' },
+  },
+};
 const SWEEP_SCHEMA = {
   type: 'object',
-  required: ['rows', 'quota'],
-  properties: { rows: { type: 'number' }, quota: { type: 'number' }, note: { type: 'string' } },
+  required: ['label', 'rows'],
+  properties: { label: { type: 'string' }, rows: { type: 'number' }, quota_remaining: { type: ['number', 'null'] }, skipped: { type: 'boolean' } },
+};
+const CANDIDATE = {
+  type: 'object',
+  required: ['id', 'date', 'origin', 'dest', 'source', 'mileage', 'seats', 'airlines', 'direct'],
+  properties: {
+    id: { type: 'string' }, date: { type: 'string' }, origin: { type: 'string' }, dest: { type: 'string' },
+    source: { type: 'string' }, mileage: { type: 'number' }, seats: { type: ['number', 'null'] },
+    airlines: { type: 'string' }, direct: { type: 'boolean' }, soft: { type: 'boolean' }, departure_day_match: { type: 'boolean' },
+  },
 };
 const SHORTLIST_SCHEMA = {
   type: 'object',
-  required: ['rows', 'considered'],
-  properties: {
-    considered: { type: 'number' },
-    rows: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['id', 'date', 'origin', 'dest', 'source', 'mileage', 'seats', 'airlines', 'direct', 'soft'],
-        properties: {
-          id: { type: 'string' }, date: { type: 'string' }, origin: { type: 'string' }, dest: { type: 'string' },
-          source: { type: 'string' }, mileage: { type: 'number' }, seats: { type: 'number' },
-          airlines: { type: 'string' }, direct: { type: 'boolean' }, soft: { type: 'boolean' },
-        },
-      },
-    },
-  },
-};
-const TRIP_SCHEMA = {
-  type: 'object',
-  required: ['id', 'quota'],
-  properties: {
-    id: { type: 'string' }, mileageCost: { type: 'number' }, totalTaxes: { type: 'number' },
-    taxesCurrency: { type: 'string' }, remainingSeats: { type: 'number' }, flightNumbers: { type: 'string' },
-    segments: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['flightNumber', 'origin', 'dest', 'departsAt', 'arrivesAt', 'cabin', 'aircraft', 'durationMinutes', 'display'],
-        properties: {
-          flightNumber: { type: 'string' }, origin: { type: 'string' }, dest: { type: 'string' },
-          departsAt: { type: 'string' }, arrivesAt: { type: 'string' }, cabin: { type: 'string' },
-          aircraft: { type: 'string' }, durationMinutes: { type: 'number' }, display: { type: 'string' },
-        },
-      },
-    },
-    layovers: { type: 'array', items: { type: 'object', required: ['airport', 'minutes'], properties: { airport: { type: 'string' }, minutes: { type: 'number' } } } },
-    stops: { type: 'number' }, totalDurationMinutes: { type: 'number' }, bookingPrimary: { type: 'string' },
-    updatedAt: { type: 'string' }, quota: { type: 'number' },
-    longhaul: { type: ['string', 'null'] }, product: { enum: PRODUCT }, productNote: { type: 'string' },
-  },
-};
-const VERIFY_SCHEMA = {
-  type: 'object',
-  required: ['id', 'product', 'productNote'],
-  properties: {
-    id: { type: 'string' }, product: { enum: PRODUCT.filter(p => p !== 'verify') }, productNote: { type: 'string' },
-  },
-};
-const JUDGE_SCHEMA = {
-  type: 'object',
-  required: ['verdicts'],
-  properties: {
-    verdicts: { type: 'array', items: { type: 'object',
-      required: ['id', 'verdict', 'layoverNote'],
-      properties: { id: { type: 'string' }, verdict: { enum: ['promote', 'neutral', 'demote'] },
-        layoverNote: { type: 'string' }, cityNote: { type: 'string' } } } },
-  },
-};
-const ENRICH_SCHEMA = {
-  type: 'object',
-  required: ['dest', 'weather', 'visaNote', 'appeal'],
-  properties: { dest: { type: 'string' }, weather: { type: 'string' }, visaNote: { type: 'string' }, appeal: { type: 'string' } },
-};
-const TRANSIT_SCHEMA = {
-  type: 'object',
-  required: ['airport', 'risk', 'transitNote'],
-  properties: { airport: { type: 'string' }, risk: { enum: ['none', 'possible', 'required'] }, transitNote: { type: 'string' } },
+  required: ['candidates', 'considered'],
+  properties: { candidates: { type: 'array', items: CANDIDATE }, considered: { type: 'number' } },
 };
 const ONWARD_SCHEMA = {
   type: 'object',
-  required: ['rows', 'quota'],
+  required: ['minima', 'bridge_pairs'],
   properties: {
-    quota: { type: 'number' },
-    rows: {
+    quota_remaining: { type: ['number', 'null'] },
+    minima: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['origin', 'dest', 'cabin', 'id', 'date', 'source', 'mileage', 'seats'],
+        required: ['gateway', 'onward_dest', 'cabin', 'id', 'date', 'source', 'mileage'],
         properties: {
-          origin: { type: 'string' }, dest: { type: 'string' }, cabin: { type: 'string' },
-          id: { type: 'string' }, date: { type: 'string' }, source: { type: 'string' },
-          mileage: { type: 'number' }, seats: { type: 'number' },
+          gateway: { type: 'string' }, onward_dest: { type: 'string' }, cabin: { type: 'string' }, id: { type: 'string' },
+          date: { type: 'string' }, source: { type: 'string' }, mileage: { type: 'number' }, seats: { type: ['number', 'null'] },
           airlines: { type: 'string' }, direct: { type: 'boolean' },
         },
+      },
+    },
+    bridge_pairs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['gateway', 'onward_dest', 'cash_cutoff_minutes'],
+        properties: { gateway: { type: 'string' }, onward_dest: { type: 'string' }, cash_cutoff_minutes: { type: 'number' } },
       },
     },
   },
 };
 const BRIDGE_SCHEMA = {
   type: 'object',
-  required: ['gateway', 'dest', 'date', 'durationMinutes', 'cabin', 'price', 'currency', 'airline', 'flightNumber', 'stops'],
+  required: ['gateway', 'onward_dest', 'cabin', 'price', 'currency', 'stops', 'duration_minutes'],
   properties: {
-    gateway: { type: 'string' }, dest: { type: 'string' }, date: { type: 'string' },
-    durationMinutes: { type: 'number' }, cabin: { enum: ['economy', 'business'] },
-    price: { type: 'number' }, currency: { type: 'string' },
-    airline: { type: 'string' }, flightNumber: { type: 'string' }, stops: { type: 'number' },
+    gateway: { type: 'string' }, onward_dest: { type: 'string' }, cabin: { enum: ['economy', 'business'] },
+    price: { type: 'number' }, currency: { type: 'string' }, airline: { type: 'string' },
+    flight_number: { type: 'string' }, stops: { type: 'number' }, duration_minutes: { type: 'number' },
   },
 };
+const EXPAND_SCHEMA = {
+  type: 'object',
+  required: ['id', 'mileage', 'segments', 'layovers'],
+  properties: {
+    id: { type: 'string' }, mileage: { type: 'number' }, total_taxes: { type: ['number', 'null'] },
+    taxes_currency: { type: ['string', 'null'] }, remaining_seats: { type: ['number', 'null'] },
+    total_duration: { type: ['number', 'null'] }, segments: { type: 'array' }, layovers: { type: 'array' },
+    booking: { type: ['string', 'null'] }, product: { type: ['string', 'null'] }, product_note: { type: ['string', 'null'] },
+  },
+};
+const VERIFY_SCHEMA = {
+  type: 'object',
+  required: ['verify'],
+  properties: { verify: { type: 'array', items: { type: 'object', required: ['id', 'product'], properties: { id: { type: 'string' }, product: { type: 'string' }, note: { type: 'string' } } } } },
+};
+const CASH_SCHEMA = {
+  type: 'object',
+  required: ['cash'],
+  properties: { cash: { type: 'array', items: { type: 'object', required: ['id', 'anomaly'], properties: { id: { type: 'string' }, route: { type: 'string' }, cabin: { type: 'string' }, quoted: { type: ['number', 'null'] }, typical: { type: ['number', 'null'] }, currency: { type: 'string' }, anomaly: { type: 'boolean' }, note: { type: 'string' } } } } },
+};
+const CONTEXT_EV_SCHEMA = {
+  type: 'object',
+  required: ['context'],
+  properties: { context: { type: 'array', items: { type: 'object', required: ['dest', 'weather', 'appeal'], properties: { dest: { type: 'string' }, weather: { type: 'string' }, visa: { type: 'string' }, appeal: { type: 'string' }, events: { type: 'string' } } } } },
+};
+const TRANSIT_SCHEMA = {
+  type: 'object',
+  required: ['transit'],
+  properties: { transit: { type: 'array', items: { type: 'object', required: ['airport', 'kind', 'risk'], properties: { airport: { type: 'string' }, kind: { enum: ['transit', 'entry'] }, risk: { enum: ['none', 'possible', 'required'] }, note: { type: 'string' } } } } },
+};
+const RETURN_SCHEMA = {
+  type: 'object',
+  required: ['return'],
+  properties: { return: { type: 'array', items: { type: 'object', required: ['id', 'verified'], properties: { id: { type: 'string' }, dest: { type: 'string' }, origin: { type: 'string' }, verified: { type: 'boolean' }, rows: { type: 'number' }, note: { type: 'string' } } } } },
+};
+const ASSESS_SCHEMA = {
+  type: 'object',
+  required: ['finalists'],
+  properties: { finalists: { type: 'array', items: { type: 'object', required: ['id', 'factors'], properties: { id: { type: 'string' }, factors: { type: 'object' } } } } },
+};
+const RANK_SCHEMA = { type: 'object', required: ['ranked'], properties: { ranked: { type: 'number' } } };
+const FINALIZE_SCHEMA = { type: 'object', required: ['finalists', 'hybrids'], properties: { finalists: { type: 'number' }, hybrids: { type: 'number' } } };
+const PERSIST_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } };
 
-// Validate every arg up front; the regexes double as the injection guard for strings
-// interpolated into the Bash command lines the agents run.
-const a = args;
-if (typeof a.script !== 'string' || !ABS_PATH.test(a.script)) throw new Error('plan-trip: script must be an absolute path to getaway.sh');
-if (typeof a.scratchpad !== 'string' || !ABS_PATH.test(a.scratchpad)) throw new Error('plan-trip: scratchpad must be an absolute path');
-if (typeof a.startDate !== 'string' || !DATE.test(a.startDate)) throw new Error('plan-trip: startDate must be YYYY-MM-DD');
-if (typeof a.endDate !== 'string' || !DATE.test(a.endDate)) throw new Error('plan-trip: endDate must be YYYY-MM-DD');
-if (!Array.isArray(a.origins) || a.origins.length === 0 || !a.origins.every(o => typeof o === 'string' && IATA.test(o))) throw new Error('plan-trip: origins must be a non-empty array of IATA codes');
-
-const buckets = a.buckets ?? [];
-if (!Array.isArray(buckets)) throw new Error('plan-trip: buckets must be an array');
-for (const b of buckets) {
-  if (!b || typeof b.name !== 'string' || !BUCKET.test(b.name)) throw new Error('plan-trip: bucket name must match /^[a-z0-9-]+$/');
-  if (!Array.isArray(b.dests) || b.dests.length === 0 || !b.dests.every(d => typeof d === 'string' && IATA.test(d))) throw new Error(`plan-trip: bucket ${b.name} dests must be a non-empty IATA array`);
-}
-
-const programSweeps = a.programSweeps ?? [];
-if (!Array.isArray(programSweeps)) throw new Error('plan-trip: programSweeps must be an array');
-for (const p of programSweeps) {
-  if (!p || typeof p.source !== 'string' || !SOURCE.test(p.source)) throw new Error('plan-trip: programSweeps source must match /^[a-z0-9_]+$/');
-  if (!REGIONS.includes(p.destRegion)) throw new Error(`plan-trip: programSweeps destRegion must be one of ${REGIONS.join(', ')}`);
-}
-if (buckets.length + programSweeps.length < 1) throw new Error('plan-trip: need at least one bucket or programSweep');
-
-const cabin = a.cabin ?? 'business';
-if (!CABIN.test(cabin) || !CABIN_PREFIX[cabin]) throw new Error('plan-trip: cabin must be one of economy, premium, business, first');
-const jc = CABIN_PREFIX[cabin];
-
-if (a.mileageCeiling !== undefined && !(typeof a.mileageCeiling === 'number' && a.mileageCeiling > 0)) throw new Error('plan-trip: mileageCeiling must be a positive number');
-const mileageCeiling = a.mileageCeiling;
-
-const avoidDestinations = a.avoidDestinations ?? [];
-if (!Array.isArray(avoidDestinations) || !avoidDestinations.every(d => typeof d === 'string' && IATA.test(d))) throw new Error('plan-trip: avoidDestinations must be IATA codes');
-
-const avoidAirlines = a.avoidAirlines ?? [];
-if (!Array.isArray(avoidAirlines) || !avoidAirlines.every(x => x && AIRLINE.test(x.code) && (x.strength === 'hard' || x.strength === 'soft'))) throw new Error('plan-trip: avoidAirlines items must be {code, strength: hard|soft}');
-
-const avoidTransit = a.avoidTransit ?? [];
-if (!Array.isArray(avoidTransit) || !avoidTransit.every(d => typeof d === 'string' && IATA.test(d))) throw new Error('plan-trip: avoidTransit must be IATA codes');
-
-// Layover preferences steer the Judge re-rank; the IATA regex doubles as the injection guard
-// for the city lists interpolated into the judge prompt.
-const layovers = a.layovers ?? { style: 'minimize', floorMinutes: 75, preferCities: [], avoidCities: [] };
-if (typeof layovers !== 'object' || layovers === null || Array.isArray(layovers)) throw new Error('plan-trip: layovers must be an object');
-if (layovers.style !== 'minimize' && layovers.style !== 'explore') throw new Error('plan-trip: layovers.style must be minimize or explore');
-if (!Number.isInteger(layovers.floorMinutes) || layovers.floorMinutes <= 0) throw new Error('plan-trip: layovers.floorMinutes must be a positive integer');
-for (const [key, list] of [['preferCities', layovers.preferCities], ['avoidCities', layovers.avoidCities]]) {
-  if (!Array.isArray(list) || !list.every(c => typeof c === 'string' && IATA.test(c))) throw new Error(`plan-trip: layovers.${key} must be an array of IATA codes`);
-}
-
-const sources = a.sources ?? [];
-if (!Array.isArray(sources) || !sources.every(s => typeof s === 'string' && SOURCE.test(s))) throw new Error('plan-trip: sources must be program slugs');
-
-const travelers = a.travelers ?? 1;
-if (!Number.isInteger(travelers) || travelers < 1) throw new Error('plan-trip: travelers must be a positive integer');
-
-let maxFinalists = a.maxFinalists ?? 6;
-if (!Number.isInteger(maxFinalists) || maxFinalists < 1) throw new Error('plan-trip: maxFinalists must be a positive integer');
-maxFinalists = Math.min(maxFinalists, 10);
-const isBiz = cabin === 'business';
-const expandTarget = Math.min(Math.ceil(maxFinalists * 2), 12);
-
-if (a.vibe !== undefined && (typeof a.vibe !== 'string' || a.vibe.length === 0)) throw new Error('plan-trip: vibe must be a non-empty string');
-const vibe = a.vibe;
-
-const quotaFloor = a.quotaFloor ?? 100;
+// Validate the four args off the wire; everything else comes from disk via the CLI.
+if (typeof args.project !== 'string' || !ABS_PATH.test(args.project)) throw new Error('plan-trip: project must be an absolute path to the cli/ dir');
+if (typeof args.slug !== 'string' || !SLUG.test(args.slug)) throw new Error('plan-trip: slug must match ^[a-z0-9][a-z0-9-]{1,63}$');
+const refresh = args.refresh === undefined ? false : args.refresh;
+if (typeof refresh !== 'boolean') throw new Error('plan-trip: refresh must be a boolean');
+const quotaFloor = args.quotaFloor === undefined ? 100 : args.quotaFloor;
 if (!Number.isInteger(quotaFloor)) throw new Error('plan-trip: quotaFloor must be an integer');
 
-// Hybrid routings are opt-in; absent, every hybrid phase is skipped and behavior is unchanged.
-// The IATA regex doubles as the injection guard, and an onward destination is a final
-// destination — so it must clear avoidDestinations, while gateways stay exempt as waypoints.
-const hybrid = a.hybrid;
-let cashCutoffMinutes = 240;
-let maxHybrids = 3;
-if (hybrid !== undefined) {
-  if (typeof hybrid !== 'object' || hybrid === null || Array.isArray(hybrid)) throw new Error('plan-trip: hybrid must be an object');
-  if (!Array.isArray(hybrid.gateways) || hybrid.gateways.length === 0 || !hybrid.gateways.every(g => typeof g === 'string' && IATA.test(g))) throw new Error('plan-trip: hybrid.gateways must be a non-empty array of IATA codes');
-  if (hybrid.onwardDests !== undefined && (!Array.isArray(hybrid.onwardDests) || !hybrid.onwardDests.every(d => typeof d === 'string' && IATA.test(d)))) throw new Error('plan-trip: hybrid.onwardDests must be IATA codes');
-  if (hybrid.onwardDests !== undefined && hybrid.onwardDests.some(d => avoidDestinations.includes(d))) throw new Error('plan-trip: hybrid.onwardDests must not intersect avoidDestinations; an onward destination is a final destination');
-  cashCutoffMinutes = hybrid.cashCutoffMinutes ?? 240;
-  if (!Number.isInteger(cashCutoffMinutes) || cashCutoffMinutes <= 0) throw new Error('plan-trip: hybrid.cashCutoffMinutes must be a positive integer');
-  maxHybrids = hybrid.maxHybrids ?? 3;
-  if (!Number.isInteger(maxHybrids) || maxHybrids < 1) throw new Error('plan-trip: hybrid.maxHybrids must be a positive integer');
-  maxHybrids = Math.min(maxHybrids, 4);
+const project = args.project;
+const slug = args.slug;
+const CLI = `uv run --project ${project} getaway`;
+
+// Every value below is re-validated with its regex const immediately before it is spliced into a prompt.
+const gLabel = (v) => { if (!LABEL.test(v)) throw new Error(`plan-trip: unsafe sweep label ${v}`); return v; };
+const gFactor = (v) => { if (!FACTOR.test(v)) throw new Error(`plan-trip: unsafe factor/collector id ${v}`); return v; };
+const gId = (v) => { if (typeof v !== 'string' || !AVAIL_ID.test(v)) throw new Error(`plan-trip: unsafe availability id ${v}`); return v; };
+const gIata = (v) => { if (!IATA.test(v)) throw new Error(`plan-trip: unsafe airport code ${v}`); return v; };
+const gDate = (v) => { if (!DATE.test(v)) throw new Error(`plan-trip: unsafe date ${v}`); return v; };
+const uniq = (xs) => [...new Set(xs)];
+
+const skipped = [];
+const stale = (key) => refresh || context.phaseMap[key] !== 'fresh';
+
+let quotaRemaining = null;
+let quotaLow = false;
+const foldQuota = (q) => {
+  if (typeof q === 'number' && q >= 0) {
+    quotaRemaining = quotaRemaining === null ? q : Math.min(quotaRemaining, q);
+    if (quotaRemaining < quotaFloor) quotaLow = true;
+  }
+};
+
+const persist = (name, phaseKey, phaseTitle, json, deps) =>
+  agent(
+    `Persist an artifact, then stamp the phase complete — run no other getaway command.\n` +
+    `First, run this command exactly, feeding the JSON below on standard input verbatim:\n` +
+    `${CLI} trip artifact write ${slug} ${name}\n` +
+    `stdin:\n${json}\n` +
+    `Then run this command exactly:\n` +
+    `${CLI} trip phase-done ${slug} ${phaseKey}${deps.map((d) => ` --artifact ${d}`).join('')}\n` +
+    `Return {"ok": true} once both commands exit 0.`,
+    { label: `persist:${phaseKey}`, phase: phaseTitle, schema: PERSIST_SCHEMA },
+  );
+
+// ── Phase 0: Load ──────────────────────────────────────────────────────────
+phase('Load');
+const context = await agent(
+  `Run these two commands and shape their output into one CONTEXT object — run no other getaway command.\n` +
+  `1. ${CLI} trip status ${slug}\n` +
+  `   Emits JSON with keys: slug, sweep_labels, hybrid, round_trip, active_factors, max_finalists, party, phase_map, quota.\n` +
+  `2. ${CLI} quota check --floor ${quotaFloor}\n` +
+  `   Exits 0 when quota is at or above the floor, 1 when it is below, 4 when no quota has been recorded yet.\n\n` +
+  `Return CONTEXT:\n` +
+  `- sweepLabels: for every label in sweep_labels EXCEPT the reserved "onward" label, {label, fresh: phase_map["sweep:"+label] === "fresh"}\n` +
+  `- hybrid: true when status.hybrid is a non-null object, else false\n` +
+  `- roundTrip: status.round_trip\n` +
+  `- activeFactors: status.active_factors\n` +
+  `- maxFinalists: status.max_finalists\n` +
+  `- party: status.party\n` +
+  `- phaseMap: status.phase_map verbatim\n` +
+  `- quotaRemaining: status.quota is null ? null : status.quota.remaining\n` +
+  `- quotaLow: true ONLY when command 2 exited 1; false on exit 0 or exit 4.`,
+  { label: 'load', phase: 'Load', schema: CONTEXT_SCHEMA },
+);
+quotaRemaining = context.quotaRemaining;
+quotaLow = context.quotaLow;
+const activeFactors = context.activeFactors.map(gFactor);
+const hybrid = context.hybrid;
+const maxFinalists = context.maxFinalists;
+const classifyProduct = activeFactors.includes('seat_quality');
+// Active judgment factors that own an Evidence collector; their evidence files exist by Assess time.
+const activeCollectors = uniq(activeFactors.map((f) => COLLECTOR_OF[f]).filter(Boolean));
+
+// ── Phase 1: Sweep ─────────────────────────────────────────────────────────
+const allLabels = context.sweepLabels.map((s) => s.label);
+let sweepTargets = (refresh ? allLabels : context.sweepLabels.filter((s) => !s.fresh).map((s) => s.label));
+for (const s of context.sweepLabels) if (s.fresh && !refresh) skipped.push(`sweep:${s.label}`);
+if (quotaLow) sweepTargets = sweepTargets.slice(0, 1); // quota-low: only the first (bucket) label
+if (sweepTargets.length) {
+  phase('Sweep');
+  const flag = refresh ? ' --refresh' : '';
+  const sweeps = await pipeline(sweepTargets, (label) =>
+    agent(
+      `Run exactly this one command, then report its JSON — run no other getaway command:\n` +
+      `${CLI} sweep run ${slug} ${gLabel(label)}${flag}\n` +
+      `It ingests one seats.aero call into the cache and writes the sweep artifact. Return label, rows, and quota_remaining from its JSON (quota_remaining may be null when no header was seen).`,
+      { label: `sweep:${label}`, phase: 'Sweep', schema: SWEEP_SCHEMA },
+    ),
+  );
+  for (const s of sweeps) foldQuota(s.quota_remaining);
 }
 
-// All-empty documents preserve the shipped US-centric phrasing and skip the Transit pass.
-const documents = a.documents === undefined ? { passports: [], residency: [], visas: [] } : a.documents;
-if (typeof documents !== 'object' || documents === null || Array.isArray(documents)) throw new Error('plan-trip: documents must be an object');
-const passports = documents.passports === undefined ? [] : documents.passports;
-const residency = documents.residency === undefined ? [] : documents.residency;
-const visas = documents.visas === undefined ? [] : documents.visas;
-for (const [key, list] of [['passports', passports], ['residency', residency], ['visas', visas]]) {
-  if (!Array.isArray(list) || !list.every(x => typeof x === 'string' && DOC.test(x))) throw new Error(`plan-trip: documents.${key} must be an array of safe strings`);
-}
-const travelerParts = [];
-if (passports.length) travelerParts.push(`passport(s): ${passports.join(', ')}`);
-if (residency.length) travelerParts.push(`residency: ${residency.join(', ')}`);
-if (visas.length) travelerParts.push(`standing visa(s): ${visas.join(', ')}`);
-const hasDocuments = travelerParts.length > 0;
-const traveler = hasDocuments ? `a traveler holding ${travelerParts.join('; ')}` : 'a US passport holder';
-
-const { script, scratchpad, startDate, endDate, origins } = a;
-const slug = s => s.toLowerCase().replace(/ /g, '-');
-// Long-haul awards land the next calendar day; string YYYY-MM-DD arithmetic, no wall clock.
-const nextDay = d => new Date(new Date(d).getTime() + 86400000).toISOString().slice(0, 10);
-
-const sweepSpecs = [
-  ...buckets.map(b => ({
-    label: b.name,
-    file: `${scratchpad}/sweep-${b.name}.jsonl`,
-    cmd: `"${script}" search --origin ${origins.join(',')} --dest ${b.dests.join(',')} --start ${startDate} --end ${endDate} --cabin ${cabin} --take 1000 --order lowest_mileage`,
-  })),
-  ...programSweeps.map(p => ({
-    label: `${p.source}-${slug(p.destRegion)}`,
-    file: `${scratchpad}/sweep-${p.source}-${slug(p.destRegion)}.jsonl`,
-    cmd: `"${script}" availability --source ${p.source} --cabin ${cabin} --dest-region "${p.destRegion}" --take 1000 --start ${startDate} --end ${endDate}`,
-  })),
-  ...(hybrid !== undefined ? [{
-    label: 'gateways',
-    gateway: true,
-    file: `${scratchpad}/sweep-gateways.jsonl`,
-    cmd: `"${script}" search --origin ${origins.join(',')} --dest ${hybrid.gateways.join(',')} --start ${startDate} --end ${endDate} --cabin ${cabin} --take 1000 --order lowest_mileage`,
-  }] : []),
-];
-if (new Set(sweepSpecs.map(s => s.file)).size !== sweepSpecs.length) throw new Error('plan-trip: sweep filenames collide; bucket names and program sweeps must be distinct');
-
-phase('Sweep');
-const sweepResults = await pipeline(sweepSpecs, spec => agent(
-  `Run exactly this one Bash command, nothing else:\n\n${spec.cmd} > "${spec.file}"\n\n` +
-  `It writes JSONL rows to that file and prints \`quota remaining: N\` to stderr. Then report:\n` +
-  `- rows: the line count (run \`wc -l < "${spec.file}"\`)\n` +
-  `- quota: the integer N from the \`quota remaining: N\` stderr line, or -1 if that line is absent.\n` +
-  `Run no other getaway.sh command.`,
-  { label: `sweep:${spec.label}`, phase: 'Sweep', schema: SWEEP_SCHEMA },
-));
-
-// Trust our own paths, never an agent-echoed string, in the shortlist command line.
-const okSweeps = sweepResults.filter(Boolean);
-const sweepFiles = sweepSpecs.filter((s, i) => sweepResults[i]).map(s => s.file);
-// The gateway sweep feeds only the hybrid shortlist; the direct shortlist never sees it.
-const directSweepFiles = sweepSpecs.filter((s, i) => sweepResults[i] && !s.gateway).map(s => s.file);
-const gatewaySweepFiles = sweepSpecs.filter((s, i) => sweepResults[i] && s.gateway).map(s => s.file);
-if (sweepResults.length - okSweeps.length > 0) log(`${sweepResults.length - okSweeps.length} sweep agent(s) died; their files are excluded`);
-
-// The on-disk quota cache is last-writer-wins under a parallel burst, so trust the
-// per-agent reports over `getaway.sh quota`.
-const quotas = okSweeps.map(r => r.quota).filter(q => q >= 0);
-const minQuota = quotas.length ? Math.min(...quotas) : -1;
-const quotaLow = minQuota >= 0 && minQuota < quotaFloor;
-const enrichRan = Boolean(vibe) && !quotaLow;
-// Low quota gates every API-spending hybrid phase — Onward, Bridge, and the hybrid expansions.
-const hybridOn = hybrid !== undefined && !quotaLow;
-let expandCap = expandTarget;
-let expandTrimmedTo = null;
-if (quotaLow) {
-  expandCap = Math.min(maxFinalists, 3, minQuota);
-  expandTrimmedTo = expandCap;
-  log(`quota low (${minQuota} < floor ${quotaFloor}): trimming Expand to ${expandCap} finalists and skipping Enrich and hybrids`);
-}
-const skipped = { enrich: !enrichRan, transit: true, expandTrimmedTo, hybrids: hybrid !== undefined && quotaLow };
-
-if (sweepFiles.length === 0) {
-  log('no sweep files produced; returning empty finalists');
-  return { finalists: [], hybrids: [], sweepFiles, considered: 0, quota: minQuota, skipped };
-}
-
-const avail = `.${jc}Available`;
-const mileageF = `(.${jc}MileageCost|tonumber)`;
-const seatsF = `(.${jc}RemainingSeats|tonumber)`;
-const airlinesF = `.${jc}Airlines`;
-const directF = `.${jc}Direct`;
-const hard = JSON.stringify(avoidAirlines.filter(x => x.strength === 'hard').map(x => x.code));
-const soft = JSON.stringify(avoidAirlines.filter(x => x.strength === 'soft').map(x => x.code));
-const baseHead = [
-  `${avail} == true`,
-  ...(mileageCeiling !== undefined ? [`${mileageF} <= ${mileageCeiling}`] : []),
-  `${seatsF} >= ${travelers}`,
-  `(.Route.OriginAirport as $o | (${JSON.stringify(origins)} | index($o)) != null)`,
-  ...(sources.length ? [`(.Source as $s | (${JSON.stringify(sources)} | index($s)) != null)`] : []),
-];
-// The avoid-destinations veto is a direct-shortlist clause only — a gateway is a waypoint, never an endpoint.
-const avoidDestClause = `(.Route.DestinationAirport as $d | (${JSON.stringify(avoidDestinations)} | index($d)) | not)`;
-const airlinesHardClause = `(${airlinesF} | split(", ") | all(. as $c | ${hard} | index($c) == null))`;
-const clauses = [...baseHead, avoidDestClause, airlinesHardClause].join('\n        and ');
-const gatewayClauses = [...baseHead, airlinesHardClause].join('\n        and ');
-const rowProj =
-  `{ id: .ID, date: .Date, origin: .Route.OriginAirport, dest: .Route.DestinationAirport,\n` +
-  `                source: .Source, mileage: ${mileageF}, seats: ${seatsF},\n` +
-  `                airlines: ${airlinesF}, direct: ${directF},\n` +
-  `                soft: (${airlinesF} | split(", ") | any(. as $c | ${soft} | index($c) != null)) }`;
-const shortlistJq =
-  `jq -s '{ considered: length,\n` +
-  `  rows: ( [ .[] | select(${clauses})\n` +
-  `            | ${rowProj} ]\n` +
-  `          | group_by([.origin, .dest, .date, .source]) | map(sort_by(.soft, .mileage) | .[0])\n` +
-  `          | sort_by(.soft, .mileage) | .[0:${expandTarget}] ) }' ` +
-  directSweepFiles.map(f => `"${f}"`).join(' ');
-const gatewayShortlistJq =
-  `jq -s '{ considered: length,\n` +
-  `  rows: ( [ .[] | select(${gatewayClauses})\n` +
-  `            | ${rowProj} ]\n` +
-  `          | group_by(.dest) | map(sort_by(.soft, .mileage) | .[0])\n` +
-  `          | sort_by(.soft, .mileage) | .[0:3] ) }' ` +
-  gatewaySweepFiles.map(f => `"${f}"`).join(' ');
-
+// ── Phase 2: Shortlist ─────────────────────────────────────────────────────
 phase('Shortlist');
 const shortlist = await agent(
-  `Run exactly this one Bash command — a single offline jq pass over the sweep files, zero API calls, run no getaway.sh command:\n\n${shortlistJq}\n\n` +
-  `Return its JSON output: considered (total rows scanned) and rows (the ranked finalists, each with id, date, origin, dest, source, mileage, seats, airlines, direct, soft). mileage and seats are numbers; direct and soft are booleans.`,
+  `Run exactly this one offline command (zero seats.aero quota) and return its JSON — run no other getaway command:\n` +
+  `${CLI} shortlist run ${slug}\n` +
+  `Return candidates (each with id, date, origin, dest, source, mileage, seats, airlines, direct, soft, departure_day_match) and considered.`,
   { label: 'shortlist', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
 );
-if (!shortlist || shortlist.rows.length === 0) {
-  log('shortlist produced 0 rows; no direct finalists');
-  // Hybrids can outlive an empty direct shortlist only with explicit onwardDests; the default
-  // onward set derives from the direct finalists, so it too is empty and there's nothing to stitch.
-  const canHybrid = Boolean(shortlist) && hybridOn && gatewaySweepFiles.length > 0 && hybrid.onwardDests !== undefined;
-  if (!canHybrid) {
-    if (hybridOn && gatewaySweepFiles.length > 0 && hybrid.onwardDests === undefined) {
-      log('skipping hybrids: onward destinations default from the direct shortlist, which is empty');
-      skipped.hybrids = true;
-    }
-    return { finalists: [], hybrids: [], sweepFiles, considered: shortlist?.considered ?? 0, quota: minQuota, skipped };
-  }
-}
+const candidates = shortlist.candidates;
+for (const c of candidates) gId(c.id);
 
-// Gateway shortlist: each gateway's best award, deduped to one row per hub, at most 3 distinct gateways.
-let gatewayRows = [];
-if (hybridOn && gatewaySweepFiles.length) {
-  const gatewayShortlist = await agent(
-    `Run exactly this one Bash command — a single offline jq pass over the gateway sweep file, zero API calls, run no getaway.sh command:\n\n${gatewayShortlistJq}\n\n` +
-    `Return its JSON output: considered (total rows scanned) and rows (each gateway's best award, each with id, date, origin, dest, source, mileage, seats, airlines, direct, soft). mileage and seats are numbers; direct and soft are booleans.`,
-    { label: 'shortlist:gateways', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
+let gatewayCandidates = [];
+let ranGateway = false;
+if (hybrid) {
+  ranGateway = true;
+  const gatewayDoc = await agent(
+    `Run exactly this one offline command (zero seats.aero quota) and return its JSON — run no other getaway command:\n` +
+    `${CLI} shortlist run ${slug} --gateway\n` +
+    `Return candidates (each gateway's best award: id, date, origin, dest, source, mileage, seats, airlines, direct, soft, departure_day_match) and considered.`,
+    { label: 'shortlist:gateway', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
   );
-  if (gatewayShortlist) gatewayRows = gatewayShortlist.rows;
+  gatewayCandidates = gatewayDoc.candidates;
+  for (const c of gatewayCandidates) { gId(c.id); gIata(c.dest); }
 }
 
-const rows = shortlist.rows.slice(0, expandCap);
-for (const r of rows) if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: shortlist row id failed the injection guard: ${r.id}`);
-
-// Re-check seats and connections against the bookable truth: the cached row's cheapest
-// live trip can seat fewer travelers or connect through an avoided airport.
-const transitClause = avoidTransit.length
-  ? ` and ([.AvailabilitySegments[1:][].OriginAirport] | all(. as $x | (${JSON.stringify(avoidTransit)} | index($x)) == null))`
-  : '';
-
-// Derive the seat-quality doc from the validated script path, never an agent-echoed string.
-const seatDoc = script.replace(/[^/]+$/, 'seat-quality.md');
-const longhaulProjFor = c =>
-  `,\n        longhaul: ((.AvailabilitySegments | map(select(.Cabin == "${c}")) | max_by(.Distance)) as $s\n` +
-  `          | if $s == null then null else "\\($s.FlightNumber) \\($s.OriginAirport)-\\($s.DestinationAirport) (\\($s.AircraftName))" end)`;
-
-// Onward, Bridge, Compose: build hybrid routings — a gateway award plus a cash hop (gateway-cash)
-// or a stitched onward award (two-award). Every award leg is expanded below with the directs, so
-// composition only decides which leg ids and cabins to expand.
-const onwardDests = hybridOn ? (hybrid.onwardDests ?? [...new Set(shortlist.rows.map(r => r.dest))].slice(0, 4)) : [];
-const gatewayRowByDest = {};
-for (const r of gatewayRows) {
-  if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: gateway row id failed the injection guard: ${r.id}`);
-  if (!DATE.test(r.date)) throw new Error(`plan-trip: gateway row date failed the injection guard: ${r.date}`);
-  gatewayRowByDest[r.dest] = r;
-}
-const topGateways = Object.keys(gatewayRowByDest);
-for (const g of topGateways) if (!IATA.test(g)) throw new Error(`plan-trip: gateway dest failed the injection guard: ${g}`);
-for (const d of onwardDests) if (!IATA.test(d)) throw new Error(`plan-trip: onward dest failed the injection guard: ${d}`);
-
-let composed = [];
-if (hybridOn && topGateways.length && onwardDests.length) {
-  // Onward award rows carry the same restrictions as the direct shortlist: the trip's sources (when
-  // set) and hard-avoided airlines. Soft avoids stay ranking-only and never touch hybrids.
-  const onwardBlocks = ['economy', 'business'].map(cab => {
-    const p = CABIN_PREFIX[cab];
-    const onwardSel = [
-      `.${p}Available == true`,
-      `(.${p}RemainingSeats|tonumber) >= ${travelers}`,
-      ...(sources.length ? [`(.Source as $s | (${JSON.stringify(sources)} | index($s)) != null)`] : []),
-      `(.${p}Airlines | split(", ") | all(. as $c | ${hard} | index($c) == null))`,
-    ].join(' and ');
-    return `[ .[] | select(${onwardSel})\n` +
-      `        | { origin: .Route.OriginAirport, dest: .Route.DestinationAirport, cabin: "${cab}",\n` +
-      `            id: .ID, date: .Date, source: .Source, mileage: (.${p}MileageCost|tonumber),\n` +
-      `            seats: (.${p}RemainingSeats|tonumber), airlines: .${p}Airlines, direct: .${p}Direct } ]`;
-  }).join('\n      + ');
-  const onwardFile = `${scratchpad}/onward.jsonl`;
-  const onwardSearchCmd = `"${script}" search --origin ${topGateways.join(',')} --dest ${onwardDests.join(',')} --start ${startDate} --end ${endDate} --take 1000 --order lowest_mileage`;
-  // Per-(origin, dest, cabin, date) minima so a cheap-but-too-early award can't mask a feasible later one.
-  const onwardJq =
-    `jq -s '{ rows: ( ${onwardBlocks}\n` +
-    `      | group_by([.origin, .dest, .cabin, .date]) | map(min_by(.mileage)) ) }' "${onwardFile}"`;
-
+// ── Phase 3: Onward ────────────────────────────────────────────────────────
+let onwardMinima = [];
+let bridgePairs = [];
+let ranOnward = false;
+if (hybrid && !quotaLow) {
+  ranOnward = true;
   phase('Onward');
   const onward = await agent(
-    `Run exactly these two Bash commands in order, nothing else — the search spends one seats.aero call, the jq is offline; run no other getaway.sh command:\n\n` +
-    `${onwardSearchCmd} > "${onwardFile}"\n\n${onwardJq}\n\n` +
-    `The search prints \`quota remaining: N\` to stderr. Return:\n` +
-    `- rows: the jq output's rows (each with origin, dest, cabin, id, date, source, mileage, seats, airlines, direct; mileage and seats are numbers, direct a boolean)\n` +
-    `- quota: the integer N from the \`quota remaining: N\` stderr line, or -1 if that line is absent.`,
+    `Run exactly these two commands in order, then return their combined JSON — run no other getaway command.\n` +
+    `1. ${CLI} sweep run ${slug} onward\n` +
+    `   The onward sweep; it self-skips (spending zero quota) when still fresh, otherwise spends one seats.aero call.\n` +
+    `2. ${CLI} shortlist onward ${slug}\n` +
+    `   Offline onward minima and bridge pairs.\n\n` +
+    `Return minima and bridge_pairs from command 2's JSON, plus quota_remaining from command 1's JSON (null when it self-skipped or no header was seen).`,
     { label: 'onward', phase: 'Onward', schema: ONWARD_SCHEMA },
   );
-  const onwardRows = onward ? onward.rows : [];
-  for (const r of onwardRows) if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: onward row id failed the injection guard: ${r.id}`);
-  if (onward && onward.quota >= 0) quotas.push(onward.quota);
-
-  // Onward spent a seats.aero call; re-check quota before the Bridge fan-out and the hybrid
-  // expansions it feeds, mirroring the pre-Shortlist quotaLow gate.
-  const postOnwardQuota = quotas.length ? Math.min(...quotas) : -1;
-  if (postOnwardQuota >= 0 && postOnwardQuota < quotaFloor) {
-    log(`quota low after Onward (${postOnwardQuota} < floor ${quotaFloor}): skipping Bridge and hybrid expansions`);
-    skipped.hybrids = true;
-  } else {
-    // Each cash hop and stitched onward award departs on/after minOnwardDate — the day after the
-    // gateway award lands.
-    const bridgePairs = [];
-    for (const g of topGateways) {
-      const minOnwardDate = nextDay(gatewayRowByDest[g].date);
-      for (const d of onwardDests) if (d !== g) bridgePairs.push({ gateway: g, dest: d, date: minOnwardDate });
-    }
-    const cappedBridgePairs = bridgePairs.slice(0, 8);
-    if (bridgePairs.length > cappedBridgePairs.length) log(`${bridgePairs.length - cappedBridgePairs.length} gateway×onward pair(s) dropped by the 8-pair cap`);
-
-    phase('Bridge');
-    const bridgeQuotes = await pipeline(cappedBridgePairs, pair => agent(
-      `Price the ${pair.gateway}-${pair.dest} cash hop on ${pair.date} with fli via uvx — zero seats.aero quota, run no getaway.sh command. Economy first:\n\n` +
-      `uvx --from "flights[mcp]" fli flights ${pair.gateway} ${pair.dest} ${pair.date} --class ECONOMY --format json | jq '{cheapest: (.flights | map(select(.price != null)) | min_by(.price) | {price, currency, stops, duration, airline: .legs[0].airline.code, flight: .legs[0].flight_number})}'\n\n` +
-      `If cheapest.duration exceeds ${cashCutoffMinutes} minutes, re-quote business — the same command with \`--class BUSINESS\` — and report that quote instead; otherwise report the economy quote. Return:\n` +
-      `- gateway: "${pair.gateway}"\n- dest: "${pair.dest}"\n- date: "${pair.date}"\n` +
-      `- durationMinutes: the reported cheapest.duration (a number)\n` +
-      `- cabin: "economy" when you kept the economy quote, "business" when you re-quoted\n` +
-      `- price: cheapest.price (a number)\n- currency: cheapest.currency\n- stops: cheapest.stops (a number)\n` +
-      `- airline: cheapest.airline\n- flightNumber: cheapest.flight`,
-      { label: `bridge:${pair.gateway}-${pair.dest}`, phase: 'Bridge', schema: BRIDGE_SCHEMA },
-    ));
-    // Drop cash hops flown by a hard-avoided airline; soft avoids stay ranking-only for hybrids.
-    const hardCodes = avoidAirlines.filter(x => x.strength === 'hard').map(x => x.code);
-    const bridgeByPair = {};
-    for (const q of bridgeQuotes.filter(Boolean)) {
-      if (hardCodes.includes(q.airline)) continue;
-      bridgeByPair[`${q.gateway}|${q.dest}`] = q;
-    }
-    // Onward rows are per-(origin, dest, cabin, date); bucket by key, filter to feasible dates below.
-    const onwardByKey = {};
-    for (const r of onwardRows) {
-      const k = `${r.origin}|${r.dest}|${r.cabin}`;
-      if (!onwardByKey[k]) onwardByKey[k] = [];
-      onwardByKey[k].push(r);
-    }
-
-    for (const pair of cappedBridgePairs) {
-      const bridge = bridgeByPair[`${pair.gateway}|${pair.dest}`];
-      if (!bridge) continue;
-      const award = gatewayRowByDest[pair.gateway];
-      composed.push({
-        kind: 'gateway-cash', gateway: pair.gateway, dest: pair.dest, award,
-        onward: { mode: 'cash', cabin: bridge.cabin, price: bridge.price, currency: bridge.currency,
-                  durationMinutes: bridge.durationMinutes, stops: bridge.stops,
-                  airline: bridge.airline, flightNumber: bridge.flightNumber, date: bridge.date },
-      });
-      // Two-award stitch: the cheapest onward award at the cutoff-picked cabin departing on/after
-      // minOnwardDate (pair.date) — a cheap-but-too-early award never wins over a feasible later one.
-      const eligible = (onwardByKey[`${pair.gateway}|${pair.dest}|${bridge.cabin}`] ?? []).filter(r => r.date >= pair.date);
-      const onwardRow = eligible.length ? eligible.reduce((a, b) => (b.mileage < a.mileage ? b : a)) : null;
-      if (onwardRow) {
-        composed.push({
-          kind: 'two-award', gateway: pair.gateway, dest: pair.dest, award,
-          onward: { mode: 'award', cabin: bridge.cabin, id: onwardRow.id, date: onwardRow.date,
-                    source: onwardRow.source, mileage: onwardRow.mileage, seats: onwardRow.seats,
-                    airlines: onwardRow.airlines, direct: onwardRow.direct },
-        });
-      }
-    }
-    // Rank by total miles then cash; the cash leg carries no miles. Keep the cheapest maxHybrids.
-    const totalMiles = h => h.award.mileage + (h.onward.mode === 'award' ? h.onward.mileage : 0);
-    const cashMinor = h => (h.onward.mode === 'cash' ? Math.round(h.onward.price * 100) : 0);
-    composed.sort((a, b) => (totalMiles(a) - totalMiles(b)) || (cashMinor(a) - cashMinor(b)));
-    composed = composed.slice(0, maxHybrids);
-  }
+  onwardMinima = onward.minima;
+  bridgePairs = onward.bridge_pairs;
+  for (const m of onwardMinima) { gId(m.id); gIata(m.gateway); gIata(m.onward_dest); }
+  for (const p of bridgePairs) { gIata(p.gateway); gIata(p.onward_dest); }
+  foldQuota(onward.quota_remaining); // onward may have spent a call; re-gate before Bridge and hybrid expansion
 }
 
-// Every award leg expands at its own cabin: directs and gateway legs at the trip cabin,
-// stitched onward legs at the cabin the cutoff picked. Dedup hybrid legs by id+cabin against the
-// direct finalists and each other so a shared trip expands once; results join back via tripByKey.
-const directItems = rows.map(r => ({ id: r.id, cabin, label: r.dest }));
-const hybridItems = [];
-const seenItem = new Set(directItems.map(it => `${it.id}|${it.cabin}`));
-for (const h of composed) {
-  const gKey = `${h.award.id}|${cabin}`;
-  if (!seenItem.has(gKey)) { seenItem.add(gKey); hybridItems.push({ id: h.award.id, cabin, label: h.gateway }); }
-  if (h.onward.mode === 'award') {
-    const oKey = `${h.onward.id}|${h.onward.cabin}`;
-    if (!seenItem.has(oKey)) { seenItem.add(oKey); hybridItems.push({ id: h.onward.id, cabin: h.onward.cabin, label: h.dest }); }
+// ── Phase 4: Bridge ────────────────────────────────────────────────────────
+if (hybrid && !quotaLow && bridgePairs.length && stale('bridge')) {
+  // Bridge pairs carry no date; source one from the onward minima, falling back to the gateway award's date.
+  const dateByPair = {};
+  for (const m of onwardMinima) {
+    const k = `${m.gateway}|${m.onward_dest}`;
+    if (!(k in dateByPair) || m.date < dateByPair[k]) dateByPair[k] = m.date;
   }
-}
-const expandItems = [...directItems, ...hybridItems];
-
-phase('Expand');
-const expandResults = await pipeline(expandItems, item => agent(
-  (item.cabin === 'business'
-    ? `Run exactly this one Bash pipeline, then one local file read — no other getaway.sh command:\n\n`
-    : `Run exactly this one Bash pipeline, nothing else:\n\n`) +
-  `"${script}" trip ${item.id} | jq '{ bookingPrimary: ([.booking_links[] | select(.primary) | .label][0]),\n` +
-  `  best: ((.data | map(select(.Cabin == "${item.cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)) as $t\n` +
-  `    | if $t == null then null else ($t.AvailabilitySegments | sort_by(.Order)) as $s | $t | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
-  `        segments: [$s[] | {flightNumber: .FlightNumber, origin: .OriginAirport, dest: .DestinationAirport, departsAt: .DepartsAt, arrivesAt: .ArrivesAt, cabin: .Cabin, aircraft: .AircraftName, durationMinutes: .Duration, display: "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"}],\n` +
-  `        layovers: [range(1; $s | length) as $i | {airport: $s[$i].OriginAirport, minutes: ((($s[$i].DepartsAt | fromdateiso8601) - ($s[$i - 1].ArrivesAt | fromdateiso8601)) / 60 | round)}],\n` +
-  `        stops: $t.Stops, totalDurationMinutes: $t.TotalDuration${item.cabin === 'business' ? longhaulProjFor(item.cabin) : ''} } end) }'\n\n` +
-  `It also prints \`quota remaining: N\` to stderr. If \`best\` is null — no trip in that cabin seats ` +
-  `${travelers} traveler(s) and clears the connection rules — return only id and quota. Otherwise return:\n` +
-  `- id: "${item.id}"\n- mileageCost: best.MileageCost\n- totalTaxes: best.TotalTaxes\n- taxesCurrency: best.TaxesCurrency\n` +
-  `- remainingSeats: best.RemainingSeats\n- flightNumbers: best.FlightNumbers\n` +
-  `- segments: best.segments (the array of objects, each with flightNumber, origin, dest, departsAt, arrivesAt, cabin, aircraft, durationMinutes, and a display string)\n` +
-  `- layovers: best.layovers\n- stops: best.stops\n- totalDurationMinutes: best.totalDurationMinutes\n` +
-  `- updatedAt: best.UpdatedAt\n- bookingPrimary: bookingPrimary\n- quota: the integer N from the stderr line, or -1 if absent.` +
-  (item.cabin === 'business'
-    ? `\n\nThen read the local file ${seatDoc} and classify \`best.longhaul\`, the longest business segment: take the operating carrier from its flight-number prefix plus its aircraft, match that carrier+aircraft against the table, and also return — all three required whenever best is non-null:\n` +
-      `- longhaul: best.longhaul (the segment string, or null)\n` +
-      `- product: that row's Verdict — but \`verify\` when the row is Verify-marked, and \`unknown\` when the carrier+aircraft is absent from the table or best.longhaul is null\n` +
-      `- productNote: the product name plus one clause (e.g. "old Club World — yin-yang 2-3-2, barely business")`
-    : ''),
-  { label: `trip:${item.label}`, phase: 'Expand', schema: TRIP_SCHEMA },
-));
-const trips = expandResults.slice(0, rows.length);
-const tripByKey = {};
-expandItems.forEach((it, i) => { if (expandResults[i]) tripByKey[`${it.id}|${it.cabin}`] = expandResults[i]; });
-
-// Business only, zero quota: resolve Verify-marked and table-absent products against the
-// live seat map before the re-rank truncates, so a resolved `barely` never displaces a true flat.
-// Every business award leg flows through — direct finalists and hybrid legs alike — deduped by
-// id+cabin; the verdict mutates the shared expanded trip, so both the finalist and any hybrid see it.
-if (isBiz) {
-  const verifyTargets = [];
-  const seenVerify = new Set();
-  const addVerify = (id, verifyCabin, date, label, trip) => {
-    if (!trip || !(trip.product === 'verify' || (trip.product === 'unknown' && trip.longhaul))) return;
-    const key = `${id}|${verifyCabin}`;
-    if (seenVerify.has(key)) return;
-    seenVerify.add(key);
-    verifyTargets.push({ id, date, label, trip });
-  };
-  rows.forEach((row, i) => addVerify(row.id, cabin, row.date, row.dest, trips[i]));
-  for (const h of composed) {
-    addVerify(h.award.id, cabin, h.award.date, h.gateway, tripByKey[`${h.award.id}|${cabin}`]);
-    if (h.onward.mode === 'award' && h.onward.cabin === 'business')
-      addVerify(h.onward.id, h.onward.cabin, h.onward.date, h.dest, tripByKey[`${h.onward.id}|${h.onward.cabin}`]);
-  }
-  if (verifyTargets.length) {
-    phase('Verify');
-    const verified = await pipeline(verifyTargets, ({ id, date, label, trip }) => agent(
-      `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to pin down the business hard product on ${trip.longhaul} departing ${date}: the carrier's seat map for that flight number and date, recent cabin reviews, retrofit trackers. Return:\n` +
-      `- id: "${id}"\n` +
-      `- product: the resolved verdict — one of suite, solid, dated, barely, unknown; return \`unknown\` when sources disagree\n` +
-      `- productNote: the product name plus one clause describing the hard product.`,
-      { label: `verify:${label}`, phase: 'Verify', schema: VERIFY_SCHEMA },
-    ));
-    // verifyTargets[i] aligns with verified[i]; mutate the shared trip so directs and hybrids both update.
-    verifyTargets.forEach((t, i) => { if (verified[i]) { t.trip.product = verified[i].product; t.trip.productNote = verified[i].productNote; } });
-  }
-}
-
-// A malformed expansion (mileageCost without segments/layovers — TRIP_SCHEMA requires only
-// id+quota) drops like a dead agent; the `died` log line below counts it.
-const seatable = t => t && typeof t.mileageCost === 'number' && Array.isArray(t.segments) && Array.isArray(t.layovers);
-const candidates = rows.map((row, i) => ({ row, trip: trips[i] })).filter(c => seatable(c.trip));
-
-// Judge: one comparative agent weighs each finalist's layovers against the traveler's preferences,
-// spending zero quota; its verdicts reorder only within a mileage band below. Skip when there is
-// nothing to compare — a single candidate or an all-nonstop shortlist.
-const judgeVerdicts = new Map();
-if (candidates.length > 1 && candidates.some(c => c.trip.layovers.length > 0)) {
-  phase('Judge');
-  const options = candidates.map(c => ({
-    id: c.trip.id, date: c.row.date, origin: c.row.origin, dest: c.row.dest,
-    mileage: c.trip.mileageCost, layovers: c.trip.layovers, segments: c.trip.segments.map(s => s.display),
+  const dateByHub = {};
+  for (const c of gatewayCandidates) if (!(c.dest in dateByHub)) dateByHub[c.dest] = c.date;
+  const priced = bridgePairs.map((p) => ({
+    gateway: gIata(p.gateway),
+    dest: gIata(p.onward_dest),
+    cutoff: p.cash_cutoff_minutes,
+    date: gDate(dateByPair[`${p.gateway}|${p.onward_dest}`] ?? dateByHub[p.gateway]),
   }));
-  const judgment = await agent(
-    `Weigh each award option's layovers against one traveler's preferences — zero getaway.sh or API calls, spend no quota. Mileage dominates: a verdict only ever reorders options whose mileage sits within roughly 10-15% of each other, and the orchestrating script enforces that band, so judge each option's layovers purely on their own merits.\n\n` +
-    `Traveler: layover style ${layovers.style}; shortest comfortable connection ${layovers.floorMinutes} minutes; would welcome a long layover in ${layovers.preferCities.join(', ') || 'no listed cities'}; avoids lingering in ${layovers.avoidCities.join(', ') || 'no listed cities'}; trip vibe ${vibe ?? 'none stated'}; the traveler is ${traveler}.\n\n` +
-    `Duration bands — an option's worst layover drives its verdict, and a redeeming second layover never cancels a risky-short one:\n` +
-    `- Under ${layovers.floorMinutes} min is risky-short: demote and name the margin — a misconnected award means days of rebooking, not hours.\n` +
-    `- Floor to ~3h is comfortable: neutral, never demote in this band.\n` +
-    `- ~3-6h is dead time: mild demote, softened when the airport itself passes hours well (DOH, SIN, ICN).\n` +
-    `- Over ~6h forks on style and city: explore-style plus a city that rewards leaving the airport (or a prefer-listed one) is a promote ("7h40 in IST — enough for Sultanahmet and back"); minimize-style, an avoid-listed city, or no feasible exit is a demote harder than the 3-6h band. Overnight gaps count as dead-long unless explore-style and the city warrants it; name the cost either way (hotel or terminal night).\n` +
-    `- A nonstop is neutral — never demote an option for having no layover.\n\n` +
-    `Judge city appeal from your own knowledge first. Use WebSearch ONLY when a 6h+ layover's verdict turns on exit-worthiness facts you are unsure of — whether the traveler can realistically leave, luggage storage, time back through security. Formal transit-visa flags are handled by a later pipeline phase, so do not research visa rules beyond what the verdict needs.\n\n` +
-    `Options as JSON:\n${JSON.stringify(options)}\n\n` +
-    `Return verdicts: one entry per option id — verdict (promote, neutral, or demote), layoverNote (one sentence naming the airport, duration, and reason; "nonstop" for a direct), and cityNote only when WebSearch informed the call.`,
-    { label: 'judge', phase: 'Judge', schema: JUDGE_SCHEMA, model: 'opus' },
+  phase('Bridge');
+  const quotes = await pipeline(priced, (p) =>
+    agent(
+      `Price the ${p.gateway}-${p.dest} cash hop on ${p.date} with fli — zero seats.aero quota, run no getaway command. Economy first:\n\n` +
+      `uvx --from "flights[mcp]" fli flights ${p.gateway} ${p.dest} ${p.date} --class ECONOMY --format json\n\n` +
+      `From that JSON take the cheapest flight whose price is non-null. If its duration exceeds ${p.cutoff} minutes, re-quote business — the same command with --class BUSINESS — and report that quote instead; otherwise report the economy quote. Return:\n` +
+      `- gateway: "${p.gateway}"\n- onward_dest: "${p.dest}"\n- cabin: "economy" when you kept the economy quote, "business" when you re-quoted\n` +
+      `- price: the number\n- currency: the code\n- airline: the operating carrier code of the first leg\n- flight_number: the first leg's number\n- stops: the number of stops\n- duration_minutes: the reported cheapest duration in minutes.`,
+      { label: `bridge:${p.gateway}-${p.dest}`, phase: 'Bridge', schema: BRIDGE_SCHEMA },
+    ),
   );
-  const byId = new Map(candidates.map(c => [c.trip.id, c]));
-  const ids = judgment ? judgment.verdicts.map(v => v.id) : [];
-  if (judgment && ids.length === candidates.length && ids.every(id => byId.has(id)) && new Set(ids).size === ids.length)
-    for (const v of judgment.verdicts) judgeVerdicts.set(v.id, { verdict: v.verdict, layoverNote: v.layoverNote, ...(v.cityNote ? { cityNote: v.cityNote } : {}) });
-  else log('judge agent died or returned bad coverage; keeping mileage order');
+  await persist('bridge.json', 'bridge', 'Bridge', JSON.stringify({ quotes }), ['onward.json']);
+} else if (hybrid && !quotaLow && bridgePairs.length) {
+  skipped.push('bridge');
 }
 
-// Soft-avoided airlines sink harder than bad seats; only literal `barely` demotes.
-const demoted = c => (c.trip.product === 'barely' ? 1 : 0);
-candidates.sort((a, b) =>
-  (Number(a.row.soft) - Number(b.row.soft)) || (demoted(a) - demoted(b)) || (a.trip.mileageCost - b.trip.mileageCost));
-
-// Layover verdicts reorder only within a mileage band (~15%) inside each (soft, barely) tier;
-// bands never chain — each opens at its first member's mileage.
-const RANK = { promote: -1, neutral: 0, demote: 1 };
-if (judgeVerdicts.size > 0) {
-  const rankOf = c => RANK[judgeVerdicts.get(c.trip.id)?.verdict ?? 'neutral'];
-  const reordered = [];
-  let i = 0;
-  while (i < candidates.length) {
-    let tierEnd = i;
-    while (tierEnd < candidates.length
-      && candidates[tierEnd].row.soft === candidates[i].row.soft
-      && demoted(candidates[tierEnd]) === demoted(candidates[i])) tierEnd++;
-    let b = i;
-    while (b < tierEnd) {
-      const bandStart = candidates[b].trip.mileageCost;
-      let bandEnd = b;
-      // Integer math: bandStart * 1.15 wobbles below an exact-15% member.
-      while (bandEnd < tierEnd && candidates[bandEnd].trip.mileageCost * 100 <= bandStart * 115) bandEnd++;
-      const band = candidates.slice(b, bandEnd);
-      band.sort((x, y) => (rankOf(x) - rankOf(y)) || (x.trip.mileageCost - y.trip.mileageCost));
-      reordered.push(...band);
-      b = bandEnd;
-    }
-    i = tierEnd;
-  }
-  candidates.splice(0, candidates.length, ...reordered);
+// ── Phase 5: Expand ────────────────────────────────────────────────────────
+let expandIds = uniq([
+  ...candidates.map((c) => c.id),
+  ...gatewayCandidates.map((c) => c.id),
+  ...onwardMinima.map((m) => m.id),
+]).map(gId);
+if (quotaLow) expandIds = expandIds.slice(0, maxFinalists); // quota-low caps expansion at the finalists ceiling
+if (expandIds.length && stale('expand')) {
+  phase('Expand');
+  const records = await pipeline(expandIds, (id) =>
+    agent(
+      `Expand one availability id into bookable truth — run only the commands named here.\n` +
+      `Run: ${CLI} expand ${gId(id)}\n` +
+      `It returns id, mileage (bookable integer miles), total_taxes, taxes_currency, remaining_seats, total_duration, segments (each with origin, dest, departs_local, arrives_local, flight_number, carrier, aircraft, duration_minutes, cabin as a Y/W/J/F letter), layovers (minutes), and booking_links.\n` +
+      (classifyProduct
+        ? `Then classify the hard product: pick the longest-duration segment whose cabin letter is "J" (business); if one exists, run\n` +
+          `${CLI} quality classify --airline <that segment's carrier> --aircraft <that segment's aircraft>\n` +
+          `and set product to its verdict and product_note to its product name plus its note; leave product "verify" when the verdict is verify and "unknown" when no business segment exists.\n`
+        : ``) +
+      `Return: id "${id}", mileage, total_taxes, taxes_currency, remaining_seats, total_duration, segments, layovers, booking (the primary booking link's url, else the first link's url)` +
+      (classifyProduct ? `, product, product_note.` : `.`),
+      { label: `expand:${id}`, phase: 'Expand', schema: EXPAND_SCHEMA },
+    ),
+  );
+  const expandMap = {};
+  for (const r of records) expandMap[gId(r.id)] = r;
+  const deps = ['shortlist.json', ...(ranGateway ? ['shortlist-gateway.json'] : []), ...(ranOnward ? ['onward.json'] : [])];
+  await persist('expand.json', 'expand', 'Expand', JSON.stringify(expandMap), deps);
+} else if (expandIds.length) {
+  skipped.push('expand');
 }
 
-const kept = candidates.slice(0, maxFinalists);
-const died = rows.length - candidates.length;
-if (died > 0) log(`${died} finalist(s) dropped: expansion agent died or no live trip seats the party`);
-
-// Attach each hybrid leg's bookable truth; drop a hybrid whose award leg did not expand to a seatable trip.
-const finalHybrids = composed
-  .map(h => {
-    const awardTrip = tripByKey[`${h.award.id}|${cabin}`];
-    const onwardTrip = h.onward.mode === 'award' ? tripByKey[`${h.onward.id}|${h.onward.cabin}`] : null;
-    return { ...h, award: { ...h.award, trip: awardTrip }, onward: onwardTrip ? { ...h.onward, trip: onwardTrip } : { ...h.onward } };
-  })
-  .filter(h => seatable(h.award.trip) && (h.onward.mode !== 'award' || seatable(h.onward.trip)));
-const hybridsDied = composed.length - finalHybrids.length;
-if (hybridsDied > 0) log(`${hybridsDied} hybrid(s) dropped: an award leg did not expand to a seatable trip`);
-
-// Transit phase: flag, never filter. Same-ticket connections (origins of segments[1:]) and hybrid
-// gateways (a separate booking self-transfers landside, so an entry check); zero quota, documents-gated.
-const segmentConnections = (t) => {
-  if (!Array.isArray(t.segments) || t.segments.length === 0) throw new Error('plan-trip: expanded trip lacks segments');
-  return [...new Set(t.segments.slice(1).map(s => s.origin))];
+// ── Phase 6: Evidence ──────────────────────────────────────────────────────
+// One zero-quota collector per active judgment factor whose evidence.<collector> phase is stale.
+const COLLECTORS = {
+  verify: {
+    schema: VERIFY_SCHEMA,
+    prompt:
+      `Verify the business hard product of every finalist and hybrid leg — WebSearch only, zero seats.aero quota, run only the getaway commands named here.\n` +
+      `Read the expanded legs:\n${CLI} trip artifact read ${slug} expand.json\n` +
+      `For each record whose product is "verify" or "unknown" and that has a business ("J") segment, confirm the operating carrier and aircraft with the command below, then WebSearch the carrier's seat map for that flight and date, recent cabin reviews, and retrofit trackers to pin the hard product:\n${CLI} quality classify --airline <carrier> --aircraft <aircraft>\n` +
+      `Return verify: an array of {id, product (one of suite, solid, dated, barely, unknown — "unknown" when sources disagree), note (the product name plus one clause on the hard product)}.`,
+  },
+  cash: {
+    schema: CASH_SCHEMA,
+    prompt:
+      `Flag cash-fare anomalies for the business finalists — WebSearch or fli only, zero seats.aero quota, run only the getaway command named here.\n` +
+      `Read the finalist routes and mileage: ${CLI} trip artifact read ${slug} expand.json\n` +
+      `For each finalist route, compare the current one-way business cash fare against what is typical for that route and season; a fare far below typical for business ("unusually cheap for J") is the signal.\n` +
+      `Return cash: an array of {id, route (origin-dest), cabin, quoted (number or null), typical (number or null), currency, anomaly (true when unusually cheap for the cabin), note}.`,
+  },
+  context: {
+    schema: CONTEXT_EV_SCHEMA,
+    prompt:
+      `Add destination context for each finalist endpoint — WebSearch only, zero seats.aero quota, run only the getaway command named here.\n` +
+      `Read the finalist destinations: ${CLI} trip artifact read ${slug} shortlist.json\n` +
+      `For each unique dest, research the trip window: typical weather and season, a short entry/visa note, how the place fits the trip vibe, and any notable EVENTS in the window.\n` +
+      `Return context: an array of {dest, weather, visa, appeal, events}.`,
+  },
+  transit: {
+    schema: TRANSIT_SCHEMA,
+    prompt:
+      `Flag transit-visa and entry risk against the traveler's documents — WebSearch only, zero seats.aero quota, run only the getaway commands named here.\n` +
+      `Read the traveler documents (passports, residency, standing visas):\n${CLI} prefs show\n` +
+      `Read the expanded legs — the origin of every segment after the first is a same-ticket connection airport:\n${CLI} trip artifact read ${slug} expand.json\n` +
+      `Read the hybrid gateways — each candidate's dest is a separate-ticket landside self-transfer, an entry rather than airside transit:\n${CLI} trip artifact read ${slug} shortlist-gateway.json\n` +
+      `For each unique connection airport determine transit (airside) visa risk; for each gateway determine entry risk. Prefer official government and airport sources.\n` +
+      `Return transit: an array of {airport, kind ("transit" or "entry"), risk ("none", "possible", or "required"), note}.`,
+  },
+  return: {
+    schema: RETURN_SCHEMA,
+    prompt:
+      `Check return-direction award viability for each finalist — zero API calls, cache only, run only the getaway commands named here.\n` +
+      `Read the finalists: ${CLI} trip artifact read ${slug} shortlist.json\n` +
+      `For each finalist query the cache for return-direction space (dest -> origin): ${CLI} cache query --origin <dest> --dest <origin>\n` +
+      `A finalist whose return direction has no cached rows is unverified — flag it rather than spending quota.\n` +
+      `Return return: an array of {id, dest, origin, verified (true when cached return rows exist), rows (count), note}.`,
+  },
 };
-const transitByPoint = {};
-let transitRan = false;
-if (hasDocuments) {
-  const transitPoints = [];
-  const seenPoint = new Set();
-  const addPoint = (airport, kind) => {
-    if (!IATA.test(airport)) throw new Error(`plan-trip: transit check-point airport failed the injection guard: ${airport}`);
-    const key = `${airport}|${kind}`;
-    if (seenPoint.has(key)) return;
-    seenPoint.add(key);
-    transitPoints.push({ airport, kind });
-  };
-  for (const { trip } of kept) for (const apt of segmentConnections(trip)) addPoint(apt, 'transit');
-  for (const h of finalHybrids) {
-    for (const apt of segmentConnections(h.award.trip)) addPoint(apt, 'transit');
-    if (h.onward.mode === 'award') for (const apt of segmentConnections(h.onward.trip)) addPoint(apt, 'transit');
-    addPoint(h.gateway, 'entry');
-  }
-  transitRan = transitPoints.length > 0;
-  if (transitRan) {
-    phase('Transit');
-    const flags = await pipeline(transitPoints, pt => agent(
-      (pt.kind === 'transit'
-        ? `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to determine whether ${traveler} needs a transit (airside) visa to connect through airport ${pt.airport} on a single ticket. Prefer official government and airport sources. Note the hinges: sterile airside transit versus clearing immigration, terminal changes, and minimum layover length.\n\n`
-        : `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to determine whether ${traveler} meets entry requirements for a landside self-transfer at airport ${pt.airport}: a separate booking forces leaving the sterile area and re-entering, so this is an entry, not airside transit. Prefer official government sources. Note the hinges: visa-on-arrival versus a pre-arranged visa, immigration and terminal layout, and layover length.\n\n`) +
-      `Return:\n- airport: "${pt.airport}"\n` +
-      `- risk: one of none, possible, required — none when nothing extra is needed, possible when it hinges on terminal, route, layover, or documents, required when a visa is clearly needed\n` +
-      `- transitNote: one or two sentences on what the traveler must verify.`,
-      { label: `transit:${pt.airport}`, phase: 'Transit', schema: TRANSIT_SCHEMA },
-    ));
-    // transitPoints[i] aligns with flags[i]; key by our validated code, never the agent-echoed one.
-    transitPoints.forEach((pt, i) => {
-      const f = flags[i];
-      if (f && f.risk !== 'none') transitByPoint[`${pt.airport}|${pt.kind}`] = { airport: pt.airport, risk: f.risk, transitNote: f.transitNote };
-    });
-  }
-}
-skipped.transit = !transitRan;
-
-const enrichByDest = {};
-if (enrichRan) {
-  phase('Enrich');
-  const dests = [...new Set([...kept.map(c => c.row.dest), ...finalHybrids.map(h => h.dest)])];
-  const enriched = await pipeline(dests, dest => agent(
-    `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to research airport ${dest} for travel in ${startDate.slice(0, 7)}. Return:\n` +
-    `- dest: "${dest}"\n- weather: the typical weather and season for that window\n` +
-    `- visaNote: a short entry/visa note for ${traveler}\n- appeal: one or two sentences on how it fits a "${vibe}" trip.`,
-    { label: `enrich:${dest}`, phase: 'Enrich', schema: ENRICH_SCHEMA },
-  ));
-  for (const e of enriched.filter(Boolean)) enrichByDest[e.dest] = e;
+const staleCollectors = activeCollectors.filter((c) => {
+  if (stale(`evidence.${c}`)) return true;
+  skipped.push(`evidence.${c}`);
+  return false;
+});
+if (candidates.length && staleCollectors.length) {
+  phase('Evidence');
+  await parallel(
+    staleCollectors.map((c) => async () => {
+      const spec = COLLECTORS[c];
+      const evidence = await agent(spec.prompt, { label: `evidence:${gFactor(c)}`, phase: 'Evidence', schema: spec.schema });
+      await persist(`evidence-${gFactor(c)}.json`, `evidence.${c}`, 'Evidence', JSON.stringify(evidence), ['shortlist.json']);
+    }),
+  );
 }
 
-const finalists = kept.map(({ row, trip }) => {
-  const enrich = enrichByDest[row.dest];
-  const transit = segmentConnections(trip).map(apt => transitByPoint[`${apt}|transit`]).filter(Boolean);
-  const judge = judgeVerdicts.get(trip.id);
-  return { ...row, trip, ...(transit.length ? { transit } : {}), ...(judge ? { judge } : {}), ...(enrich ? { enrich } : {}) };
-});
-const hybrids = finalHybrids.map(h => {
-  const enrich = enrichByDest[h.dest];
-  const conns = [...new Set([
-    ...segmentConnections(h.award.trip),
-    ...(h.onward.mode === 'award' ? segmentConnections(h.onward.trip) : []),
-  ])];
-  const transit = [transitByPoint[`${h.gateway}|entry`], ...conns.map(apt => transitByPoint[`${apt}|transit`])].filter(Boolean);
-  // Cash onward legs (Bridge retains only `stops`, no connection airports); flag a stopped hop generically.
-  if (h.onward.mode === 'cash' && h.onward.stops >= 1) transit.push({ airport: 'unknown', risk: 'possible', transitNote: 'One-stop cash leg — connection airport not identified by the quote; verify transit rules for the routing when booking.' });
-  return { ...h, ...(transit.length ? { transit } : {}), ...(enrich ? { enrich } : {}) };
-});
+// ── Phase 7: Assess ────────────────────────────────────────────────────────
+if (candidates.length && stale('assess')) {
+  phase('Assess');
+  const evidenceReads = activeCollectors
+    .map((c) => `- ${CLI} trip artifact read ${slug} evidence-${gFactor(c)}.json`)
+    .join('\n');
+  const assessment = await agent(
+    `Weigh every finalist against the trip's judgment factors and return per-finalist per-factor verdicts — zero seats.aero quota, run only the getaway commands named here.\n` +
+    `Read the trip's guidance (use judgment.guidance and judgment.factors):\n${CLI} trip show ${slug}\n` +
+    `Read the finalists:\n${CLI} trip artifact read ${slug} shortlist.json\n` +
+    `Read the expanded legs:\n${CLI} trip artifact read ${slug} expand.json\n` +
+    (evidenceReads ? `Read the collected evidence:\n${evidenceReads}\n` : ``) +
+    `\nScore each of these judgment factors for each finalist: ${activeFactors.join(', ') || 'none'}.\n` +
+    `The layovers factor follows the layover doctrine: mileage dominates and a verdict only reorders options within a mileage band, so judge each option's layovers on their own merits. Under the traveler's comfortable-connection floor is risky-short (demote and name the margin). Floor to ~3h is comfortable (neutral). ~3-6h is dead time (mild demote, softened at airports that pass hours well like DOH, SIN, ICN). Over ~6h forks on style and city: an explore-style traveler with a city worth leaving the airport for is a promote; a minimize-style traveler, an avoid-listed city, or no feasible exit is a harder demote. Overnight gaps are dead-long unless explore-style and the city warrants it. A nonstop is neutral — never demote for having no layover.\n` +
+    `Every other factor gets its verdict from the evidence and guidance you read.\n` +
+    `Return finalists: an array of {id, factors} where factors maps each judged factor id to {verdict ("promote", "neutral", or "demote"), evidence (one sentence)}.`,
+    { label: 'assess', phase: 'Assess', schema: ASSESS_SCHEMA },
+  );
+  const assessMap = {};
+  for (const f of assessment.finalists) assessMap[gId(f.id)] = f.factors;
+  const assessDeps = ['shortlist.json', 'expand.json', ...activeCollectors.map((c) => `evidence-${gFactor(c)}.json`)];
+  await persist('assess.json', 'assess', 'Assess', JSON.stringify(assessMap), assessDeps);
+} else if (candidates.length) {
+  skipped.push('assess');
+}
 
-const allQuotas = [...quotas, ...expandResults.filter(Boolean).map(t => t.quota).filter(q => q >= 0)];
-return { finalists, hybrids, sweepFiles, considered: shortlist.considered, quota: allQuotas.length ? Math.min(...allQuotas) : -1, skipped };
+// ── Phase 8: Rank ──────────────────────────────────────────────────────────
+phase('Rank');
+await agent(
+  `Run exactly this one offline command (zero seats.aero quota) and return its result count — run no other getaway command:\n` +
+  `${CLI} rank ${slug}\n` +
+  `It applies deterministic facts and judgment tiers within mileage bands and writes rank.json. Return {"ranked": <number of ranked entries>}.`,
+  { label: 'rank', phase: 'Rank', schema: RANK_SCHEMA },
+);
+
+// ── Phase 9: Finalize ──────────────────────────────────────────────────────
+phase('Finalize');
+const finalized = await agent(
+  `Run exactly this one offline command (zero seats.aero quota) and return its counts — run no other getaway command:\n` +
+  `${CLI} trip finalize ${slug}\n` +
+  `It merges directs and composes hybrids into finalists.json. Return {"finalists": <directs length>, "hybrids": <hybrids length>}.`,
+  { label: 'finalize', phase: 'Finalize', schema: FINALIZE_SCHEMA },
+);
+
+log(`plan-trip ${slug}: ${finalized.finalists} finalist(s), ${finalized.hybrids} hybrid(s), quota ${quotaRemaining ?? 'unknown'}`);
+return { slug, finalists: finalized.finalists, hybrids: finalized.hybrids, quota: quotaRemaining, skipped };
