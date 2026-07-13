@@ -4,6 +4,7 @@
     "name": "Yasyf Mohamedali",
     "url": "https://github.com/yasyf"
   },
+  "allowCrossMarketplaceDependenciesOn": ["captain-hook"],
   "plugins": [
     {
       "name": "getaway",

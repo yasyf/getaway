@@ -8,9 +8,18 @@
 ## Get started
 
 ```text
+/plugin marketplace add yasyf/captain-hook
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```
+
+Add the `yasyf/captain-hook` marketplace first. getaway's hooks run through the
+`captain-hook` plugin, and Claude Code installs and enables that dependency
+automatically only when its marketplace is already added.
+
+On an existing getaway install, `claude plugin update` does not resolve the
+newly added dependency. Add the `yasyf/captain-hook` marketplace, then re-run
+`claude plugin install` (or `/reload-plugins` in-session).
 
 getaway needs a seats.aero Pro API key, generated on the seats.aero Settings
 page under the API tab:
@@ -47,6 +56,7 @@ route, program, miles, business seats, operating airlines:
 Driving with an agent? Paste this:
 
 ```text
+/plugin marketplace add yasyf/captain-hook
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```

@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durations — in `docs/seats-aero-api.md`, verified live 2026-07-13.
 
 ### Changed
+- capt-hook wiring is attach-only: the `captain-hook` plugin is now a
+  declared dependency (`>=9.9.0`) that dispatches hook events, and
+  `hooks/hooks.json` ships only the canonical `pack attach` entry. Add the
+  `yasyf/captain-hook` marketplace before installing getaway; existing users
+  re-run `claude plugin install` after adding it (see the README).
 - Trip expansion projects structured segments plus derived layover
   minutes per finalist.
 - The expansion funnel widens to 2× finalists (cap 12) in every cabin,

@@ -1,13 +1,7 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "uvx capt-hook pack attach \"${CLAUDE_PLUGIN_ROOT}\"" }] }
-    ],
-    "PostToolUse": [
-      { "matcher": "Skill", "hooks": [{ "type": "command", "command": "uvx capt-hook run PostToolUse" }] }
-    ],
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "uvx capt-hook run Stop" }] }
+      { "hooks": [{ "type": "command", "command": "uvx --isolated capt-hook pack attach \"${CLAUDE_PLUGIN_ROOT}\"" }] }
     ]
   }
 }

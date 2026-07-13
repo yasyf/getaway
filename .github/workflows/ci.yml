@@ -113,3 +113,5 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests
         run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json
+      - name: Lint capt-hook pack
+        run: uvx capt-hook pack lint "$GITHUB_WORKSPACE"

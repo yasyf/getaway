@@ -1,11 +1,14 @@
 {
   "name": "getaway",
   "description": "Plan award flights from Claude Code. getaway searches seats.aero award space across 26 mileage programs and plans the trip around your preferences — dates, cabins, balances, booking links.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "author": {
     "name": "Yasyf Mohamedali",
     "url": "https://github.com/yasyf"
   },
   "homepage": "https://github.com/yasyf/getaway",
-  "license": "PolyForm-Noncommercial-1.0.0"
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "dependencies": [
+    { "name": "captain-hook", "marketplace": "captain-hook", "version": ">=9.9.0" }
+  ]
 }
