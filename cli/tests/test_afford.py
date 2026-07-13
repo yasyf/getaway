@@ -1,0 +1,115 @@
+import json
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from getaway import afford, paths
+
+
+def _prefs(programs: dict | None = None, transferable: dict | None = None) -> dict:
+    return {"balances": {"programs": programs or {}, "transferable": transferable or {}}}
+
+
+def test_covered_outright_has_zero_shortfall_and_no_purchase() -> None:
+    result = afford.afford("aeroplan", 80000, _prefs({"aeroplan": 100000}))
+    assert result["covered"] is True
+    assert result["balance"] == 100000
+    assert result["shortfall"] == 0
+    assert result["purchase"] is None
+
+
+def test_shortfall_marks_only_the_covering_transfer_path() -> None:
+    result = afford.afford(
+        "aeroplan",
+        80000,
+        _prefs({"aeroplan": 50000}, {"amex": 50000, "chase": 10000}),
+    )
+    assert result["shortfall"] == 30000
+    by_bank = {p["bank"]: p for p in result["transfer_paths"]}
+    assert set(by_bank) == {"amex", "chase", "capitalone"}
+    assert by_bank["amex"] == {
+        "bank": "amex",
+        "bank_balance": 50000,
+        "ratio": "1:1",
+        "points_required": 30000,
+        "covers": True,
+    }
+    assert by_bank["chase"]["covers"] is False
+    assert by_bank["capitalone"]["bank_balance"] == 0
+
+
+@pytest.mark.parametrize(
+    ("bank", "ratio", "expected_required"),
+    [
+        pytest.param("capitalone", "1:0.6", 16667, id="ratio-1-to-0.6-ceils-up"),
+        pytest.param("amex", "1:0.8", 12500, id="ratio-1-to-0.8-exact"),
+        pytest.param("citi", "1:1", 10000, id="ratio-1-to-1"),
+    ],
+)
+def test_transfer_ratio_arithmetic(bank: str, ratio: str, expected_required: int) -> None:
+    result = afford.afford("jetblue", 10000, _prefs())
+    path = next(p for p in result["transfer_paths"] if p["bank"] == bank)
+    assert path["ratio"] == ratio
+    assert path["points_required"] == expected_required
+
+
+def test_include_purchase_costs_from_typical_sale_cents() -> None:
+    result = afford.afford("aeroplan", 100000, _prefs(), include_purchase=True)
+    assert result["purchase"] == {
+        "rate_cents": 1.44,
+        "cost_usd": 1440.0,
+        "cap_note": None,
+    }
+
+
+def test_include_purchase_falls_back_to_buy_rate() -> None:
+    result = afford.afford("aeromexico", 10000, _prefs(), include_purchase=True)
+    assert result["purchase"] == {
+        "rate_cents": 1.5,
+        "cost_usd": 150.0,
+        "cap_note": None,
+    }
+
+
+def test_include_purchase_flags_annual_cap_exceeded() -> None:
+    result = afford.afford("delta", 100000, _prefs(), include_purchase=True)
+    assert result["purchase"]["cap_note"] == "100000 exceeds delta annual purchase cap of 60000"
+
+
+@pytest.mark.parametrize(
+    ("program", "reason"),
+    [
+        pytest.param("singapore", "singapore does not sell points", id="non-seller"),
+        pytest.param("eurobonus", "no public buy rate for eurobonus", id="null-rate-seller"),
+    ],
+)
+def test_null_rate_program_yields_purchase_with_null_cost_and_reason(
+    program: str, reason: str
+) -> None:
+    purchase = afford.afford(program, 50000, _prefs(), include_purchase=True)["purchase"]
+    assert purchase["rate_cents"] is None
+    assert purchase["cost_usd"] is None
+    assert purchase["reason"] == reason
+
+
+def test_no_include_purchase_leaves_purchase_null_even_with_shortfall() -> None:
+    result = afford.afford("aeroplan", 100000, _prefs())
+    assert result["shortfall"] == 100000
+    assert result["purchase"] is None
+
+
+def test_cli_afford_loads_prefs_from_home(getaway_home: Path) -> None:
+    paths.atomic_write_text(paths.prefs_path(), json.dumps(_prefs({"united": 40000})))
+    result = CliRunner().invoke(
+        afford.afford_cmd, ["--program", "united", "--miles", "90000"]
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["balance"] == 40000
+    assert payload["shortfall"] == 50000
+
+
+def test_cli_afford_unknown_program_exits_no_data(getaway_home: Path) -> None:
+    result = CliRunner().invoke(afford.afford_cmd, ["--program", "nope", "--miles", "1000"])
+    assert result.exit_code == 4

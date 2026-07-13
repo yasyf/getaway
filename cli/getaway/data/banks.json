@@ -2,21 +2,25 @@
   "amex": {
     "name": "American Express",
     "domain": "americanexpress.com",
-    "dashboard_host": "global.americanexpress.com"
+    "dashboard_host": "global.americanexpress.com",
+    "currency": "Membership Rewards"
   },
   "chase": {
     "name": "Chase",
     "domain": "chase.com",
-    "dashboard_host": "secure.chase.com"
+    "dashboard_host": "secure.chase.com",
+    "currency": "Ultimate Rewards"
   },
   "citi": {
     "name": "Citi",
     "domain": "citi.com",
-    "dashboard_host": "online.citi.com"
+    "dashboard_host": "online.citi.com",
+    "currency": "ThankYou Points"
   },
   "capitalone": {
     "name": "Capital One",
     "domain": "capitalone.com",
-    "dashboard_host": "myaccounts.capitalone.com"
+    "dashboard_host": "myaccounts.capitalone.com",
+    "currency": "Capital One miles"
   }
 }

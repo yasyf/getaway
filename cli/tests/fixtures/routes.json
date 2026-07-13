@@ -1,0 +1,29 @@
+[
+  {
+    "ID": "2OgDZKKJO8xO0Gd67UogPLwJR6G",
+    "OriginAirport": "CAI",
+    "OriginRegion": "Africa",
+    "DestinationAirport": "AMM",
+    "DestinationRegion": "Asia",
+    "Distance": 293,
+    "Source": "aeroplan"
+  },
+  {
+    "ID": "3PhEALLKP9yP1He78VphQMxKS7H",
+    "OriginAirport": "YYZ",
+    "OriginRegion": "North America",
+    "DestinationAirport": "NRT",
+    "DestinationRegion": "Asia",
+    "Distance": 6410,
+    "Source": "aeroplan"
+  },
+  {
+    "ID": "4QiFBMMLQ0zQ2If89WqiRNyLT8I",
+    "OriginAirport": "YVR",
+    "OriginRegion": "North America",
+    "DestinationAirport": "SYD",
+    "DestinationRegion": "Oceania",
+    "Distance": 7810,
+    "Source": "aeroplan"
+  }
+]

@@ -206,7 +206,8 @@
       "spirit.com"
     ],
     "seats_aero": true,
-    "beta": false
+    "beta": false,
+    "note": "Spirit Airlines ceased operations 2026-05-02 (court-supervised liquidation); slug retained to mirror the seats.aero source list."
   },
   "british": {
     "name": "BA Executive Club",

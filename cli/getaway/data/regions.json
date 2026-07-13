@@ -2,205 +2,536 @@
   {
     "code": "AAH",
     "label": "American Airlines – major hubs",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "MIA",
+      "DFW",
+      "PHX",
+      "CLT",
+      "PHL",
+      "JFK",
+      "GRD"
+    ]
   },
   {
     "code": "ANZ",
     "label": "Australia & New Zealand – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "SYD",
+      "MEL",
+      "BNE",
+      "PER",
+      "AKL",
+      "ADL"
+    ]
   },
   {
     "code": "ASA",
     "label": "Asia – large airports",
     "kind": "continent",
-    "note": "Observed /search expansion (2026-07-10): NRT, ICN, HND, TPE, PVG, HKG, BKK, SIN."
+    "note": "Observed /search expansion (2026-07-10): NRT, ICN, HND, TPE, PVG, HKG, BKK, SIN.",
+    "airports": [
+      "HND",
+      "NRT",
+      "SIN",
+      "BKK",
+      "ICN",
+      "HKG",
+      "KUL",
+      "TPE",
+      "PVG",
+      "PEK",
+      "PNK"
+    ]
   },
   {
     "code": "AUL",
     "label": "Australia – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "SYD",
+      "MEL",
+      "BNE",
+      "PER",
+      "ADL"
+    ]
   },
   {
     "code": "BJS",
     "label": "Beijing metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "PEK",
+      "PKX"
+    ]
   },
   {
     "code": "BRL",
     "label": "Brazil – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "GRU",
+      "GIG",
+      "CNF",
+      "BSB",
+      "REC",
+      "POA",
+      "FLN",
+      "CWB",
+      "FOR",
+      "MAO",
+      "BEL",
+      "VCP",
+      "CGB",
+      "NAT",
+      "SLZ",
+      "MEZ",
+      "AJU",
+      "JPA",
+      "IGU",
+      "THE",
+      "CPV",
+      "PVH",
+      "PMR",
+      "JDO",
+      "LDB",
+      "SJP",
+      "CGR",
+      "IOS",
+      "PMW",
+      "STM",
+      "MAD"
+    ]
   },
   {
     "code": "CAD",
     "label": "Canada – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "YVR",
+      "YYZ",
+      "YYC",
+      "YUL",
+      "YEG",
+      "YOW",
+      "YHZ",
+      "YQB",
+      "YQR",
+      "YXE"
+    ]
   },
   {
     "code": "CAL",
     "label": "California, United States",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "LAX",
+      "SFO",
+      "SAN",
+      "OAK",
+      "SJC",
+      "SMF"
+    ]
   },
   {
     "code": "CAR",
     "label": "Caribbean – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "AUA",
+      "BGI",
+      "BON",
+      "ANU",
+      "AXA",
+      "SJU",
+      "STX",
+      "SXM"
+    ]
   },
   {
     "code": "CHI",
     "label": "Chicago metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "ORD",
+      "MDW"
+    ]
   },
   {
     "code": "CNA",
     "label": "Mainland China – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "PEK",
+      "PVG",
+      "CAN",
+      "SZX",
+      "CSX",
+      "TSN",
+      "XMN"
+    ]
   },
   {
     "code": "DLL",
     "label": "Delta Air Lines – major hubs",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "ATL",
+      "DTW",
+      "MSP",
+      "SEA",
+      "SLC",
+      "LAX",
+      "JFK",
+      "BOS"
+    ]
   },
   {
     "code": "EST",
     "label": "East Coast, United States",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "JFK",
+      "LGA",
+      "EWR",
+      "BOS",
+      "PHL",
+      "PIT",
+      "IAD",
+      "DCA",
+      "CLT"
+    ]
   },
   {
     "code": "EUR",
     "label": "Europe – large airports",
-    "kind": "continent"
+    "kind": "continent",
+    "airports": [
+      "AMS",
+      "ATH",
+      "BCN",
+      "BER",
+      "CDG",
+      "CPH",
+      "DUB",
+      "FRA",
+      "FIS",
+      "LHR",
+      "LIS",
+      "MAD",
+      "FCO",
+      "ZRH",
+      "HEL",
+      "ARN",
+      "VIE",
+      "BRU",
+      "PRG"
+    ]
   },
   {
     "code": "GCR",
     "label": "Germany – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "MUC",
+      "FRA",
+      "BER"
+    ]
   },
   {
     "code": "JPN",
     "label": "Japan – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "HND",
+      "NRT",
+      "KIX",
+      "NGO"
+    ]
   },
   {
     "code": "LON",
     "label": "London metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "LHR",
+      "LGW",
+      "STN",
+      "LTN"
+    ]
   },
   {
     "code": "MEA",
     "label": "Middle East – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "DXB",
+      "AUH",
+      "DOH"
+    ]
   },
   {
     "code": "MEX",
     "label": "Mexico – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "MEX",
+      "CUN",
+      "GDL",
+      "MTY",
+      "TIJ",
+      "SJD",
+      "PVR"
+    ]
   },
   {
     "code": "MMW",
     "label": "Midwest, United States",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "ORD",
+      "MSP",
+      "DTW",
+      "CLE",
+      "CVG",
+      "IND",
+      "MKE"
+    ]
   },
   {
     "code": "NYC",
     "label": "New York City metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "JFK",
+      "LGA",
+      "EWR"
+    ]
   },
   {
     "code": "OSA",
     "label": "Osaka metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "KIX",
+      "ITM"
+    ]
   },
   {
     "code": "PAR",
     "label": "Paris metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "CDG",
+      "ORY"
+    ]
   },
   {
     "code": "QBA",
     "label": "San Francisco Bay Area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "SFO",
+      "SJC",
+      "OAK"
+    ]
   },
   {
     "code": "QLA",
     "label": "Los Angeles metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "LAX",
+      "BUR",
+      "SNA",
+      "ONT",
+      "LGB"
+    ]
   },
   {
     "code": "QMI",
     "label": "Miami metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "MIA",
+      "FLL",
+      "PBI"
+    ]
   },
   {
     "code": "RIO",
     "label": "Rio de Janeiro metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "GIG",
+      "SDU"
+    ]
   },
   {
     "code": "SAM",
     "label": "South America – large airports",
-    "kind": "continent"
+    "kind": "continent",
+    "airports": [
+      "EZE",
+      "GRU",
+      "GIG",
+      "SCL",
+      "LIM",
+      "BOG"
+    ]
   },
   {
     "code": "SAO",
     "label": "São Paulo metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "GRU",
+      "CGH",
+      "VCP"
+    ]
   },
   {
     "code": "SCH",
     "label": "Schengen Area – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "AMS",
+      "ATH",
+      "BCN",
+      "BER",
+      "CDG",
+      "FRA",
+      "LIS",
+      "MAD",
+      "FCO",
+      "ZRH",
+      "HEL",
+      "ARN",
+      "VIE",
+      "BRU",
+      "CPH",
+      "PRG",
+      "AGP"
+    ]
   },
   {
     "code": "SEA",
     "label": "Southeast Asia – large airports",
     "kind": "regional",
-    "note": "Collides with SEA the Seattle airport code; the Partner API's resolution of the bare string is undocumented."
+    "note": "Collides with SEA the Seattle airport code; the Partner API's resolution of the bare string is undocumented.",
+    "airports": [
+      "SIN",
+      "KUL",
+      "BKK",
+      "SGN",
+      "HAN",
+      "MNL",
+      "CGK",
+      "DPS"
+    ]
   },
   {
     "code": "SEL",
     "label": "Seoul metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "ICN",
+      "GMP"
+    ]
   },
   {
     "code": "TYO",
     "label": "Tokyo metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "HND",
+      "NRT"
+    ]
   },
   {
     "code": "UAH",
     "label": "United Airlines – major hubs",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "DEN",
+      "IAH",
+      "ORD",
+      "SFO",
+      "LAX",
+      "EWR",
+      "IAD"
+    ]
   },
   {
     "code": "UKD",
     "label": "United Kingdom – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "LHR",
+      "LGW",
+      "MAN"
+    ]
   },
   {
     "code": "USA",
     "label": "United States – large airports",
-    "kind": "regional"
+    "kind": "regional",
+    "airports": [
+      "SFO",
+      "LAX",
+      "JFK",
+      "EWR",
+      "ORD",
+      "ATL",
+      "IAD",
+      "DFW",
+      "MIA",
+      "SEA",
+      "DEN",
+      "BOS"
+    ]
   },
   {
     "code": "WAS",
     "label": "Washington, DC metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "IAD",
+      "DCA",
+      "BWI"
+    ]
   },
   {
     "code": "WST",
     "label": "West Coast, United States",
     "kind": "regional",
-    "note": "Observed /search expansion (2026-07-10) is a superset of the UI list: SFO, SEA, LAX, YVR, LAS, PHX, PDX, SAN, SLC — adds LAX, SEA, PHX."
+    "note": "Observed /search expansion (2026-07-10) is a superset of the UI list: SFO, SEA, LAX, YVR, LAS, PHX, PDX, SAN, SLC — adds LAX, SEA, PHX.",
+    "airports": [
+      "SFO",
+      "SJC",
+      "SAN",
+      "PDX",
+      "DEN",
+      "YVR",
+      "LAS",
+      "SLC"
+    ]
   },
   {
     "code": "YTO",
     "label": "Toronto metropolitan area",
-    "kind": "metro"
+    "kind": "metro",
+    "airports": [
+      "YYZ",
+      "YTZ"
+    ]
   },
   {
     "code": "QAF",
     "label": "Africa",
     "kind": "continent",
-    "note": "Undocumented Africa pseudo-code; works on /search (verified 2026-07-12). Observed floor: CMN, CAI, ADD, CPT, JNB, NBO. The API's Africa bucket also returns Indian Ocean (MRU, MLE) and Canary Islands (FUE, ACE) airports."
+    "note": "Undocumented Africa pseudo-code; works on /search (verified 2026-07-12). Observed floor: CMN, CAI, ADD, CPT, JNB, NBO. The API's Africa bucket also returns Indian Ocean (MRU, MLE) and Canary Islands (FUE, ACE) airports.",
+    "airports": null
   }
 ]

@@ -1,0 +1,64 @@
+{
+  "data": [
+    {
+      "MileageCost": 44000,
+      "TotalTaxes": 18560,
+      "TaxesCurrency": "USD",
+      "RemainingSeats": 2,
+      "Stops": 1,
+      "Connections": ["CLT"],
+      "FlightNumbers": "AA715, AA742",
+      "FareClasses": "I, I",
+      "Carriers": "AA",
+      "TotalDuration": 490,
+      "AvailabilitySegments": [
+        {
+          "FlightNumber": "AA742",
+          "OriginAirport": "CLT",
+          "DestinationAirport": "JFK",
+          "AircraftName": "Boeing 737-800",
+          "AircraftCode": "738",
+          "Cabin": "business",
+          "FareClass": "I",
+          "DepartsAt": "2026-09-01T16:30:00Z",
+          "ArrivesAt": "2026-09-01T18:10:00Z",
+          "Duration": 100,
+          "Distance": 541,
+          "Order": 1
+        },
+        {
+          "FlightNumber": "AA715",
+          "OriginAirport": "SFO",
+          "DestinationAirport": "CLT",
+          "AircraftName": "Airbus A321",
+          "AircraftCode": "321",
+          "Cabin": "business",
+          "FareClass": "I",
+          "DepartsAt": "2026-09-01T07:00:00Z",
+          "ArrivesAt": "2026-09-01T15:00:00Z",
+          "Duration": 300,
+          "Distance": 2296,
+          "Order": 0
+        }
+      ]
+    }
+  ],
+  "booking_links": [
+    {
+      "label": "Book with American",
+      "link": "https://www.aa.com/booking/find-flights",
+      "primary": true
+    }
+  ],
+  "carriers": {
+    "AA": "American Airlines"
+  },
+  "origin_coordinates": {
+    "Lat": 37.6213,
+    "Lon": -122.379
+  },
+  "destination_coordinates": {
+    "Lat": 40.6413,
+    "Lon": -73.7781
+  }
+}

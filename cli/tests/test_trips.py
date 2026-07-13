@@ -1,0 +1,323 @@
+import datetime as dt
+import json
+import threading
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from click.testing import CliRunner
+
+from getaway import prefs, trips
+from getaway.paths import StateConflictError, UsageError
+
+SLUG = "2026-07-warm-beachy-week"
+
+
+@pytest.fixture
+def ready(getaway_home: Path) -> Path:
+    prefs.init()
+    return getaway_home
+
+
+@pytest.fixture
+def runner() -> CliRunner:
+    return CliRunner()
+
+
+def test_new_stamps_template(ready: Path, frozen_clock: Callable[[], dt.datetime]) -> None:
+    doc = trips.new(SLUG, ask="somewhere warm", now=frozen_clock)
+    assert doc == {
+        "slug": SLUG,
+        "created": "2026-07-13T12:00:00+00:00",
+        "status": "planning",
+        "ask": "somewhere warm",
+        "window": {"start": None, "end": None, "trip_length_days": None},
+        "cabin": None,
+        "party": 1,
+        "regions": {"include": [], "exclude": []},
+        "vibe": [],
+        "avoid_final_destinations": [],
+        "plan": {},
+        "judgment": {},
+        "decisions": [],
+    }
+    assert json.loads((trips.trip_dir(SLUG) / "trip.json").read_text()) == doc
+
+
+def test_new_sets_current_pointer_without_trailing_newline(ready: Path) -> None:
+    trips.new(SLUG)
+    pointer = trips.current_pointer()
+    assert pointer.read_text() == SLUG
+    assert not pointer.read_text().endswith("\n")
+
+
+def test_new_refuses_existing_trip(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(StateConflictError):
+        trips.new(SLUG)
+
+
+def test_new_cli_exits_state_conflict_on_duplicate(ready: Path, runner: CliRunner) -> None:
+    trips.new(SLUG)
+    result = runner.invoke(trips.trip_group, ["new", SLUG])
+    assert result.exit_code == 3
+
+
+@pytest.mark.parametrize("reserved", ["slug", "created"])
+def test_set_patch_rejects_reserved_keys(ready: Path, reserved: str) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {reserved: "x"})
+
+
+def test_set_patch_rejects_unknown_key(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"budget": 1000})
+
+
+@pytest.mark.parametrize(
+    ("patch", "key", "value"),
+    [
+        pytest.param({"cabin": "business"}, "cabin", "business", id="cabin"),
+        pytest.param({"party": 3}, "party", 3, id="party"),
+        pytest.param(
+            {"window": {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10}},
+            "window",
+            {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10},
+            id="window",
+        ),
+        pytest.param({"vibe": ["beach", "food"]}, "vibe", ["beach", "food"], id="vibe"),
+        pytest.param(
+            {"regions": {"include": ["asia"], "exclude": ["north_america"]}},
+            "regions",
+            {"include": ["asia"], "exclude": ["north_america"]},
+            id="regions",
+        ),
+    ],
+)
+def test_set_patch_merges_valid(ready: Path, patch: dict, key: str, value: object) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(SLUG, patch)
+    assert doc[key] == value
+    assert doc["slug"] == SLUG  # reserved keys survive the merge
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        pytest.param({"cabin": "cattle"}, id="cabin-not-a-known-class"),
+        pytest.param({"party": 0}, id="party-below-one"),
+        pytest.param({"party": "two"}, id="party-not-int"),
+        pytest.param(
+            {"window": {"start": "2026-09-01"}}, id="window-missing-keys"
+        ),
+        pytest.param(
+            {"window": {"start": 5, "end": None, "trip_length_days": None}},
+            id="window-start-not-string",
+        ),
+        pytest.param({"regions": {"include": ["asia"]}}, id="regions-missing-exclude"),
+        pytest.param({"vibe": "beach"}, id="vibe-not-list"),
+    ],
+)
+def test_set_patch_rejects_invalid_shape(ready: Path, patch: dict) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, patch)
+
+
+@pytest.mark.parametrize(
+    "bad_slug",
+    [
+        pytest.param("../evil", id="parent-traversal"),
+        pytest.param("a/b", id="embedded-slash"),
+        pytest.param("Uppercase", id="uppercase"),
+        pytest.param("a", id="too-short"),
+        pytest.param("-leading", id="leading-hyphen"),
+        pytest.param("has space", id="whitespace"),
+    ],
+)
+def test_slug_traversal_rejected_everywhere(ready: Path, bad_slug: str) -> None:
+    for call in (
+        lambda: trips.new(bad_slug),
+        lambda: trips.show(bad_slug),
+        lambda: trips.set_patch(bad_slug, {"cabin": "business"}),
+        lambda: trips.log(bad_slug, "note"),
+        lambda: trips.current_set(bad_slug),
+        lambda: trips.artifact_list(bad_slug),
+        lambda: trips.artifact_write(bad_slug, "x.json", "{}"),
+    ):
+        with pytest.raises(UsageError):
+            call()
+
+
+def test_pointer_lifecycle_and_done_clears(ready: Path) -> None:
+    trips.new(SLUG)
+    assert trips.current_get() == SLUG
+    other = "2026-11-ski-trip"
+    trips.new(other)
+    assert trips.current_get() == other
+    trips.current_set(SLUG)
+    assert trips.current_get() == SLUG
+    done_doc = trips.done(SLUG)
+    assert done_doc["status"] == "done"
+    assert trips.current_get() is None
+
+
+def test_done_leaves_unrelated_pointer(ready: Path) -> None:
+    trips.new(SLUG)
+    other = "2026-11-ski-trip"
+    trips.new(other)  # current now points at other
+    trips.done(SLUG)
+    assert trips.current_get() == other
+
+
+def test_done_clear_serialized_against_concurrent_current_set(
+    ready: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trips.new(SLUG)  # current -> SLUG
+    other = "2026-11-ski-trip"
+    trips.new(other)  # current -> other
+    trips.current_set(SLUG)  # current -> SLUG, so done(SLUG) will want to clear it
+    pointer = trips.current_pointer()
+
+    reached_read = threading.Event()
+    setter_wrote = threading.Event()
+
+    def concurrent_set() -> None:
+        reached_read.wait()
+        trips.current_set(other)  # blocks on the pointer lock while done() holds it
+        setter_wrote.set()
+
+    setter = threading.Thread(target=concurrent_set)
+    setter.start()
+
+    real_read_text = Path.read_text
+
+    def read_text_hook(self: Path) -> str:
+        value = real_read_text(self)
+        if self == pointer and not reached_read.is_set():
+            reached_read.set()
+            # Fixed done() reads under the pointer lock, so the setter stays blocked
+            # and this times out; the pre-fix read-then-unlink held no lock, letting
+            # the setter write `other` into the gap before the unlink.
+            setter_wrote.wait(timeout=1.0)
+        return value
+
+    monkeypatch.setattr(Path, "read_text", read_text_hook)
+    trips.done(SLUG)
+    setter.join(timeout=5)
+    assert not setter.is_alive()
+    assert trips.current_get() == other
+
+
+def test_log_appends_decisions(ready: Path, frozen_clock: Callable[[], dt.datetime]) -> None:
+    trips.new(SLUG)
+    trips.log(SLUG, "picked BKK", now=frozen_clock)
+    trips.log(SLUG, "ruled out ICN", now=frozen_clock)
+    decisions = trips.show(SLUG)["decisions"]
+    assert decisions == [
+        {"ts": "2026-07-13T12:00:00+00:00", "text": "picked BKK"},
+        {"ts": "2026-07-13T12:00:00+00:00", "text": "ruled out ICN"},
+    ]
+
+
+def test_list_reports_trips_with_docs(ready: Path) -> None:
+    trips.new(SLUG)
+    trips.new("2026-11-ski-trip")
+    assert trips.list_() == [SLUG, "2026-11-ski-trip"]
+
+
+def test_onward_dests_veto_binds_endpoints(ready: Path) -> None:
+    prefs.set_patch({"avoid_destinations": ["ICN"]})
+    trips.new(SLUG)
+    trips.set_patch(SLUG, {"avoid_final_destinations": ["NRT"]})
+    with pytest.raises(UsageError, match="vetoed"):
+        trips.set_patch(SLUG, {"plan": {"hybrid": {"onward_dests": ["ICN"]}}})
+    with pytest.raises(UsageError, match="vetoed"):
+        trips.set_patch(SLUG, {"plan": {"hybrid": {"onward_dests": ["NRT"]}}})
+    ok = trips.set_patch(SLUG, {"plan": {"hybrid": {"onward_dests": ["BKK"]}}})
+    assert ok["plan"]["hybrid"]["onward_dests"] == ["BKK"]
+
+
+def test_gateways_not_vetoed_by_avoid_lists(ready: Path) -> None:
+    prefs.set_patch({"avoid_destinations": ["ICN"]})
+    trips.new(SLUG)
+    doc = trips.set_patch(
+        SLUG, {"plan": {"hybrid": {"gateways": ["ICN"], "onward_dests": ["BKK"]}}}
+    )
+    assert doc["plan"]["hybrid"]["gateways"] == ["ICN"]
+
+
+def test_judgment_factor_ids_validated(ready: Path) -> None:
+    trips.new(SLUG)
+    ok = trips.set_patch(
+        SLUG, {"judgment": {"factors": {"affordability": {"priority": "primary"}}}}
+    )
+    assert ok["judgment"]["factors"]["affordability"] == {"priority": "primary"}
+    with pytest.raises(UsageError, match="factor id"):
+        trips.set_patch(SLUG, {"judgment": {"factors": {"not_a_factor": {"priority": "primary"}}}})
+    with pytest.raises(UsageError, match="priority"):
+        trips.set_patch(SLUG, {"judgment": {"factors": {"affordability": {"priority": "vital"}}}})
+
+
+def test_plan_allowlist_rejects_unknown_key(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"unexpected": 1}})
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"hybrid": {"unexpected": 1}}})
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        pytest.param("shortlist.json", '{"finalists": ["BKK", "SIN"]}', id="json"),
+        pytest.param("sweep.jsonl", '{"route": "SFO-BKK"}\n{"route": "SFO-SIN"}\n', id="jsonl"),
+    ],
+)
+def test_artifact_write_read_roundtrip(ready: Path, name: str, content: str) -> None:
+    trips.new(SLUG)
+    trips.artifact_write(SLUG, name, content)
+    assert trips.artifact_read(SLUG, name) == content
+
+
+def test_artifact_list_excludes_lock_sidecars(ready: Path) -> None:
+    trips.new(SLUG)
+    trips.artifact_write(SLUG, "sweep.jsonl", '{"a": 1}\n')
+    trips.artifact_write(SLUG, "rank.json", "{}")
+    assert trips.artifact_list(SLUG) == ["rank.json", "sweep.jsonl"]
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        pytest.param("sweep.jsonl", '{"a": 1}\n{bad}\n', id="jsonl-line-not-json"),
+        pytest.param("rank.json", "{not json", id="json-not-parseable"),
+    ],
+)
+def test_artifact_write_rejects_unparseable(ready: Path, name: str, content: str) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.artifact_write(SLUG, name, content)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("../escape.json", id="traversal"),
+        pytest.param("Sweep.json", id="uppercase"),
+        pytest.param("sweep.txt", id="wrong-extension"),
+        pytest.param("sweep", id="no-extension"),
+    ],
+)
+def test_artifact_name_rejected(ready: Path, name: str) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.artifact_write(SLUG, name, "{}")
+
+
+def test_current_cli_reports_null_when_unset(ready: Path, runner: CliRunner) -> None:
+    result = runner.invoke(trips.trip_group, ["current"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"current": None}

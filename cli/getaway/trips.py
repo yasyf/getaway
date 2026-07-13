@@ -1,0 +1,485 @@
+import hashlib
+import json
+import re
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from importlib import resources
+
+import click
+
+from getaway import prefs
+from getaway.constants import CABIN_PREFIX, PHASE_TTL_HOURS
+from getaway.paths import (
+    NegativePredicate,
+    StateConflictError,
+    UsageError,
+    atomic_update,
+    atomic_write_text,
+    current_pointer,
+    emit,
+    locked,
+    map_errors,
+    require_int,
+    require_int_or_none,
+    require_keys,
+    require_str,
+    require_str_list,
+    require_str_or_none,
+    trip_dir,
+    trips_dir,
+    utcnow,
+)
+
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+ARTIFACT_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.(json|jsonl)$")
+RESERVED_KEYS = frozenset({"slug", "created"})
+PLAN_KEYS = frozenset(
+    {
+        "origins",
+        "buckets",
+        "program_sweeps",
+        "hybrid",
+        "sources",
+        "mileage_ceiling",
+        "max_finalists",
+    }
+)
+HYBRID_KEYS = frozenset({"gateways", "onward_dests", "max_hybrids"})
+JUDGMENT_KEYS = frozenset({"guidance", "factors"})
+FACTOR_PRIORITIES = frozenset({"primary", "secondary", "note"})
+TRIP_FP_KEYS = (
+    "window",
+    "cabin",
+    "party",
+    "regions",
+    "vibe",
+    "avoid_final_destinations",
+    "plan",
+    "judgment",
+)
+PREFS_FP_KEYS = (
+    "origin_airports",
+    "avoid_transit",
+    "avoid_destinations",
+    "avoid_airlines",
+    "layovers",
+    "documents",
+    "departure_days",
+)
+PREFS_RANK_KEYS = ("balances", "statuses", "credits", "status_goals")
+RANK_PHASES = frozenset({"rank", "finalize"})
+
+
+def _template() -> dict:
+    return {
+        "slug": None,
+        "created": None,
+        "status": "planning",
+        "ask": None,
+        "window": {"start": None, "end": None, "trip_length_days": None},
+        "cabin": None,
+        "party": 1,
+        "regions": {"include": [], "exclude": []},
+        "vibe": [],
+        "avoid_final_destinations": [],
+        "plan": {},
+        "judgment": {},
+        "decisions": [],
+    }
+
+
+TEMPLATE_KEYS = frozenset(_template())
+SETTABLE_KEYS = TEMPLATE_KEYS - RESERVED_KEYS
+
+
+def _valid_slug(slug: str) -> str:
+    if not SLUG_RE.match(slug):
+        raise UsageError(f"invalid trip slug: {slug!r}")
+    return slug
+
+
+def _trip_json(slug: str):
+    return trip_dir(slug) / "trip.json"
+
+
+def _checkpoints_path(slug: str):
+    return trip_dir(slug) / "checkpoints.json"
+
+
+def _artifact_path(slug: str, name: str):
+    _valid_slug(slug)
+    if not ARTIFACT_RE.match(name):
+        raise UsageError(f"invalid artifact name: {name!r}")
+    return trip_dir(slug) / "artifacts" / name
+
+
+def _factor_ids() -> set[str]:
+    data = json.loads((resources.files("getaway") / "data" / "factors.json").read_text())
+    return {f["id"] for f in data["factors"]}
+
+
+def _validate_plan(plan: object, merged: dict) -> None:
+    plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
+    if "hybrid" in plan:
+        hybrid = require_keys(plan["hybrid"], set(), "plan.hybrid", optional=frozenset(HYBRID_KEYS))
+        if "onward_dests" in hybrid:
+            require_str_list(hybrid["onward_dests"], "plan.hybrid.onward_dests")
+            vetoed = set(merged["avoid_final_destinations"])
+            vetoed |= set(prefs.show()["avoid_destinations"])
+            bad = sorted({a for a in hybrid["onward_dests"] if a in vetoed})
+            if bad:
+                raise UsageError(f"plan.hybrid.onward_dests vetoed by avoid lists: {bad}")
+
+
+def _validate_judgment(judgment: object) -> None:
+    judgment = require_keys(judgment, set(), "judgment", optional=frozenset(JUDGMENT_KEYS))
+    if "guidance" in judgment:
+        require_str(judgment["guidance"], "judgment.guidance")
+    if "factors" in judgment:
+        factors = judgment["factors"]
+        if not isinstance(factors, dict):
+            raise UsageError("judgment.factors must be an object")
+        valid = _factor_ids()
+        for fid, spec in factors.items():
+            if fid not in valid:
+                raise UsageError(f"unknown judgment factor id: {fid!r}")
+            spec = require_keys(spec, {"priority"}, f"judgment.factors[{fid}]")
+            if spec["priority"] not in FACTOR_PRIORITIES:
+                raise UsageError(
+                    f"judgment.factors[{fid}].priority must be one of {sorted(FACTOR_PRIORITIES)}"
+                )
+
+
+def _validate_trip(merged: dict) -> None:
+    require_str(merged["status"], "status")
+    require_str_or_none(merged["ask"], "ask")
+    window = require_keys(merged["window"], {"start", "end", "trip_length_days"}, "window")
+    require_str_or_none(window["start"], "window.start")
+    require_str_or_none(window["end"], "window.end")
+    require_int_or_none(window["trip_length_days"], "window.trip_length_days")
+    if merged["cabin"] is not None and merged["cabin"] not in CABIN_PREFIX:
+        raise UsageError(f"cabin must be one of {sorted(CABIN_PREFIX)} or null")
+    if require_int(merged["party"], "party") < 1:
+        raise UsageError("party must be >= 1")
+    regions = require_keys(merged["regions"], {"include", "exclude"}, "regions")
+    require_str_list(regions["include"], "regions.include")
+    require_str_list(regions["exclude"], "regions.exclude")
+    require_str_list(merged["vibe"], "vibe")
+    require_str_list(merged["avoid_final_destinations"], "avoid_final_destinations")
+    _validate_plan(merged["plan"], merged)
+    _validate_judgment(merged["judgment"])
+    if not isinstance(merged["decisions"], list):
+        raise UsageError("decisions must be a list")
+
+
+def new(slug: str, ask: str | None = None, now: Callable[[], datetime] = utcnow) -> dict:
+    _valid_slug(slug)
+    stamped = _template()
+    stamped["slug"] = slug
+    stamped["created"] = now().isoformat()
+    stamped["ask"] = ask
+
+    def _mut(current: dict) -> dict:
+        if current:
+            raise StateConflictError(f"trip {slug!r} already exists")
+        return stamped
+
+    doc = atomic_update(_trip_json(slug), _mut)
+    current_set(slug)
+    return doc
+
+
+def set_patch(slug: str, patch: dict) -> dict:
+    _valid_slug(slug)
+    reserved = set(patch) & RESERVED_KEYS
+    if reserved:
+        raise UsageError(f"reserved keys cannot be set: {sorted(reserved)}")
+    unknown = set(patch) - SETTABLE_KEYS
+    if unknown:
+        raise UsageError(f"unknown trip keys: {sorted(unknown)}")
+
+    def _mut(current: dict) -> dict:
+        if not current:
+            raise StateConflictError(f"no trip {slug!r}")
+        merged = {**current, **patch}
+        _validate_trip(merged)
+        return merged
+
+    return atomic_update(_trip_json(slug), _mut)
+
+
+def show(slug: str) -> dict:
+    _valid_slug(slug)
+    path = _trip_json(slug)
+    if not path.exists():
+        raise StateConflictError(f"no trip {slug!r}")
+    return json.loads(path.read_text())
+
+
+def list_() -> list[str]:
+    root = trips_dir()
+    if not root.exists():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir() and (p / "trip.json").exists())
+
+
+def done(slug: str) -> dict:
+    _valid_slug(slug)
+
+    def _mut(current: dict) -> dict:
+        if not current:
+            raise StateConflictError(f"no trip {slug!r}")
+        return {**current, "status": "done"}
+
+    doc = atomic_update(_trip_json(slug), _mut)
+    pointer = current_pointer()
+    with locked(pointer):
+        if pointer.exists() and pointer.read_text() == slug:
+            pointer.unlink()
+    return doc
+
+
+def current_get() -> str | None:
+    pointer = current_pointer()
+    return pointer.read_text() if pointer.exists() else None
+
+
+def current_set(slug: str) -> None:
+    _valid_slug(slug)
+    atomic_write_text(current_pointer(), slug)
+
+
+def log(slug: str, text: str, now: Callable[[], datetime] = utcnow) -> dict:
+    _valid_slug(slug)
+    entry = {"ts": now().isoformat(), "text": text}
+
+    def _mut(current: dict) -> dict:
+        if not current:
+            raise StateConflictError(f"no trip {slug!r}")
+        current["decisions"].append(entry)
+        return current
+
+    atomic_update(_trip_json(slug), _mut)
+    return entry
+
+
+def _sha(obj: object) -> str:
+    canonical = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _phase_base(key: str) -> str:
+    return key.split(":", 1)[0]
+
+
+def _inputs_fp(trip: dict, prefs_doc: dict, key: str) -> str:
+    payload = {
+        "trip": {k: trip[k] for k in TRIP_FP_KEYS},
+        "prefs": {k: prefs_doc[k] for k in PREFS_FP_KEYS},
+    }
+    if _phase_base(key) in RANK_PHASES:
+        payload["prefs_rank"] = {k: prefs_doc[k] for k in PREFS_RANK_KEYS}
+    return _sha(payload)
+
+
+def _upstream_fp(slug: str, deps: list[str] | None) -> str | None:
+    if not deps:
+        return None
+    digest = hashlib.sha256()
+    for name in deps:
+        digest.update(_artifact_path(slug, name).read_bytes())
+    return digest.hexdigest()
+
+
+def _ttl_ok(record: dict, key: str, now: Callable[[], datetime]) -> bool:
+    ttl = PHASE_TTL_HOURS.get(_phase_base(key))
+    if ttl is None:
+        return True
+    completed = datetime.fromisoformat(record["completed_at"])
+    return now() - completed <= timedelta(hours=ttl)
+
+
+def _load_checkpoints(slug: str) -> dict:
+    path = _checkpoints_path(slug)
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def phase_check(
+    slug: str,
+    key: str,
+    artifact_deps: list[str] | None = None,
+    now: Callable[[], datetime] = utcnow,
+) -> tuple[bool, dict | None]:
+    _valid_slug(slug)
+    record = _load_checkpoints(slug).get(key)
+    if record is None:
+        return False, None
+    trip = show(slug)
+    prefs_doc = prefs.show()
+    upstream = record["upstream_fp"]
+    fresh = (
+        record["inputs_fp"] == _inputs_fp(trip, prefs_doc, key)
+        and (upstream is None or upstream == _upstream_fp(slug, artifact_deps))
+        and _ttl_ok(record, key, now)
+    )
+    return fresh, record
+
+
+def phase_done(
+    slug: str,
+    key: str,
+    artifacts: list[str],
+    quota_after: int | None = None,
+    now: Callable[[], datetime] = utcnow,
+) -> dict:
+    _valid_slug(slug)
+    trip = show(slug)
+    prefs_doc = prefs.show()
+    record = {
+        "completed_at": now().isoformat(),
+        "inputs_fp": _inputs_fp(trip, prefs_doc, key),
+        "upstream_fp": _upstream_fp(slug, artifacts),
+        "artifacts": artifacts,
+    }
+    if quota_after is not None:
+        record["quota_after"] = quota_after
+    atomic_update(_checkpoints_path(slug), lambda d: {**d, key: record})
+    return record
+
+
+def artifact_write(slug: str, name: str, content: str) -> None:
+    path = _artifact_path(slug, name)
+    try:
+        if name.endswith(".json"):
+            json.loads(content)
+        else:
+            for line in content.splitlines():
+                if line.strip():
+                    json.loads(line)
+    except json.JSONDecodeError as err:
+        raise UsageError(f"artifact {name!r} failed to parse: {err}") from err
+    atomic_write_text(path, content)
+
+
+def artifact_read(slug: str, name: str) -> str:
+    return _artifact_path(slug, name).read_text()
+
+
+def artifact_list(slug: str) -> list[str]:
+    _valid_slug(slug)
+    directory = trip_dir(slug) / "artifacts"
+    if not directory.exists():
+        return []
+    return sorted(p.name for p in directory.iterdir() if p.is_file() and ARTIFACT_RE.match(p.name))
+
+
+trip_group = click.Group("trip", help="Per-trip planning memory and artifacts.")
+
+
+@trip_group.command("new")
+@click.argument("slug")
+@click.option("--ask", default=None)
+@map_errors
+def _new_cmd(slug: str, ask: str | None) -> None:
+    emit(new(slug, ask))
+
+
+@trip_group.command("set")
+@click.argument("slug")
+@map_errors
+def _set_cmd(slug: str) -> None:
+    patch = json.loads(click.get_text_stream("stdin").read())
+    emit(set_patch(slug, patch))
+
+
+@trip_group.command("show")
+@click.argument("slug")
+@map_errors
+def _show_cmd(slug: str) -> None:
+    emit(show(slug))
+
+
+@trip_group.command("list")
+@map_errors
+def _list_cmd() -> None:
+    emit(list_())
+
+
+@trip_group.command("done")
+@click.argument("slug")
+@map_errors
+def _done_cmd(slug: str) -> None:
+    emit(done(slug))
+
+
+@trip_group.command("current")
+@click.argument("slug", required=False)
+@map_errors
+def _current_cmd(slug: str | None) -> None:
+    if slug is None:
+        emit({"current": current_get()})
+    else:
+        current_set(slug)
+        emit({"current": slug})
+
+
+@trip_group.command("log")
+@click.argument("slug")
+@click.argument("text")
+@map_errors
+def _log_cmd(slug: str, text: str) -> None:
+    emit(log(slug, text))
+
+
+@trip_group.command("phase-check")
+@click.argument("slug")
+@click.argument("key")
+@click.option("--dep", "deps", multiple=True)
+@map_errors
+def _phase_check_cmd(slug: str, key: str, deps: tuple[str, ...]) -> None:
+    fresh, record = phase_check(slug, key, list(deps) or None)
+    emit({"fresh": fresh, "record": record})
+    if not fresh:
+        raise NegativePredicate("phase stale")
+
+
+@trip_group.command("phase-done")
+@click.argument("slug")
+@click.argument("key")
+@click.option("--artifact", "artifacts", multiple=True)
+@click.option("--quota-after", type=int, default=None)
+@map_errors
+def _phase_done_cmd(
+    slug: str, key: str, artifacts: tuple[str, ...], quota_after: int | None
+) -> None:
+    emit(phase_done(slug, key, list(artifacts), quota_after))
+
+
+@trip_group.group("artifact")
+def _artifact_group() -> None:
+    """Read and write per-trip artifact files."""
+
+
+@_artifact_group.command("write")
+@click.argument("slug")
+@click.argument("name")
+@map_errors
+def _artifact_write_cmd(slug: str, name: str) -> None:
+    content = click.get_text_stream("stdin").read()
+    artifact_write(slug, name, content)
+    emit({"slug": slug, "name": name, "bytes": len(content)})
+
+
+@_artifact_group.command("read")
+@click.argument("slug")
+@click.argument("name")
+@map_errors
+def _artifact_read_cmd(slug: str, name: str) -> None:
+    click.echo(artifact_read(slug, name), nl=False)
+
+
+@_artifact_group.command("list")
+@click.argument("slug")
+@map_errors
+def _artifact_list_cmd(slug: str) -> None:
+    emit(artifact_list(slug))
