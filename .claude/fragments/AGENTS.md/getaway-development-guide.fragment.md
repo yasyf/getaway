@@ -9,11 +9,13 @@ getaway/
 ├── .claude/
 │   └── components/           # cc-present block pack, installed with the plugin
 ├── .claude-plugin/           # Plugin + marketplace manifests (install as getaway@getaway)
+├── cli/                      # Python CLI (uv project): state docs, seats.aero client, cache, judgment engine
 ├── skills/
-│   ├── getaway/              # The flight-planning skill (SKILL.md + getaway.sh + plan-trip.js workflow)
+│   ├── getaway/              # The flight-planning skill (SKILL.md + plan-trip.js workflow + references/)
 │   ├── onboard/              # First-run onboarding skill
-│   └── refresh/              # Balance/status refresh skill + gather.md shared tables
+│   └── refresh/              # Balance/status refresh skill + gather.md shared mechanism
 ├── hooks/                    # Plugin-shipped capt-hook pack (hooks.json + reflect.py + onboard.py)
+├── tests/workflow/           # node --test harness for plan-trip.js
 ├── docs/
 │   ├── assets/               # Mascot logo, README banner, social card
 │   └── seats-aero-api.md     # seats.aero Partner API reference

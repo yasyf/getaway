@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  validate:
+  manifests:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,96 +20,46 @@ jobs:
       - name: Validate skill frontmatter
         run: |
           for f in skills/*/SKILL.md; do
-            sed -n '2,/^---$/p' "$f" | grep -q '^name: ' || { echo "missing name in $f" >&2; exit 1; }
+            dir=$(basename "$(dirname "$f")")
+            name=$(sed -n '2,/^---$/p' "$f" | sed -n 's/^name: *//p' | head -1)
+            test "$name" = "$dir" || { echo "frontmatter name '$name' != directory '$dir' in $f" >&2; exit 1; }
             sed -n '2,/^---$/p' "$f" | grep -q '^description: ' || { echo "missing description in $f" >&2; exit 1; }
           done
-      - name: Lint helper script
-        run: |
-          bash -n skills/getaway/getaway.sh
-          shellcheck skills/getaway/getaway.sh
-          node --check skills/getaway/plan-trip.js
-      - name: Prefs round-trip
-        run: |
-          export HOME="$(mktemp -d)"
-          skills/getaway/getaway.sh prefs-init
-          status_out=$(skills/getaway/getaway.sh prefs-status) && status_code=0 || status_code=$?
-          test "$status_out" = unconfigured && test "$status_code" = 1
-          echo '{"balances": {"programs": {"alaska": 90000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          test "$(skills/getaway/getaway.sh prefs-status)" = configured
-          skills/getaway/getaway.sh prefs | jq -e '.balances.programs.alaska == 90000' >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.home_airport == "SFO"' >/dev/null
-          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.statuses.united == "1K"' >/dev/null
-          prefs_file="$HOME/.getaway/preferences.json"
-          jq 'del(.statuses)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
-          echo '{"balances": {"programs": {"jetblue": 12000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.balances.programs.jetblue == 12000' >/dev/null
-          echo '{"documents": {"passports": ["Canada"], "residency": ["US green card"], "visas": []}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.documents.passports == ["Canada"] and .documents.residency == ["US green card"] and (.documents.visas | length) == 0' >/dev/null
-          echo '{"layovers": {"style": "explore", "min_connection_minutes": 90, "prefer_cities": ["IST"], "avoid_cities": []}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.layovers.style == "explore" and .layovers.prefer_cities == ["IST"]' >/dev/null
-          for bad in '{"statuses": null}' '{"statuses": false}' '{"statuses": [1]}' '{"balances": {"programs": null}}' '{"balances": {"transferable": null}}' '{"documents": null}' '{"documents": [1]}' '{"documents": {"passports": []}}' '{"documents": {"passports": "Canada", "residency": [], "visas": []}}' '{"documents": {"passports": [1], "residency": [], "visas": []}}' '{"layovers": null}' '{"layovers": {"style": "sometimes", "min_connection_minutes": 90, "prefer_cities": [], "avoid_cities": []}}' '{"layovers": {"style": "explore"}}' '{"layovers": {"style": "explore", "min_connection_minutes": 1.5, "prefer_cities": [], "avoid_cities": []}}'; do
-            before=$(cat "$prefs_file")
-            echo "$bad" | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
-            test "$rc" = 3 || { echo "expected shape-failure exit 3 for $bad, got $rc" >&2; exit 1; }
-            test "$(cat "$prefs_file")" = "$before" || { echo "file changed after rejected patch: $bad" >&2; exit 1; }
-          done
-          if echo '{"bogus": 1}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1; then echo "unknown key not rejected"; exit 1; fi
-          echo '{"cabin": "business"}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 64 || { echo "expected removed-key rejection exit 64, got $rc" >&2; exit 1; }
-          jq '. + {"cabin": "business"}' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
-          before=$(cat "$prefs_file")
-          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 3 || { echo "expected stale merged-key exit 3, got $rc" >&2; exit 1; }
-          test "$(cat "$prefs_file")" = "$before" || { echo "prefs changed after stale-key rejection" >&2; exit 1; }
-          jq 'del(.cabin)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
-          jq 'del(.documents)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
-          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null
-          skills/getaway/getaway.sh prefs | jq -e '.statuses.united == "1K"' >/dev/null
-      - name: Plan round-trip
-        run: |
-          export HOME="$(mktemp -d)"
-          skills/getaway/getaway.sh prefs-init
-          skills/getaway/getaway.sh plan-new 2026-07-test
-          for badslug in '' '.hidden' 'a/b'; do
-            skills/getaway/getaway.sh plan-new "$badslug" >/dev/null 2>&1 && rc=0 || rc=$?
-            test "$rc" = 64 || { echo "expected malformed-slug exit 64 for '$badslug', got $rc" >&2; exit 1; }
-          done
-          echo '{"cabin": "business", "window": {"start": "2026-07-12", "end": "2026-07-16", "trip_length_days": 7}, "avoid_final_destinations": ["ICN","GMP","NRT","HND"]}' | skills/getaway/getaway.sh plan-set >/dev/null
-          skills/getaway/getaway.sh plan-show | jq -e '.cabin == "business" and .status == "planning"' >/dev/null
-          skills/getaway/getaway.sh plan-show | jq -e '.slug == "2026-07-test"' >/dev/null
-          skills/getaway/getaway.sh plan-list | grep -q '2026-07-test.*planning'
-          plan_file="$HOME/.getaway/plans/2026-07-test.json"
-          echo '{"bogus": 1}' | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 64 || { echo "expected unknown plan key exit 64, got $rc" >&2; exit 1; }
-          for bad in '{"window": null}' '{"regions": [1]}' '{"vibe": 1}' '{"avoid_final_destinations": "ICN"}' '{"decisions": {}}' '{"status": {}}' '{"status": "bogus"}' '{"window": {"start": {}, "end": null, "trip_length_days": null}}' '{"regions": {"include": "x", "exclude": []}}'; do
-            before=$(cat "$plan_file")
-            echo "$bad" | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
-            test "$rc" = 3 || { echo "expected shape-failure exit 3 for $bad, got $rc" >&2; exit 1; }
-            test "$(cat "$plan_file")" = "$before" || { echo "plan changed after rejected patch: $bad" >&2; exit 1; }
-          done
-          for reserved in '{"slug": "beta"}' '{"created": "2020-01-01T00:00:00Z"}'; do
-            before=$(cat "$plan_file")
-            echo "$reserved" | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
-            test "$rc" = 64 || { echo "expected reserved-key exit 64 for $reserved, got $rc" >&2; exit 1; }
-            test "$(cat "$plan_file")" = "$before" || { echo "plan changed after reserved patch: $reserved" >&2; exit 1; }
-          done
-          skills/getaway/getaway.sh plan-done
-          skills/getaway/getaway.sh plan-show 2026-07-test | jq -e '.status == "done"' >/dev/null
-          skills/getaway/getaway.sh plan-show >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 3 || { echo "expected no-current plan-show exit 3, got $rc" >&2; exit 1; }
-          echo '{"cabin": "business"}' | skills/getaway/getaway.sh plan-set >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 3 || { echo "expected no-current plan-set exit 3, got $rc" >&2; exit 1; }
-          skills/getaway/getaway.sh plan-new 2026-07-test >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 3 || { echo "expected existing-slug plan-new exit 3, got $rc" >&2; exit 1; }
-          victim="$HOME/victim" && echo keepme >"$victim"
-          ln -s "$victim" "$HOME/.getaway/plans/current"
-          skills/getaway/getaway.sh plan-new 2026-08-symlink >/dev/null 2>&1 && rc=0 || rc=$?
-          test "$rc" = 3 || { echo "expected symlink-pointer refusal exit 3, got $rc" >&2; exit 1; }
-          test "$(cat "$victim")" = keepme || { echo "symlinked victim overwritten" >&2; exit 1; }
-          test ! -e "$HOME/.getaway/plans/2026-08-symlink.json" || { echo "orphan plan file left behind symlink refusal" >&2; exit 1; }
-          rm "$HOME/.getaway/plans/current"
-          skills/getaway/getaway.sh plan-new 2026-08-symlink >/dev/null
+      - name: Validate CLI data files
+        run: jq empty cli/getaway/data/*.json
+
+  python:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Test
+        run: uv run --project cli pytest
+      - name: Lint
+        run: uv run --project cli ruff check cli
+      - name: Type-check
+        run: uv run --project cli ty check cli
+
+  workflow:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test trip workflow
+        run: node --test 'tests/workflow/*.test.mjs'
+
+  hooks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - name: Hook inline tests
         run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json

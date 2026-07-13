@@ -10,11 +10,13 @@ getaway/
 ├── .claude/
 │   └── components/           # cc-present block pack, installed with the plugin
 ├── .claude-plugin/           # Plugin + marketplace manifests (install as getaway@getaway)
+├── cli/                      # Python CLI (uv project): state docs, seats.aero client, cache, judgment engine
 ├── skills/
-│   ├── getaway/              # The flight-planning skill (SKILL.md + getaway.sh + plan-trip.js workflow)
+│   ├── getaway/              # The flight-planning skill (SKILL.md + plan-trip.js workflow + references/)
 │   ├── onboard/              # First-run onboarding skill
-│   └── refresh/              # Balance/status refresh skill + gather.md shared tables
+│   └── refresh/              # Balance/status refresh skill + gather.md shared mechanism
 ├── hooks/                    # Plugin-shipped capt-hook pack (hooks.json + reflect.py + onboard.py)
+├── tests/workflow/           # node --test harness for plan-trip.js
 ├── docs/
 │   ├── assets/               # Mascot logo, README banner, social card
 │   └── seats-aero-api.md     # seats.aero Partner API reference
@@ -134,7 +136,7 @@ Reach for your **LSP** when the answer must be exhaustive/structural (findRefere
 
 **Mechanical linting.** CI and hooks handle formatting and import order; fix only what needs human judgment. When reviewing code, don't flag mechanical lint violations (line length, whitespace, import order, trailing commas).
 
-**Testing.** The test suite is the CI validation job in `.github/workflows/ci.yml`: `jq empty` over both `.claude-plugin` manifests, a name-match check, and SKILL.md frontmatter checks. Run those same commands locally before pushing.
+**Testing.** The test suite is the CI in `.github/workflows/ci.yml`: `jq empty` over both `.claude-plugin` manifests plus a plugin-name match and a SKILL.md frontmatter name-matches-directory check; `jq empty` over `cli/getaway/data/*.json`; the Python CLI via `uv run --project cli pytest`, `ruff check cli`, and `ty check cli`; and the trip workflow via `node --test 'tests/workflow/*.test.mjs'`. Run those same commands locally before pushing.
 
 **Writing docs.** When writing or revising docs, a README, a tutorial, a how-to, or reference, use the `writing-docs` skill (Diataxis modes, voice rules, and runnable code-sample rules) and run `slop-cop check <file> --lang=markdown` before you finish (slop-cop is a Go binary; if it's not on PATH, run the `/slop-cop-check` skill — never `uvx slop-cop`).
 

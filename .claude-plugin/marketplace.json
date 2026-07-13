@@ -9,7 +9,7 @@
     {
       "name": "getaway",
       "source": "./",
-      "description": "Plan award flights from Claude Code. getaway searches seats.aero award space across 26 mileage programs and plans the trip around your preferences — dates, cabins, balances, booking links."
+      "description": "Plan award flights from Claude Code. getaway sweeps seats.aero across 26 mileage programs and judges every option like you would — seat quality, layovers, status earning, cash-fare anomalies."
     }
   ]
 }

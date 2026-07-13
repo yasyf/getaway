@@ -6,33 +6,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-13
+
+The v2 rewrite: the planning engine moves from a shell script plus prose
+doctrine into a Python CLI with durable, checkpointed state, and every
+surface — skill, workflow, hooks, onboarding — rides it.
+
 ### Added
-- `layovers` preference — style (`minimize` or `explore`), a
-  connection-minutes comfort floor, and cities to prefer or avoid for a
-  long stop — validated by `prefs-set`, collected in a new onboarding
-  form section, and routed by the reflect hook.
-- Judge phase in `plan-trip.js`: one zero-quota agent verdicts each
-  finalist's layovers — promote, neutral, or demote, with a one-sentence
-  note — from duration bands plus layover-city appeal, reaching for
-  `WebSearch` only on a 6h+ layover whose exit-worthiness is uncertain;
-  verdicts reorder finalists only within a ~10–15% mileage band, so
-  mileage stays dominant.
-- Layover-derivation jq recipe and `/trips/{id}` timestamp semantics —
-  local wall-clock stamps with a spurious trailing `Z`, minute
-  durations — in `docs/seats-aero-api.md`, verified live 2026-07-13.
+- The `getaway` CLI, a uv project at `cli/`: `prefs`, `trip`, the
+  seats.aero calls (`search`, `availability`, `routes`, `expand`),
+  `sweep`, `shortlist`, `rank`/`afford`/`quality`, `registry`,
+  `learnings`, `quota`, and `cache` groups, with typed exit codes and
+  flock-guarded atomic writes.
+- Hybrid JSON+SQLite state under `~/.getaway`: each trip owns
+  `trips/<slug>/` — `trip.json` memory, sweep/shortlist/evidence/finalist
+  artifacts, and `checkpoints.json` stamping every phase with input
+  fingerprints and a TTL — beside a WAL `cache.db` of every availability
+  row ever fetched. A killed or resumed session re-invokes the same
+  workflow and every fresh phase skips wholesale, spending zero quota;
+  editing the window or an avoid list invalidates exactly the dependent
+  phases.
+- 12-factor per-trip judgment engine: a packaged factor registry
+  (`registry factors`), `trip profile` deriving per-factor tiers from
+  the ask and prefs, and `rank` enforcing mileage-band tier discipline —
+  primary factors reorder, secondary break ties, notes annotate, and
+  `barely` seat products demote in-band, so mileage stays dominant.
+  Rank prices each finalist at its expanded bookable mileage, not the
+  cached sweep row. Layover verdicts — duration bands plus how
+  interesting the layover city is, with `prefer_cities`/`avoid_cities`
+  from the new `layovers` preference — ride the engine as the
+  `layovers` factor, and each finalist carries one evidence line per
+  active factor.
+- Packaged data registries at `cli/getaway/data/`, surfaced by the
+  `registry` and `quality` commands: programs (26, plus `british` and
+  `iberia` in beta), banks, transfer partners, seat quality, regions
+  (the undocumented `QAF` included), factors, cabins, and continents —
+  plus researched, source-noted status-earning and points-pricing
+  datasets.
+- Trip credits and status goals: `credits` (airline eCredits, vouchers,
+  companion certificates, with expiry filtering and
+  `credit-add`/`credit-list`/`credit-remove`) and `status_goals`
+  preferences, new onboarding form sections, a Gmail credits-mining flow
+  in `gather.md`, and the `status_earning`, `points_purchase`, and
+  `trip_credits` factors that consume them.
+- `plan-trip.js` v2: slug-first `{project, slug}` args, ten phases —
+  load, sweep, shortlist, onward, bridge, expand, evidence, assess,
+  rank, finalize — branching only on trip status, per-label sweep
+  fresh-skip, per-collector evidence resume, and quota-floor gating.
+- Test suite: 268 Python tests over the CLI (respx-mocked seats.aero
+  boundary) and 7 `node --test` workflow cases via
+  `tests/workflow/harness.mjs`.
+- `/trips/{id}` timestamp semantics — local wall-clock stamps with a
+  spurious trailing `Z`, minute durations — in `docs/seats-aero-api.md`,
+  verified live 2026-07-13; the CLI's `expand` applies the cleanup and
+  derives per-connection layover minutes.
 
 ### Changed
+- `skills/getaway/SKILL.md` slims from 950 to 112 lines: an engine
+  contract plus routing table, with the planning doctrine moved to
+  `skills/getaway/references/planning.md` and the settled rulings to
+  `references/doctrine.md`; jq recipes and hand-kept region tables are
+  replaced by CLI and registry commands.
+- `skills/refresh/gather.md` derives its Gmail sender lists, browser
+  host lists, and credit issuer slugs from `registry programs --domains`
+  and `registry banks` instead of hand-kept domain tables.
+- Onboarding and refresh write per-record through `prefs set-balance`,
+  `set-status`, and `credit-add`, and refresh flags credits expiring
+  within 90 days.
+- Hooks run on the CLI: `onboard.py` shells out to `getaway prefs
+  status`, and `reflect.py` routes durable facts to `prefs`, trip facts
+  to `trip set` under `~/.getaway/trips`, and API quirks to
+  `learnings add`.
 - capt-hook wiring is attach-only: the `captain-hook` plugin is now a
   declared dependency (`>=9.9.0`) that dispatches hook events, and
   `hooks/hooks.json` ships only the canonical `pack attach` entry. Add the
   `yasyf/captain-hook` marketplace before installing getaway; existing users
   re-run `claude plugin install` after adding it (see the README).
-- Trip expansion projects structured segments plus derived layover
-  minutes per finalist.
-- The expansion funnel widens to 2× finalists (cap 12) in every cabin,
-  so the layover re-rank has real candidates.
-- The presentation section block consolidates cost, seat, and layover
-  trade-offs.
+
+### Removed
+- `skills/getaway/getaway.sh` — every subcommand has a CLI home.
+- `skills/getaway/seat-quality.md` and
+  `skills/getaway/transfer-partners.md` — the verdict table and transfer
+  map now ship as packaged data behind `quality` and
+  `registry transfer-partners`.
+- The free-form `~/.getaway/learnings.md` — learnings are append-only
+  JSONL through `learnings add`/`learnings list`, scoped `api`, `prefs`,
+  or `general`.
+- The `~/.getaway/plans/<slug>.json` layout — trips live at
+  `~/.getaway/trips/<slug>/`. Migration is a one-time manual move; no
+  migration code ships, per the styleguide's rule against
+  backwards-compat layers.
 
 ## [0.8.0] - 2026-07-13
 
