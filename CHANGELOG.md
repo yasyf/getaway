@@ -26,6 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `skills/getaway/seat-quality.md`: the static carrier + aircraft
   verdict table — `suite` / `solid` / `dated` / `barely` with Verify
   marks on mid-retrofit fleets (verified 2026-07-12).
+- `## Routing strategies` in the getaway skill: a trip is a
+  composition of legs — gateway hybrids (a lie-flat award to a hub,
+  a cash hop onward), open jaws, two-award stitches, and long-range
+  positioning all price beside direct awards — with the cash-cabin
+  default (onward legs under ~4 hours book economy, longer book
+  business) and per-program gateway sets refined via `routes`.
+- `routes` subcommand in `getaway.sh`: wraps `GET /routes` for one
+  program, with client-side `--origin-region`/`--dest-region` jq
+  filters, emitting JSONL one route per line.
+- `hybrid` input to `plan-trip.js`: gateways, onward destinations,
+  and the cash-cabin cutoff drive two new phases — Onward, one
+  all-program award sweep from the gateways to the onward
+  destinations, and Bridge, fli cash quotes per gateway pair — and
+  the return gains a `hybrids` list of gateway-cash and two-award
+  candidates beside the direct finalists.
 
 ### Changed
 - The browser read rides agent-browser-with-cookies 0.12.0: each
@@ -48,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new zero-quota Verify phase, and re-rank by (soft avoid, `barely`
   product, mileage) before truncating; the low-quota path drops the
   buffer first.
+- `## Positioning flights` folds into `## Routing strategies` as its
+  `### Cash positioning` subsection; the doctrine covers every lever,
+  not just the home-to-origin hop.
+- The planning workflow composes hybrid routings and compares them
+  against direct awards on total cost — miles, taxes, and cash
+  onward per finalist — on every region- or vibe-scale ask.
+- Expand takes a per-row cabin: stitched onward award legs expand at
+  their own cabin instead of the trip-wide one.
 
 ## [0.7.0] - 2026-07-12
 

@@ -30,6 +30,8 @@ commands:
           [--direct] [--order lowest_mileage] [--take 500] [--pages 1]
   availability --source aeroplan [--cabin business] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
           [--origin-region "North America"] [--dest-region Africa] [--take 500] [--pages 1]
+  routes --source aeroplan [--origin-region "North America"] [--dest-region Asia]
+          region flags filter the response client-side (the API exposes no region param)
   trip <ID>                        print one trip object (segments, booking links)
   quota                            print the last recorded quota (no API call)
 USAGE
@@ -382,6 +384,29 @@ cmd_availability() {
   paginate "/availability" "$take" "$pages" "${params[@]}"
 }
 
+cmd_routes() {
+  local source="" origin_region="" dest_region=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --source) source="$2"; shift 2 ;;
+      --origin-region) origin_region="$2"; shift 2 ;;
+      --dest-region) dest_region="$2"; shift 2 ;;
+      *) usage "routes: unknown flag: $1" ;;
+    esac
+  done
+  [[ -n "$source" ]] || usage "routes: --source is required"
+
+  local resp
+  resp=$(api_get "/routes" --data-urlencode "source=$source")
+  printf '%s' "$resp" | jq -c \
+    --arg origin "$origin_region" \
+    --arg dest "$dest_region" '
+    .[]
+    | select($origin == "" or .OriginRegion == $origin)
+    | select($dest == "" or .DestinationRegion == $dest)
+  '
+}
+
 cmd_trip() {
   [[ $# -ge 1 ]] || usage "trip: usage: trip <ID>"
   [[ "$1" == */* ]] && usage "trip: ID must not contain '/': $1"
@@ -416,6 +441,7 @@ main() {
     plan-done) cmd_plan_done "$@" ;;
     search) cmd_search "$@" ;;
     availability) cmd_availability "$@" ;;
+    routes) cmd_routes "$@" ;;
     trip) cmd_trip "$@" ;;
     quota) cmd_quota "$@" ;;
     *) usage "unknown command: $cmd" ;;

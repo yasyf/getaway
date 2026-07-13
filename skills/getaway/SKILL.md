@@ -1,6 +1,6 @@
 ---
 name: getaway
-description: Plans award flights using the seats.aero Partner API. Triggers when the user wants to plan an award flight or trip on points or miles, find award availability or saver space between airports or across a region ("west coast to Asia", "somewhere warm in September"), compare mileage programs for a route, pull booking links or taxes for an award, find a cash positioning flight — or mentions seats.aero. Needs a seats.aero Pro API key, from SEATS_AERO_API_KEY or a 1Password reference in ~/.getaway/preferences.json.
+description: Plans award flights using the seats.aero Partner API. Triggers when the user wants to plan an award flight or trip on points or miles, find award availability or saver space between airports or across a region ("west coast to Asia", "somewhere warm in September"), compare mileage programs for a route, pull booking links or taxes for an award, find a cash positioning flight, or get creative with routings — a lie-flat award to a hub like NRT with a cash hop onward, an open jaw, or two awards stitched across programs — or mentions seats.aero. Needs a seats.aero Pro API key, from SEATS_AERO_API_KEY or a 1Password reference in ~/.getaway/preferences.json.
 allowed-tools: Bash(curl:*), Bash(jq:*), Bash(op:*), Bash(uvx:*), Bash(gog:*), Agent, Workflow
 ---
 
@@ -77,6 +77,7 @@ party, regions, destinations to skip — live per trip in
 | `plan-done [<slug>]` | 0 | Set the plan's `status` to `done`; clears the current pointer when it points there; exits 3 when the plan is missing |
 | `search --origin A,B --dest C,D [flags]` | 1 per page | Cached award space via `/search`; origins and destinations take IATA codes or [region pseudo-codes](#region-pseudo-codes) |
 | `availability --source <program> [flags]` | 1 per page | Per-program bulk dump via `/availability`; the route for region-level origin filtering, and the continent-sweep fallback when no [pseudo-code](#region-pseudo-codes) fits |
+| `routes --source <program> [flags]` | 1 | A program's whole monitored route map via `/routes` — the [gateway-set](#gateway-sets) refinement input |
 | `trip <availability-ID>` | 1 | One row's bookable trips via `/trips/{id}`: segments, exact taxes, booking links |
 | `quota` | 0 | Print the last recorded quota from cache; exits 4 before the first API call |
 
@@ -89,10 +90,16 @@ party, regions, destinations to skip — live per trip in
 Africa, Asia, Europe, North America, Oceania, South America), `--take`,
 `--pages`.
 
-`search` and `availability` emit JSONL — one availability object per line,
+`routes` flags: `--source` (required, one program slug),
+`--origin-region`/`--dest-region` (same continent names, filtered
+client-side by jq — `/routes` has no server region param).
+
+`search`, `availability`, and `routes` emit JSONL — one object per line,
 deduped by `.ID` across pages — so output pipes straight into `jq` or a
 scratchpad file. `--pages` walks the API's `cursor` + `skip` continuation,
 and every page costs one quota call: prefer one page with a big `--take`.
+`routes` takes no pages: one call returns the program's entire route map,
+thousands of lines — always redirect to a scratchpad file.
 Exit codes: 2 no key, 3 preferences or plan problem (missing file, no
 current plan), 4 no quota recorded, 64 usage (unknown or reserved patch
 keys and malformed plan slugs included).
@@ -184,9 +191,9 @@ when the rung below cannot express the work:
 3. **The Workflow tool.** A planning ask spanning two or more
    destination buckets or programs runs the shipped `plan-trip.js` —
    the invocation lives in the [Planning workflow](#planning-workflow).
-   The script holds the four-phase pipeline — sweep, shortlist,
-   expand, enrich — and its intermediate results; the conversation
-   holds only the finalists.
+   The script holds the six-phase pipeline — sweep, shortlist,
+   onward, bridge, expand, enrich — and its intermediate results; the
+   conversation holds only the finalists and hybrids.
 4. **A team, for one shape.** A multi-city or multi-traveler plan that
    will span several presentation rounds earns a persistent team
    (`TeamCreate`): a sweeper teammate holds the sweep JSONL and
@@ -258,7 +265,7 @@ defaults to read. A `PostToolUse` hook (`hooks/onboard.py`, sibling to
    fly Ethiopian", "never connect through IST", a balance correction) goes
    to `prefs-set` right then instead.
 
-Steps 4–7 are the fan-out core. When the ask spans two or more
+Steps 4–8 are the fan-out core. When the ask spans two or more
 destination buckets or programs, run them as one shot — the shipped
 workflow, args assembled from `prefs` and the plan file:
 
@@ -275,14 +282,18 @@ Workflow({
     avoidDestinations: ["ICN", "GMP"], avoidTransit: ["IST"],
     avoidAirlines: [{code: "ET", strength: "soft"}],
     mileageCeiling: 90000, travelers: 2, maxFinalists: 6,
-    vibe: "warm"
+    vibe: "warm",
+    hybrid: {gateways: ["LIS", "MAD", "LHR", "CDG"],
+             onwardDests: ["ATH", "CMN"],
+             cashCutoffMinutes: 240, maxHybrids: 3}
   }
 })
 ```
 
-It sweeps, shortlists, expands, and enriches in parallel agents and
-returns `finalists` ready for the board — surface its `log()` lines as
-they arrive, then pick up at step 8. On a business ask it expands
+It sweeps, shortlists, prices onward legs, expands, and enriches in
+parallel agents and returns `finalists` plus `hybrids` ready for the
+board — surface its `log()` lines as they arrive, then pick up at
+step 9. On a business ask it expands
 roughly 1.5× `maxFinalists` candidates, classifies each against
 [seat-quality.md](seat-quality.md), resolves mixed fleets by
 `WebSearch`, and re-ranks before truncating — the buffer's cost is
@@ -294,8 +305,18 @@ never derive it from balances. `programSweeps`
 described in step 4.
 `avoidDestinations` takes the plan's `avoid_final_destinations`;
 `avoidTransit` takes the preference of the same name; leave `vibe` out
-to skip enrichment. A single origin–destination ask, or a session
-without the Workflow tool, runs steps 4–7 by hand instead.
+to skip enrichment. `hybrid` rides every region- or vibe-scale ask:
+`gateways` (required, non-empty, concrete IATA — never pseudo-codes)
+is the [gateway set](#gateway-sets); `onwardDests` (optional IATA)
+defaults to the direct shortlist's distinct destinations, top 4;
+`cashCutoffMinutes` defaults to 240
+([The cash-cabin default](#the-cash-cabin-default)); `maxHybrids`
+defaults to 3, capped at 4. An `onwardDests` airport on
+`avoidDestinations` throws — an onward destination *is* a final
+destination; gateways are waypoints and exempt. Omitting `hybrid`
+skips every hybrid phase — direct awards only. A single
+origin–destination ask, or a session without the Workflow tool, runs
+steps 4–8 by hand instead.
 
 4. Sweep broad, one call per destination bucket, saved to the scratchpad.
    The window, cabin, and regions come from the plan file. A real sweep:
@@ -328,13 +349,20 @@ without the Workflow tool, runs steps 4–7 by hand instead.
      --take 1000 > africa.jsonl
    ```
 
-   Buckets and per-program sweeps are independent: by hand, spawn one
-   subagent per sweep — each makes exactly the one call it would make
-   anyway and returns `{file, rows, quota}`.
+   Hybrids add exactly one more call: a single `search` from the
+   origins to the whole comma-listed [gateway set](#gateway-sets),
+   saved as its own gateway sweep file.
+
+   Buckets, the gateway sweep, and per-program sweeps are independent:
+   by hand, spawn one subagent per sweep — each makes exactly the one
+   call it would make anyway and returns `{file, rows, quota}`.
 
 5. Filter offline with the [jq recipes](#jq-recipes) against the saved
    files. Re-filtering is free; never spend an API call to re-ask a
-   question the scratchpad already answers.
+   question the scratchpad already answers. Gateway rows shortlist
+   separately — the same recipes minus the avoid-destinations drop (a
+   gateway is a waypoint, not an endpoint), deduped to each gateway's
+   best row.
 6. Expand each finalist with `trip <availability-ID>` (the row's `.ID`).
    The real numbers live there; see
    [Trip detail](#trip-detail-the-bookable-truth). Finalists expand in
@@ -342,17 +370,26 @@ without the Workflow tool, runs steps 4–7 by hand instead.
    classify each trip's longest business segment against
    [seat-quality.md](seat-quality.md) while expanding; `barely`
    products sink per [Seat quality](#seat-quality).
-7. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
+7. Compose routings ([Routing strategies](#routing-strategies)). Price
+   each shortlisted gateway's onward cash leg with `fli` at the cabin
+   [the cash-cabin default](#the-cash-cabin-default) picks — legs price
+   in parallel, one subagent per call, zero API quota
+   ([Cash positioning](#cash-positioning) has the calls). One `search`
+   from the top gateways to the onward destinations covers two-award
+   stitches across all programs. Assemble the hybrids and rank them
+   beside the directs on total cost — miles plus taxes plus cash. A
+   positioning gap — the award departs somewhere other than the user's
+   home airport — prices the same way and joins the same total.
+8. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
    seasonal weather, visa rules, and destination color. The API knows
    seats, not sunshine. One `WebSearch` subagent per shortlisted
    destination; enrichment spends zero API quota. Verify-marked seat
    products resolve here too — one `WebSearch` per mixed-fleet
    finalist, vibe or no vibe.
-8. Present the shortlist as a [cc-present board](#presenting-options) and
-   iterate rounds until the user submits. Log each round's outcome in the
-   plan's `decisions`.
-9. Bridge gaps with [cash positioning flights](#positioning-flights) when
-   the award departs somewhere other than the user's home airport.
+9. Present the shortlist as a [cc-present board](#presenting-options) —
+   directs and hybrids together, each with its total-cost line — and
+   iterate rounds until the user submits. Log each round's outcome in
+   the plan's `decisions`.
 10. Deliver the final plan: per leg, the program, integer miles and exact
     taxes from `/trips/{id}` (never the search strings), remaining seats,
     the seat product and verdict on a business leg
@@ -360,7 +397,9 @@ without the Workflow tool, runs steps 4–7 by hand instead.
     to days old, so always surface freshness — and the leg's
     [affordability line](#affordability-and-top-ups): covered, a
     transfer suggestion, or a buy estimate citing the rate's source and
-    date.
+    date. A hybrid delivers every component: each award booking on its
+    own lines, each cash leg with airline, flight number, and fare, and
+    the summed total-cost line the board showed.
 
 ## Trip detail: the bookable truth
 
@@ -434,7 +473,7 @@ program's current buy-points rate and any active sale or bonus;
 present "buy N points ≈ $X" beside the taxes, citing the rate's source
 and date. And when the top-up cost plus taxes approaches the cash
 fare, say so — the same cash-versus-points check as
-[Positioning flights](#positioning-flights).
+[Routing strategies](#routing-strategies).
 
 Ranking stays mileage-first. When finalists land within roughly 10–15%
 of each other, prefer the one the user can already fund; the rest keep
@@ -599,22 +638,26 @@ plugin is; every field is documented in
 [the pack reference](../../.claude/components/reference/blocks.md).
 
 - One `getaway.option-picker` for the shortlist — one entry per finalist,
-  `optionId` set to the row's availability `ID`. A tap submits
-  `{"optionId": …}`: that finalist is the pick.
-- A built-in `section` block ("Points check", `md` body) beside the
-  picker — one line per finalist: covered, a transfer suggestion, or a
-  buy estimate ([Affordability and top-ups](#affordability-and-top-ups)),
-  plus a seat line on business finalists — the product and its
+  hybrids included, `optionId` set to the award row's availability `ID`.
+  A tap submits `{"optionId": …}`: that finalist is the pick.
+- A built-in `section` block ("Total cost", `md` body) beside the
+  picker — one line per finalist: miles + taxes + cash onward (zero cash
+  on a pure award), the affordability note — covered, a transfer
+  suggestion, or a buy estimate
+  ([Affordability and top-ups](#affordability-and-top-ups)) — and a seat
+  line on business finalists — the product and its
   [verdict](#seat-quality), a `barely` phrased as a warning ("old Club
   World — barely business, ranked below every true flat bed"). Pack
-  schemas are closed; neither affordability nor the seat verdict rides
-  as an extra field on a pack block.
+  schemas are closed; totals, cash components, affordability, and seat
+  verdicts ride the `md` body, never extra fields on a pack block.
 - One `getaway.itinerary` per expanded finalist, fed only from
   `/trips/{id}`: integer miles, minor-unit taxes plus currency, remaining
   seats, the primary booking link, the row's `UpdatedAt`, and the segments
-  in `Order`.
-- A `getaway.flight` for each positioning leg — convert the `fli` price to
-  minor units (`305.0` USD becomes `{"amount": 30500, "currency": "USD"}`).
+  in `Order`. A hybrid's detail card is one `getaway.itinerary` per award
+  booking — two for a stitch — plus its cash-leg `getaway.flight`s.
+- A `getaway.flight` with `price` for each cash leg, positioning or
+  gateway-onward — convert the `fli` price to minor units (`305.0` USD
+  becomes `{"amount": 30500, "currency": "USD"}`).
 - A `getaway.availability` grid when the user asks about other dates or
   cabins — build it from the saved sweep JSONL, no new API calls. A tap
   submits `{"date": …, "cabin": …}`: expand that cell with `trip`.
@@ -632,7 +675,86 @@ plugin is; every field is documented in
 `AskUserQuestion` stays the lightweight path: up to 4 quick questions,
 batched in one call, when a full board is overkill.
 
-## Positioning flights
+## Routing strategies
+
+A trip is a composition of legs, not one availability row. Every
+region- or vibe-scale plan generates hybrid routings alongside the
+direct awards, and they all compete on the same axis: total cost —
+miles plus taxes plus cash. Any legal composition of legs is fair
+game — invent the shape, then price it.
+
+The levers:
+
+- Direct award — one availability row; the baseline every hybrid must
+  beat.
+- Cash positioning — a cash hop to the award's origin
+  ([Cash positioning](#cash-positioning)).
+- Gateway hybrid — a lie-flat award to a hub, a cash ticket onward
+  ([Gateway hybrids](#gateway-hybrids)).
+- Open jaw — in through one airport, home from another. The return is
+  a second Workflow invocation: origins are the chosen endpoints plus
+  gateways, dests the home set.
+- Two-award stitch — a second award onward from the gateway, any
+  program; the onward `search` sweeps them all in one call.
+- Long-range positioning — a cheap long cash leg to a region rich in
+  award space, then the award from there.
+- Top-ups — transfer or buy the missing miles
+  ([Affordability and top-ups](#affordability-and-top-ups)).
+- Pure cash — every `fli` quote doubles as a cash-versus-points sanity
+  check: when the cash fare undercuts the award's taxes plus a fair
+  cent-per-point value of the miles, say so.
+
+### The cash-cabin default
+
+Cash legs at or under 240 minutes book economy; longer legs book
+business. The same cutoff picks the cabin for a stitched onward award.
+A per-trip override ("business everywhere") logs in the plan's
+`decisions` and feeds the Workflow's `hybrid.cashCutoffMinutes`; a
+durable one routes through [Learnings](#learnings).
+
+### Gateway sets
+
+Gateways are concrete IATA codes, never pseudo-codes — `fli` and jq
+matching need real airports. Observed pseudo-code expansions seed the
+sets: Asia is `ASA`'s NRT, ICN, HND, TPE, PVG, HKG, BKK, SIN
+([Region pseudo-codes](#region-pseudo-codes)); the documented region
+rows in [docs/seats-aero-api.md](../../docs/seats-aero-api.md) floor
+the rest. Refine per program with `routes` — rank a region's airports
+by monitored-route count and keep the top hubs:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/getaway/getaway.sh" routes \
+  --source aeroplan --dest-region Asia > routes.jsonl
+jq -rs 'group_by(.DestinationAirport)
+        | map({hub: .[0].DestinationAirport, n: length})
+        | sort_by(-.n) | .[0:8][] | "\(.hub)\t\(.n)"' routes.jsonl
+```
+
+One `routes` call returns the program's entire monitored map — 8,260
+rows for aeroplan (observed 2026-07-12) — so always redirect to a
+scratchpad file. Each row's `Distance` is a free great-circle proxy
+for [the cash-cabin default](#the-cash-cabin-default) before any
+`/trips` call.
+
+### Gateway hybrids
+
+The worked shape: the direct award to the real destination is scarce
+or pricey, but a major gateway has lie-flat space — so book the award
+to the gateway and a separate cash ticket onward:
+
+- Award: SFO–NRT business, 88,000 aeroplan miles + $118 taxes
+- Onward: NRT–TPE cash, economy per
+  [the cash-cabin default](#the-cash-cabin-default), $96 via `fli`
+- Total: 88k + $118 taxes + $96 cash — one line beside every
+  single-ticket finalist, competing on total cost.
+
+> **Warning:** `avoid_final_destinations` never vetoes a gateway. NRT
+> on the avoid list means no trip *ends* at NRT — it stays fully valid
+> as the hub the award lands at and the cash leg leaves from. The veto
+> bites on the onward destination instead: the Workflow throws when
+> `hybrid.onwardDests` intersects `avoidDestinations`.
+
+### Cash positioning
 
 When the award departs from an airport the user is not at, price the cash
 leg with the `fli` CLI. Several gap legs price in parallel — one subagent
@@ -658,9 +780,7 @@ uvx --from "flights[mcp]" fli flights SFO YVR 2026-09-08 --class BUSINESS --form
 ```
 
 `--format json` returns a wrapper object, not a bare array: the flight
-list is `.flights` and the total is `.count`. The same call doubles as a
-cash-versus-points sanity check — when the cash fare undercuts the award's
-taxes plus a fair cent-per-point value of the miles, say so.
+list is `.flights` and the total is `.count`.
 
 When the positioning date is flexible, scan a window with `fli dates` and
 let the cheapest day anchor the plan:

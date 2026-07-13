@@ -137,6 +137,26 @@ Aeroplan bulk scan surfaces island space most people never think to search:
 
 </details>
 
+### Get creative with routings
+
+A direct award to a second-tier city rarely exists, and when it does it
+costs double. Lie-flat space to the big gateways is everywhere. Split
+the trip instead:
+
+```text
+Fly me lie-flat to Asia in November — happy to land at a hub like NRT
+and hop the last leg on a cash ticket.
+```
+
+The skill composes hybrid routings beside direct awards and compares
+them on total cost. A cash hop under four hours books economy; longer
+books business:
+
+```text
+SFO  NRT  aeroplan business  88000 miles + $118 taxes  lie-flat
+NRT  TPE  cash economy       $96                       3h45m hop
+```
+
 ## Preferences and trip memory
 
 Two stores back planning. Your global profile lives at

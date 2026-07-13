@@ -63,6 +63,28 @@ API's own classification, not strict geography: `destination_region=Africa`
 returns Indian Ocean airports (MRU, MLE) and Canary Islands airports
 (FUE, ACE) alongside continental Africa (observed 2026-07-10, `aeroplan`).
 
+### Routes (`GET /routes`)
+
+`source` is required and is the only parameter; there is no server-side
+region filter. The response is a bare JSON array — no `data` envelope and
+no pagination fields (observed 2026-07-12, `aeroplan`) — so the jq root is
+`.[]`, not `.data[]`. One call returns the program's entire monitored route
+set (8,260 rows for `aeroplan`) and counts against quota. Dumps run
+thousands of lines: always redirect to a scratchpad file.
+
+Each route object carries seven fields:
+
+```json
+{"ID":"2OgDZKKJO8xO0Gd67UogPLwJR6G","OriginAirport":"CAI","OriginRegion":"Africa","DestinationAirport":"AMM","DestinationRegion":"Asia","Distance":293,"Source":"aeroplan"}
+```
+
+`OriginRegion` and `DestinationRegion` take the same six continent names as
+the availability region params, so region cuts are a client-side jq filter
+(`OriginRegion == "Asia"` matched 2,040 of the 8,260 aeroplan rows).
+`Distance` is the route's great-circle length in statute miles (293 for
+CAI–AMM), a free duration proxy for the cash-cabin cutoff that spends no
+`/trips` call.
+
 ### Pagination
 
 Paginated responses carry three top-level continuation fields (observed
