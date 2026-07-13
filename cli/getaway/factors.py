@@ -1,3 +1,14 @@
+"""Journey ranking and finalist formatting.
+
+Ranking has three stages and never sums verdicts into a score. (1) Cost lane: same-program
+journeys band on scalar combined mileage, mixed-program journeys compare as per-program vectors
+on a Pareto front — there is no fungible cross-program scalar. (2) Judgment lane, consumed
+lexicographically within a cost tier: primary orders, secondary breaks ties, note annotates and
+never reorders; unknown is neutral. (3) A stable cost/id tie-break. Preferences never gate — the
+only hard budget is ``constraints.mileage_limit``; seat insufficiency is gated upstream at
+composition. ``finalize`` only formats the board's result classes.
+"""
+
 import datetime as dt
 import json
 from collections.abc import Callable
@@ -5,16 +16,14 @@ from typing import Any
 
 import click
 
-from getaway import afford, prefs, registry, trips
-from getaway.constants import MILEAGE_BAND
-from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
-from getaway.store import connect
+from getaway import afford, prefs, registry, stays, trips
+from getaway.constants import MILEAGE_BAND, PRESENTATION_LIMIT
+from getaway.paths import UsageError, emit, map_errors, utcnow
 
 VERDICT_RANK = {"promote": -1, "neutral": 0, "demote": 1}
 CREDIT_EXPIRY_DAYS = 90
 _BAND_NUM = 100 + round(MILEAGE_BAND * 100)
-
-Row = dict[str, Any]
+_CASH_AXIS = "$cash"  # a hybrid's cash cost is its own Pareto dimension, never fungible with miles
 
 
 def _optional_artifact(slug: str, name: str) -> dict | None:
@@ -33,17 +42,25 @@ def _balances_configured(prefs_doc: dict) -> bool:
     return bool(balances["programs"] or balances["transferable"])
 
 
+def _has_monetary_credit(prefs_doc: dict) -> bool:
+    return any(i["type"] == "monetary_credit" for i in prefs_doc["travel_instruments"])
+
+
 def _shortfall_exists(prefs_doc: dict, slug: str | None) -> bool:
-    doc = _optional_artifact(slug, "shortlist.json") if slug else None
+    doc = _optional_artifact(slug, "expand.json") if slug else None
     if doc is None:
         return _balances_configured(prefs_doc)
     programs = prefs_doc["balances"]["programs"]
-    return any(cand["mileage"] > programs.get(cand["source"], 0) for cand in doc["candidates"])
+    return any(
+        miles > programs.get(program, 0)
+        for journey in doc["journeys"]
+        for program, miles in journey["cost"]["mileage"]["by_program"].items()
+    )
 
 
 def _activation(fid: str, trip: dict, prefs_doc: dict, slug: str | None) -> tuple[bool, str]:
     cabin = trip["cabin"]
-    plan = trip["plan"]
+    preferences = trip["plan"].get("preferences", {})
     if fid in ("affordability", "airline_preference", "layovers"):
         return True, "always active"
     if fid == "departure_days":
@@ -55,9 +72,6 @@ def _activation(fid: str, trip: dict, prefs_doc: dict, slug: str | None) -> tupl
     if fid == "transit_risk":
         active = _documents_present(prefs_doc)
         return active, "documents on file" if active else "no documents on file"
-    if fid == "return_viability":
-        active = bool(plan.get("round_trip"))
-        return active, "round-trip ask" if active else "one-way ask"
     if fid == "destination_context":
         active = bool(trip["vibe"])
         return active, "vibe set" if active else "no vibe set"
@@ -65,11 +79,26 @@ def _activation(fid: str, trip: dict, prefs_doc: dict, slug: str | None) -> tupl
         active = bool(prefs_doc["status_goals"])
         return active, "status goals on file" if active else "no status goals"
     if fid == "trip_credits":
-        active = bool(prefs_doc["credits"])
-        return active, "credits on file" if active else "no credits on file"
+        active = _has_monetary_credit(prefs_doc)
+        return active, "monetary credit on file" if active else "no monetary credit"
     if fid == "points_purchase":
         active = _shortfall_exists(prefs_doc, slug)
-        return active, "balance shortfall exists" if active else "balances cover candidates"
+        return active, "balance shortfall exists" if active else "balances cover journeys"
+    if fid == "window_fit":
+        active = "outbound_departure_window" in preferences or "return_arrival_by" in preferences
+        return active, "window preference set" if active else "no window preference"
+    if fid == "trip_length_fit":
+        active = "trip_length" in preferences
+        return active, "trip_length preference set" if active else "no trip_length preference"
+    if fid == "departure_day_fit":
+        active = "departure_days" in preferences
+        return active, "departure_days preference set" if active else "no departure_days preference"
+    if fid == "mileage_fit":
+        active = "mileage_target" in preferences
+        return active, "mileage_target preference set" if active else "no mileage_target preference"
+    if fid == "cabin_fit":
+        active = "cabin" in preferences
+        return active, "cabin preference set" if active else "no cabin preference"
     raise UsageError(f"unknown factor id {fid!r}")
 
 
@@ -98,43 +127,76 @@ def _is_expiring(expires: str, now: Callable[[], dt.datetime]) -> bool:
     return dt.date.fromisoformat(expires) <= now().date() + dt.timedelta(days=CREDIT_EXPIRY_DAYS)
 
 
-def _trip_credits_fact(cand: Row, prefs_doc: dict, now: Callable[[], dt.datetime]) -> list[dict]:
-    airlines = {a for a in cand["airlines"].split(", ") if a}
-    program = cand["source"]
+def _journey_programs(journey: dict) -> set[str]:
+    return {leg["source"].lower() for leg in journey["legs"] if leg.get("source")}
+
+
+def _journey_airlines(journey: dict) -> set[str]:
+    codes: set[str] = set()
+    for leg in journey["legs"]:
+        codes |= {a for a in leg.get("airlines", "").split(", ") if a}
+    return codes
+
+
+def _trip_credits_fact(
+    journey: dict, prefs_doc: dict, now: Callable[[], dt.datetime]
+) -> list[dict]:
+    """Monetary-credit instruments whose issuer matches a journey program or operating carrier.
+
+    Only the ``monetary_credit`` variant carries an amount and currency; certificates and
+    companion fares are other instruments and never surface here.
+    """
     today = now().date()
+    programs = _journey_programs(journey)
+    airlines = {a.upper() for a in _journey_airlines(journey)}
     matches = []
-    for credit in prefs_doc["credits"]:
-        if dt.date.fromisoformat(credit["expires"]) < today:
+    for instrument in prefs_doc["travel_instruments"]:
+        if instrument["type"] != "monetary_credit":
             continue
-        issuer = credit["issuer"]
-        if issuer.lower() == program.lower() or issuer.upper() in airlines:
+        if dt.date.fromisoformat(instrument["expires"]) < today:
+            continue
+        issuer = instrument["issuer"]
+        if issuer.lower() in programs or issuer.upper() in airlines:
             matches.append(
                 {
-                    "id": credit["id"],
+                    "id": instrument["id"],
                     "issuer": issuer,
-                    "amount": credit["amount"],
-                    "currency": credit["currency"],
-                    "expires": credit["expires"],
-                    "expiring": _is_expiring(credit["expires"], now),
+                    "amount": instrument["amount"],
+                    "currency": instrument["currency"],
+                    "expires": instrument["expires"],
+                    "expiring": _is_expiring(instrument["expires"], now),
                 }
             )
     return matches
 
 
+def _afford_fact(journey: dict, prefs_doc: dict) -> dict:
+    by_program = {
+        program: afford.afford(program, miles, prefs_doc)
+        for program, miles in journey["cost"]["mileage"]["by_program"].items()
+    }
+    return {
+        "by_program": by_program,
+        "covered": all(a["covered"] for a in by_program.values()),
+        "total_shortfall": sum(a["shortfall"] for a in by_program.values()),
+    }
+
+
 def _facts(
-    cand: Row, prefs_doc: dict, active: set[str], now: Callable[[], dt.datetime]
+    journey: dict, prefs_doc: dict, active: set[str], now: Callable[[], dt.datetime]
 ) -> dict:
-    program = cand["source"]
-    mileage = cand["mileage"]
-    facts: dict[str, Any] = {"afford": afford.afford(program, mileage, prefs_doc)}
+    by_program = journey["cost"]["mileage"]["by_program"]
+    facts: dict[str, Any] = {"afford": _afford_fact(journey, prefs_doc)}
     if "status_earning" in active:
-        facts["status_earning"] = _status_earning_fact(program, prefs_doc)
+        facts["status_earning"] = [_status_earning_fact(p, prefs_doc) for p in by_program]
     if "points_purchase" in active:
-        facts["points_purchase"] = afford.afford(
-            program, mileage, prefs_doc, include_purchase=True
-        )["purchase"]
+        facts["points_purchase"] = [
+            afford.afford(p, m, prefs_doc, include_purchase=True)["purchase"]
+            for p, m in by_program.items()
+            if m > prefs_doc["balances"]["programs"].get(p, 0)
+        ]
     if "trip_credits" in active:
-        facts["trip_credits"] = _trip_credits_fact(cand, prefs_doc, now)
+        facts["trip_credits"] = _trip_credits_fact(journey, prefs_doc, now)
     return facts
 
 
@@ -145,206 +207,202 @@ def _tiers(trip: dict) -> dict:
     return tiers
 
 
-def _verdict_score(factors_map: dict, factor_ids: set[str]) -> int:
-    return sum(
-        VERDICT_RANK[factors_map.get(fid, {}).get("verdict", "neutral")] for fid in factor_ids
+def _afford_verdict(afford_fact: dict) -> str:
+    if afford_fact["covered"]:
+        return "promote"
+    coverable = all(
+        entry["covered"] or any(path["covers"] for path in entry["transfer_paths"])
+        for entry in afford_fact["by_program"].values()
+    )
+    return "neutral" if coverable else "demote"
+
+
+def _deterministic_verdicts(journey: dict, facts: dict, active: set[str]) -> list[dict]:
+    """Verdicts the CLI computes deterministically per journey (no model judgment).
+
+    ``points_purchase`` and ``departure_days`` stay note-tier annotations, never verdicts.
+    """
+    verdicts = [
+        {"factor": "affordability", "leg": None, "verdict": _afford_verdict(facts["afford"])}
+    ]
+    if any(leg.get("soft") for leg in journey["legs"]):
+        verdicts.append({"factor": "airline_preference", "leg": None, "verdict": "demote"})
+    if "status_earning" in active and any(
+        f["matches_goal"] and f["earns_on_redemption"] for f in facts.get("status_earning", [])
+    ):
+        verdicts.append({"factor": "status_earning", "leg": None, "verdict": "promote"})
+    if "trip_credits" in active and facts.get("trip_credits"):
+        verdicts.append({"factor": "trip_credits", "leg": None, "verdict": "promote"})
+    return verdicts
+
+
+def _cost_vector(entry: dict) -> dict[str, int]:
+    journey = entry["journey"]
+    vector = dict(journey["cost"]["mileage"]["by_program"])
+    cash_cents = sum(component["amount_cents"] for component in journey["cost"]["cash"])
+    if cash_cents:
+        vector[_CASH_AXIS] = cash_cents
+    return vector
+
+
+def _dominates(a: dict, b: dict) -> bool:
+    """Cost domination. Same single program: ``a`` is cheaper beyond the band. Otherwise strict
+    Pareto over the union of dimensions — per-program miles plus a hybrid's cash cents, each axis
+    compared within itself (a dimension a journey doesn't use costs it zero) — so mixed-program,
+    cross-program, and cash-bearing journeys stay incomparable and both surface on the front."""
+    av, bv = _cost_vector(a), _cost_vector(b)
+    if len(av) == 1 and len(bv) == 1 and set(av) == set(bv):
+        (a_total,) = av.values()
+        (b_total,) = bv.values()
+        return a_total * _BAND_NUM < b_total * 100
+    programs = set(av) | set(bv)
+    le_all = all(av.get(p, 0) <= bv.get(p, 0) for p in programs)
+    lt_any = any(av.get(p, 0) < bv.get(p, 0) for p in programs)
+    return le_all and lt_any
+
+
+def _assign_cost_tiers(entries: list[dict]) -> None:
+    remaining = list(entries)
+    tier = 0
+    while remaining:
+        front = [e for e in remaining if not any(_dominates(o, e) for o in remaining if o is not e)]
+        if not front:  # a domination cycle should be impossible; collapse rather than spin
+            front = remaining
+        for entry in front:
+            entry["_cost_tier"] = tier
+        remaining = [e for e in remaining if e not in front]
+        tier += 1
+
+
+def _lane_ranks(entry: dict, lane: set[str]) -> list[int]:
+    return [VERDICT_RANK[v["verdict"]] for v in entry["verdicts"] if v["factor"] in lane]
+
+
+def _lane_key(entry: dict, lane: set[str], width: int) -> tuple[int, ...]:
+    ranks = _lane_ranks(entry, lane)
+    padded = ranks + [0] * (width - len(ranks))  # absent verdicts read as neutral
+    return tuple(sorted(padded, reverse=True))  # worst (demote) compared first
+
+
+def _tiebreak(entry: dict) -> tuple[tuple[tuple[str, int], ...], str]:
+    vector = _cost_vector(entry)  # per-axis, never a cross-program sum — mirrors the cost lane
+    return tuple(sorted(vector.items())), entry["journey"]["id"]
+
+
+def _order(entries: list[dict], tiers: dict, active: set[str]) -> list[dict]:
+    _assign_cost_tiers(entries)
+    primary = {fid for fid, tier in tiers.items() if tier == "primary" and fid in active}
+    secondary = {fid for fid, tier in tiers.items() if tier == "secondary" and fid in active}
+    p_width = max((len(_lane_ranks(e, primary)) for e in entries), default=0)
+    s_width = max((len(_lane_ranks(e, secondary)) for e in entries), default=0)
+    return sorted(
+        entries,
+        key=lambda e: (
+            e["_cost_tier"],
+            _lane_key(e, primary, p_width),
+            _lane_key(e, secondary, s_width),
+            _tiebreak(e),
+        ),
     )
 
 
-def _affordability_verdict(fact: dict) -> str:
-    if fact["covered"]:
-        return "promote"
-    if any(path["covers"] for path in fact["transfer_paths"]):
-        return "neutral"
-    return "demote"
+def _entry_out(entry: dict) -> dict:
+    return {
+        "journey": entry["journey"],
+        "facts": entry["facts"],
+        "verdicts": entry["verdicts"],
+        "cost_tier": entry["_cost_tier"],
+    }
 
 
-def _deterministic_verdicts(cand: Row, facts: dict, active: set[str]) -> dict:
-    # points_purchase and departure_days stay note-tier annotations, never verdicts.
-    verdicts = {"affordability": _affordability_verdict(facts["afford"])}
-    if cand["soft"]:
-        verdicts["airline_preference"] = "demote"
-    if "status_earning" in active:
-        fact = facts["status_earning"]
-        if fact["matches_goal"] and fact["earns_on_redemption"]:
-            verdicts["status_earning"] = "promote"
-    if "trip_credits" in active and facts["trip_credits"]:
-        verdicts["trip_credits"] = "promote"
-    return {fid: {"verdict": verdict} for fid, verdict in verdicts.items()}
-
-
-def _infeasible(record: Row | None, party: int, ceiling: int | None) -> str | None:
-    if record is None:
-        return None
-    seats = record.get("seats")
-    if seats and seats < party:  # absent or zero seat data passes
-        return f"expanded seats {seats} below party {party}"
-    if ceiling is not None and record["mileage"] > ceiling:
-        return f"expanded mileage {record['mileage']} above ceiling {ceiling}"
-    return None
-
-
-def _reorder(entries: list[Row], tiers: dict, active: set[str]) -> list[Row]:
-    entries.sort(key=lambda e: e["_mileage"])
-    primary = {fid for fid, tier in tiers.items() if tier == "primary" and fid in active}
-    secondary = {fid for fid, tier in tiers.items() if tier == "secondary" and fid in active}
-    result: list[Row] = []
-    i = 0
-    n = len(entries)
-    while i < n:
-        band_start = entries[i]["_mileage"]
-        j = i
-        while j < n and entries[j]["_mileage"] * 100 <= band_start * _BAND_NUM:
-            j += 1
-        band = entries[i:j]
-        band.sort(
-            key=lambda e: (
-                _verdict_score(e["_verdicts"], primary),
-                1 if e["_product"] == "barely" else 0,
-                _verdict_score(e["_verdicts"], secondary),
-                e["_mileage"],
-            )
-        )
-        result.extend(band)
-        i = j
-    return result
+def _mileage_limit(plan: dict) -> int | None:
+    limit = plan.get("constraints", {}).get("mileage_limit")
+    return limit["miles"] if limit else None
 
 
 def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
-    party = trip["party"]
-    ceiling = plan.get("mileage_ceiling")
     profile = derive_profile(trip, prefs_doc, slug=slug)
     active = {fid for fid, spec in profile.items() if spec["active"]}
     tiers = _tiers(trip)
-    shortlist_doc = json.loads(trips.artifact_read(slug, "shortlist.json"))
-    expand = _optional_artifact(slug, "expand.json") or {}
+    expand = json.loads(trips.artifact_read(slug, "expand.json"))
     assess = _optional_artifact(slug, "assess.json") or {}
+    assess_journeys = assess.get("journeys", {})
+    limit = _mileage_limit(plan)
 
-    entries: list[Row] = []
-    dropped: list[Row] = []
-    for row in shortlist_doc["candidates"]:
-        record = expand.get(row["id"])
-        # Ranking currency is the bookable trip mileage once a candidate is expanded; an
-        # unexpanded candidate (quota-low trims the Expand phase) ranks on its sweep mileage.
-        if record:
-            cand = {**row, "mileage": record["mileage"], "sweep_mileage": row["mileage"]}
-        else:
-            cand = row
-        # The shortlist's two hard feasibility constraints, re-applied against expanded truth.
-        reason = _infeasible(record, party, ceiling)
-        if reason is not None:
-            dropped.append({"candidate": cand, "reason": reason})
-            continue
-        facts = _facts(cand, prefs_doc, active, now)
-        judged = assess.get(cand["id"], {})
-        entries.append(
-            {
-                "candidate": cand,
-                "factors": judged,
-                "facts": facts,
-                "_verdicts": {**_deterministic_verdicts(cand, facts, active), **judged},
-                "_product": (record or {}).get("product"),
-                "_mileage": cand["mileage"],
-            }
-        )
-    ranked = _reorder(entries, tiers, active)[: plan.get("max_finalists", 6)]
-    out = [
-        {"candidate": e["candidate"], "factors": e["factors"], "facts": e["facts"]}
-        for e in ranked
-    ]
-    doc = {"ranked": out, "dropped": dropped}
-    trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))
-    deps = trips.existing_artifacts(slug, ["shortlist.json", "expand.json", "assess.json"])
-    trips.phase_done(slug, "rank", deps, now=now)
-    return out
-
-
-def _compose_hybrids(slug: str, trip: dict, store: Any) -> list[dict]:
-    hybrid = trip["plan"]["hybrid"]
-    max_hybrids = hybrid.get("max_hybrids", 3)
-    gateway_doc = json.loads(trips.artifact_read(slug, "shortlist-gateway.json"))
-    gateway_by_dest: dict[str, Row] = {}
-    for cand in gateway_doc["candidates"]:  # candidates are already ordered best-first
-        gateway_by_dest.setdefault(cand["dest"], cand)
-    onward_doc = json.loads(trips.artifact_read(slug, "onward.json"))
-    minima_by_key = {
-        (m["gateway"], m["onward_dest"], m["date"], m["cabin"]): m for m in onward_doc["minima"]
-    }
-    bridge_doc = _optional_artifact(slug, "bridge.json") or {"quotes": []}
-    bridge_by_pair = {(q["gateway"], q["onward_dest"]): q for q in bridge_doc["quotes"]}
-
-    composed: list[dict] = []
-    for pair in onward_doc["bridge_pairs"]:
-        gateway, dest = pair["gateway"], pair["onward_dest"]
-        award = gateway_by_dest.get(gateway)
-        if award is None:
-            continue
-        cash = bridge_by_pair.get((gateway, dest))
-        if cash is None:
-            continue
-        composed.append(
-            {
-                "kind": "gateway-cash",
-                "gateway": gateway,
-                "onward_dest": dest,
-                "award": award,
-                "onward": {"mode": "cash", **cash},
-            }
-        )
-        onward_award = minima_by_key.get((gateway, dest, pair["date"], cash["cabin"]))
-        if onward_award is not None:
-            composed.append(
+    entries: list[dict] = []
+    dropped: list[dict] = list(expand.get("gated", []))
+    for journey in expand["journeys"]:
+        facts = _facts(journey, prefs_doc, active, now)
+        total_miles = sum(journey["cost"]["mileage"]["by_program"].values())
+        if limit is not None and total_miles > limit:
+            dropped.append(
                 {
-                    "kind": "two-award",
-                    "gateway": gateway,
-                    "onward_dest": dest,
-                    "award": award,
-                    "onward": {"mode": "award", **onward_award},
+                    "journey_id": journey["id"],
+                    "reason": f"{total_miles} miles over confirmed limit {limit}",
                 }
             )
+            continue
+        judged = assess_journeys.get(journey["id"], {}).get("verdicts", [])
+        entries.append(
+            {
+                "journey": journey,
+                "facts": facts,
+                "verdicts": _deterministic_verdicts(journey, facts, active) + judged,
+            }
+        )
 
-    def total_miles(h: dict) -> int:
-        onward = h["onward"]
-        return h["award"]["mileage"] + (onward["mileage"] if onward["mode"] == "award" else 0)
+    ordered = _order(entries, tiers, active)
+    ranked = [_entry_out(e) for e in ordered]
 
-    def cash_minor(h: dict) -> int:
-        onward = h["onward"]
-        return round(onward["price"] * 100) if onward["mode"] == "cash" else 0
+    within_cut = {e["journey"]["id"] for e in ordered[:PRESENTATION_LIMIT]}
+    by_id = {e["journey"]["id"]: e for e in ordered}
+    notable: list[dict] = []
+    for stretch in assess.get("notable_stretches", []):
+        entry = by_id.get(stretch["journey_id"])
+        if entry is not None and stretch["journey_id"] not in within_cut:
+            notable.append({**_entry_out(entry), "why": stretch.get("why", "")})
 
-    composed.sort(key=lambda h: (total_miles(h), cash_minor(h)))
-    composed = composed[:max_hybrids]
-    for h in composed:
-        h["award_detail"] = store.trip_detail_get(h["award"]["id"])
-        if h["onward"]["mode"] == "award":
-            h["onward_detail"] = store.trip_detail_get(h["onward"]["id"])
-    return composed
+    doc = {"ranked": ranked, "notable_stretches": notable, "dropped": dropped}
+    trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))
+    trips.phase_done(slug, "rank", now=now)  # freshness rides the node's declared inputs
+    return ranked
+
+
+def _thread_lodging(doc: dict, plan: dict, slug: str, now: Callable[[], dt.datetime]) -> None:
+    """Attach each board journey's walked stay (or its deferral) and mark every unpaired lead's
+    lodging deferred — an unpaired outbound has no return leg, so no checkout to search."""
+    stays_doc = _optional_artifact(slug, "stays.json") or {"stays": {}}
+    for section in ("journeys", "notable_stretches"):
+        doc[section] = [
+            {**entry, **stays.board_lodging(entry["journey"], plan, stays_doc, now)}
+            for entry in doc[section]
+        ]
+    doc["unpaired_leads"] = [
+        {**lead, "lodging_search": stays.unpaired_lodging()} for lead in doc["unpaired_leads"]
+    ]
 
 
 def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     trip = trips.show(slug)
     plan = trip["plan"]
-    ranked = json.loads(trips.artifact_read(slug, "rank.json"))["ranked"]
-    store = connect(cache_db(), now=now)
-    directs = [
-        {
-            "kind": "direct",
-            "candidate": entry["candidate"],
-            "factors": entry["factors"],
-            "facts": entry["facts"],
-            "detail": store.trip_detail_get(entry["candidate"]["id"]),
-        }
-        for entry in ranked
-    ]
-    hybrids = _compose_hybrids(slug, trip, store) if plan.get("hybrid") else []
-    doc = {"directs": directs, "hybrids": hybrids}
+    rank_doc = json.loads(trips.artifact_read(slug, "rank.json"))
+    expand = _optional_artifact(slug, "expand.json") or {}
+
+    doc = {
+        "trip_type": trips._trip_type(plan),
+        "journeys": rank_doc["ranked"][:PRESENTATION_LIMIT],
+        "notable_stretches": rank_doc["notable_stretches"],
+        "unpaired_leads": expand.get("unpaired_outbounds", []),
+        "search_states": expand.get("search_states", {}),
+        "dropped": rank_doc["dropped"],
+    }
+    if "lodging" in plan:
+        _thread_lodging(doc, plan, slug, now)
     trips.artifact_write(slug, "finalists.json", json.dumps(doc, separators=(",", ":")))
-    deps = trips.existing_artifacts(
-        slug, ["rank.json", "shortlist-gateway.json", "onward.json", "bridge.json"]
-    )
-    trips.phase_done(slug, "finalize", deps, now=now)
+    trips.phase_done(slug, "finalize", now=now)
     return doc
 
 

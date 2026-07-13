@@ -3,17 +3,24 @@ import sys
 import click
 
 from getaway.afford import afford_cmd
+from getaway.bridge import bridge_cmd
 from getaway.constants import EXIT_USAGE
 from getaway.factors import rank_cmd
+from getaway.journeys import expand_group
 from getaway.learnings import learnings_group
 from getaway.prefs import prefs_group
 from getaway.quality import quality_group
 from getaway.registry import registry_group
 from getaway.seats import availability_cmd, expand_cmd, routes_cmd, search_cmd
 from getaway.shortlist import shortlist_group
+from getaway.stays import stays_group
 from getaway.store import cache_group, quota_cmd
 from getaway.sweeps import sweep_group
 from getaway.trips import trip_group
+
+# The single-availability expand lives under the group as `expand detail`; `expand run` composes
+# journeys from the leg shortlists.
+expand_group.add_command(expand_cmd, name="detail")
 
 
 @click.group()
@@ -30,6 +37,8 @@ for group in (
     quality_group,
     sweep_group,
     shortlist_group,
+    expand_group,
+    stays_group,
 ):
     cli.add_command(group)
 
@@ -39,8 +48,8 @@ for command in (
     search_cmd,
     availability_cmd,
     routes_cmd,
-    expand_cmd,
     rank_cmd,
+    bridge_cmd,
 ):
     cli.add_command(command)
 

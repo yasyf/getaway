@@ -10,27 +10,57 @@ from getaway import quality, registry
     ("airline", "aircraft", "cabin", "verdict", "product", "matched"),
     [
         pytest.param(
-            "BA", "Boeing 777-300ER", "business", "suite", "Club Suite", "777-300ER",
+            "BA",
+            "Boeing 777-300ER",
+            "business",
+            "suite",
+            "Club Suite",
+            "777-300ER",
             id="exact-substring-hit",
         ),
         pytest.param(
-            "QR", "Airbus A350-1000", "business", "suite", "Qsuite", "A350-1000",
+            "QR",
+            "Airbus A350-1000",
+            "business",
+            "suite",
+            "Qsuite",
+            "A350-1000",
             id="coarse-aircraft-string-hit",
         ),
         pytest.param(
-            "AA", "Boeing 787-9P", "business", "suite", "Flagship Suite", "787-9P",
+            "AA",
+            "Boeing 787-9P",
+            "business",
+            "suite",
+            "Flagship Suite",
+            "787-9P",
             id="longest-match-wins-over-787-9",
         ),
         pytest.param(
-            "AA", "Boeing 787-9", "business", "solid", "Super Diamond / Concept D", "787-9",
+            "AA",
+            "Boeing 787-9",
+            "business",
+            "solid",
+            "Super Diamond / Concept D",
+            "787-9",
             id="shorter-match-when-longer-absent",
         ),
         pytest.param(
-            "EY", "Boeing 777-300ER", "business", "dated", "Solstys staggered", "777-300ER",
+            "EY",
+            "Boeing 777-300ER",
+            "business",
+            "dated",
+            "Solstys staggered",
+            "777-300ER",
             id="airline-filter-picks-etihad",
         ),
         pytest.param(
-            "af", "airbus a350-900", "business", "suite", "Door suite", "A350-900",
+            "af",
+            "airbus a350-900",
+            "business",
+            "suite",
+            "Door suite",
+            "A350-900",
             id="case-insensitive-airline-and-aircraft",
         ),
     ],
@@ -68,10 +98,20 @@ def test_wrong_cabin_finds_no_row() -> None:
 
 def test_file_order_breaks_equal_length_ties(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
-        {"airline": "ZZ", "aircraft_match": "A350", "cabin": "business",
-         "product": "First", "verdict": "solid"},
-        {"airline": "ZZ", "aircraft_match": "A359", "cabin": "business",
-         "product": "Second", "verdict": "suite"},
+        {
+            "airline": "ZZ",
+            "aircraft_match": "A350",
+            "cabin": "business",
+            "product": "First",
+            "verdict": "solid",
+        },
+        {
+            "airline": "ZZ",
+            "aircraft_match": "A359",
+            "cabin": "business",
+            "product": "Second",
+            "verdict": "suite",
+        },
     ]
     monkeypatch.setattr(registry, "seat_quality", lambda: rows)
     # "A350" appears before "A359"; both length 4 and both substrings — file order wins.

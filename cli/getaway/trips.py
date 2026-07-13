@@ -7,8 +7,14 @@ from importlib import resources
 
 import click
 
-from getaway import prefs
-from getaway.constants import CABIN_PREFIX, PHASE_TTL_HOURS
+from getaway import prefs, registry
+from getaway.constants import (
+    CABIN_PREFIX,
+    DISJOINT_DURABLE_PREF_KEYS,
+    NODE_QUOTA_COST,
+    NODE_ROUTING,
+    NODE_TTL_HOURS,
+)
 from getaway.paths import (
     NegativePredicate,
     StateConflictError,
@@ -31,25 +37,56 @@ from getaway.paths import (
 )
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
-ARTIFACT_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.(json|jsonl)$")
+ARTIFACT_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+ARTIFACT_LEAF_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.(json|jsonl)$")
 BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 RESERVED_BUCKET_NAMES = frozenset({"gateways", "onward"})
 RESERVED_KEYS = frozenset({"slug", "created"})
+TRIP_TYPES = frozenset({"one_way", "round_trip"})
 PLAN_KEYS = frozenset(
     {
+        "trip_type",
         "origins",
         "buckets",
         "program_sweeps",
         "hybrid",
         "sources",
-        "mileage_ceiling",
-        "max_finalists",
-        "round_trip",
+        "preferences",
+        "constraints",
+        "return",
+        "lodging",
     }
 )
 HYBRID_KEYS = frozenset({"gateways", "onward_dests", "max_hybrids"})
+RETURN_KEYS = frozenset({"origins", "dests"})
+LODGING_KEYS = frozenset({"checkout"})
 JUDGMENT_KEYS = frozenset({"guidance", "factors"})
 FACTOR_PRIORITIES = frozenset({"primary", "secondary", "note"})
+ASSESS_VERDICTS = frozenset({"promote", "neutral", "demote"})
+JUDGMENT_FACTOR_KINDS = frozenset({"judgment", "deterministic+judgment"})
+DAY_TOKENS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
+LAYOVER_STYLES = frozenset({"minimize", "explore"})
+PREFERENCE_KEYS = frozenset(
+    {
+        "outbound_departure_window",
+        "return_arrival_by",
+        "trip_length",
+        "departure_days",
+        "cabin",
+        "mileage_target",
+        "layover_style",
+        "program_preference",
+    }
+)
+CONSTRAINT_KEYS = frozenset(
+    {
+        "outbound_departure_window",
+        "return_arrival_by",
+        "departure_days",
+        "cabin",
+        "mileage_limit",
+    }
+)
 TRIP_FP_KEYS = (
     "window",
     "cabin",
@@ -69,33 +106,9 @@ PREFS_FP_KEYS = (
     "documents",
     "departure_days",
 )
-PREFS_RANK_KEYS = ("balances", "statuses", "credits", "status_goals")
+PREFS_RANK_KEYS = ("balances", "statuses", "travel_instruments", "status_goals")
 RANK_PHASES = frozenset({"rank", "finalize"})
-
-# Placeholders resolved per trip: direct-shortlist sweep artifacts, active-collector evidence.
-_SWEEP_DEPS = "@sweeps"
-_EVIDENCE_DEPS = "@evidence"
-# Deps that only exist on the hybrid gateway/onward/bridge path.
-_HYBRID_ONLY_ARTIFACTS = frozenset(
-    {"sweep-gateways.jsonl", "shortlist-gateway.json", "onward.json", "bridge.json"}
-)
-
-# Source of truth for each phase's upstream deps. A dep that should exist but is absent hashes as
-# a sentinel, so its later arrival flips the fingerprint. Keys absent here (sweeps) run on inputs.
-PHASE_ARTIFACT_DEPS: dict[str, list[str]] = {
-    "shortlist": [_SWEEP_DEPS],
-    "shortlist:gateway": ["sweep-gateways.jsonl"],
-    "onward": ["shortlist-gateway.json"],
-    "bridge": ["onward.json"],
-    "expand": ["shortlist.json", "shortlist-gateway.json"],
-    "evidence.verify": ["expand.json"],
-    "evidence.cash": ["expand.json"],
-    "evidence.context": ["shortlist.json"],
-    "evidence.transit": ["expand.json", "shortlist-gateway.json"],
-    "assess": ["expand.json", _EVIDENCE_DEPS],
-    "rank": ["shortlist.json", "expand.json", "assess.json"],
-    "finalize": ["rank.json", "onward.json", "bridge.json"],
-}
+# An absent declared input hashes distinctly, so its later arrival flips the fingerprint.
 _ABSENT = b"\x00ABSENT\x00"
 
 
@@ -137,9 +150,10 @@ def _checkpoints_path(slug: str):
 
 def _artifact_path(slug: str, name: str):
     _valid_slug(slug)
-    if not ARTIFACT_RE.match(name):
+    *dirs, leaf = name.split("/")
+    if not ARTIFACT_LEAF_RE.match(leaf) or not all(ARTIFACT_SEGMENT_RE.match(d) for d in dirs):
         raise UsageError(f"invalid artifact name: {name!r}")
-    return trip_dir(slug) / "artifacts" / name
+    return trip_dir(slug).joinpath("artifacts", *name.split("/"))
 
 
 def _factor_ids() -> set[str]:
@@ -157,26 +171,168 @@ def _validate_bucket(bucket: object) -> None:
     require_str_list(bucket["dests"], "plan.buckets.dests")
 
 
+def _iso_date(value: object, label: str) -> None:
+    text = require_str(value, label)
+    try:
+        datetime.fromisoformat(text)
+    except ValueError as err:
+        raise UsageError(f"{label} is not an ISO date: {value!r}") from err
+
+
+def _str_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list):
+        raise UsageError(f"{label} must be a list of strings")
+    result = [x for x in value if isinstance(x, str)]
+    if len(result) != len(value):
+        raise UsageError(f"{label} must be a list of strings")
+    return result
+
+
+def _vetoed_dests(merged: dict) -> set[str]:
+    return set(merged["avoid_final_destinations"]) | set(prefs.show()["avoid_destinations"])
+
+
+def _reject_disjoint(key: object, where: str) -> None:
+    if key in DISJOINT_DURABLE_PREF_KEYS:
+        raise UsageError(f"{where}[{key!r}] is a durable-preferences key, not a trip-doc key")
+
+
+def _require_confirmed(spec: dict, label: str) -> None:
+    if spec["confirmed"] is not True:
+        raise UsageError(f"{label}.confirmed must be true — a constraint is explicitly confirmed")
+
+
+def _validate_pref_value(key: object, value: object, label: str) -> None:
+    if key == "outbound_departure_window":
+        win = require_keys(value, {"start", "end"}, label)
+        _iso_date(win["start"], f"{label}.start")
+        _iso_date(win["end"], f"{label}.end")
+    elif key == "return_arrival_by":
+        win = require_keys(value, {"latest_local_date"}, label)
+        _iso_date(win["latest_local_date"], f"{label}.latest_local_date")
+    elif key == "trip_length":
+        spec = require_keys(value, {"days", "basis"}, label)
+        require_int(spec["days"], f"{label}.days")
+        require_str(spec["basis"], f"{label}.basis")
+    elif key == "departure_days":
+        bad = sorted({d for d in _str_list(value, label) if d not in DAY_TOKENS})
+        if bad:
+            raise UsageError(f"{label} has invalid day tokens: {bad}")
+    elif key == "cabin":
+        if value not in CABIN_PREFIX:
+            raise UsageError(f"{label} must be one of {sorted(CABIN_PREFIX)}")
+    elif key == "mileage_target":
+        spec = require_keys(value, {"miles", "scope"}, label)
+        require_int(spec["miles"], f"{label}.miles")
+        require_str(spec["scope"], f"{label}.scope")
+    elif key == "layover_style":
+        if value not in LAYOVER_STYLES:
+            raise UsageError(f"{label} must be one of {sorted(LAYOVER_STYLES)}")
+    elif key == "program_preference":
+        require_str_list(value, label)
+
+
+def _validate_constraint_value(key: object, value: object, label: str) -> None:
+    if key == "outbound_departure_window":
+        win = require_keys(value, {"start", "end", "confirmed"}, label)
+        _iso_date(win["start"], f"{label}.start")
+        _iso_date(win["end"], f"{label}.end")
+        _require_confirmed(win, label)
+    elif key == "return_arrival_by":
+        win = require_keys(value, {"latest_local_date", "confirmed"}, label)
+        _iso_date(win["latest_local_date"], f"{label}.latest_local_date")
+        _require_confirmed(win, label)
+    elif key == "departure_days":
+        spec = require_keys(value, {"days", "confirmed"}, label)
+        bad = sorted({d for d in _str_list(spec["days"], f"{label}.days") if d not in DAY_TOKENS})
+        if bad:
+            raise UsageError(f"{label}.days has invalid day tokens: {bad}")
+        _require_confirmed(spec, label)
+    elif key == "cabin":
+        spec = require_keys(value, {"value", "confirmed"}, label)
+        if spec["value"] not in CABIN_PREFIX:
+            raise UsageError(f"{label}.value must be one of {sorted(CABIN_PREFIX)}")
+        _require_confirmed(spec, label)
+    elif key == "mileage_limit":
+        spec = require_keys(value, {"miles"}, label)
+        require_int(spec["miles"], f"{label}.miles")
+
+
+def _validate_preferences(branch: object) -> None:
+    if not isinstance(branch, dict):
+        raise UsageError("plan.preferences must be an object")
+    for key, spec in branch.items():
+        _reject_disjoint(key, "plan.preferences")
+        if key not in PREFERENCE_KEYS:
+            raise UsageError(f"unknown preference key: {key!r}")
+        spec = require_keys(spec, {"value", "priority"}, f"plan.preferences[{key!r}]")
+        if spec["priority"] not in FACTOR_PRIORITIES:
+            raise UsageError(
+                f"plan.preferences[{key!r}].priority must be one of {sorted(FACTOR_PRIORITIES)}"
+            )
+        _validate_pref_value(key, spec["value"], f"plan.preferences[{key!r}].value")
+
+
+def _validate_constraints(branch: object) -> None:
+    if not isinstance(branch, dict):
+        raise UsageError("plan.constraints must be an object")
+    for key, value in branch.items():
+        _reject_disjoint(key, "plan.constraints")
+        if key not in CONSTRAINT_KEYS:
+            raise UsageError(f"unknown constraint key: {key!r}")
+        _validate_constraint_value(key, value, f"plan.constraints[{key!r}]")
+
+
+def _validate_return(return_spec: object, merged: dict) -> None:
+    ret = require_keys(return_spec, set(), "plan.return", optional=frozenset(RETURN_KEYS))
+    if "dests" in ret:  # home endpoints — exempt from the destination veto
+        require_str_list(ret["dests"], "plan.return.dests")
+    if "origins" in ret:
+        require_str_list(ret["origins"], "plan.return.origins")
+        bad = sorted({a for a in ret["origins"] if a in _vetoed_dests(merged)})
+        if bad:
+            raise UsageError(f"plan.return.origins vetoed by avoid lists: {bad}")
+
+
 def _validate_plan(plan: object, merged: dict) -> None:
     plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
+    trip_type = plan.get("trip_type")
+    if trip_type is not None and trip_type not in TRIP_TYPES:
+        raise UsageError(f"plan.trip_type must be one of {sorted(TRIP_TYPES)}")
     if "origins" in plan:
         require_str_list(plan["origins"], "plan.origins")
-    if "round_trip" in plan and not isinstance(plan["round_trip"], bool):
-        raise UsageError("plan.round_trip must be a boolean")
+    if "sources" in plan:
+        require_str_list(plan["sources"], "plan.sources")
     if "buckets" in plan:
         if not isinstance(plan["buckets"], list):
             raise UsageError("plan.buckets must be a list")
         for bucket in plan["buckets"]:
             _validate_bucket(bucket)
+    if "program_sweeps" in plan and not isinstance(plan["program_sweeps"], list):
+        raise UsageError("plan.program_sweeps must be a list")
     if "hybrid" in plan:
         hybrid = require_keys(plan["hybrid"], set(), "plan.hybrid", optional=frozenset(HYBRID_KEYS))
         if "onward_dests" in hybrid:
             require_str_list(hybrid["onward_dests"], "plan.hybrid.onward_dests")
-            vetoed = set(merged["avoid_final_destinations"])
-            vetoed |= set(prefs.show()["avoid_destinations"])
-            bad = sorted({a for a in hybrid["onward_dests"] if a in vetoed})
+            bad = sorted({a for a in hybrid["onward_dests"] if a in _vetoed_dests(merged)})
             if bad:
                 raise UsageError(f"plan.hybrid.onward_dests vetoed by avoid lists: {bad}")
+    if "preferences" in plan:
+        _validate_preferences(plan["preferences"])
+    if "constraints" in plan:
+        _validate_constraints(plan["constraints"])
+    if "preferences" in plan and "constraints" in plan:
+        both = sorted(set(plan["preferences"]) & set(plan["constraints"]))
+        if both:
+            raise UsageError(f"keys appear in both preferences and constraints: {both}")
+    if "return" in plan:
+        if trip_type == "one_way":
+            raise UsageError("plan.return is invalid for a one-way trip")
+        _validate_return(plan["return"], merged)
+    if "lodging" in plan:
+        lodging = require_keys(plan["lodging"], set(), "plan.lodging", optional=LODGING_KEYS)
+        if "checkout" in lodging:  # an explicit checkout is the only one a one-way/open-jaw carries
+            _iso_date(lodging["checkout"], "plan.lodging.checkout")
 
 
 def _validate_judgment(judgment: object) -> None:
@@ -337,51 +493,16 @@ def capture_inputs_fp(trip: dict, prefs_doc: dict, key: str) -> str:
     return _sha(payload)
 
 
-def _direct_sweep_artifacts(trip: dict, prefs_doc: dict) -> list[str]:
-    from getaway.sweeps import derive_specs
-
-    return [
-        f"sweep-{spec['label']}.jsonl"
-        for spec in derive_specs(trip, prefs_doc)
-        if spec["label"] != "gateways"
-    ]
+def _node_index(slug: str) -> dict:
+    return {node["id"]: node for node in compile_graph(slug)["nodes"]}
 
 
-def _evidence_artifacts(trip: dict, prefs_doc: dict, slug: str) -> list[str]:
-    from getaway.constants import EVIDENCE_COLLECTORS
-
-    profile = _judgment_profile(trip, prefs_doc, slug)
-    return [
-        f"evidence-{EVIDENCE_COLLECTORS[fid]}.json"
-        for fid, spec in profile.items()
-        if spec["active"] and fid in EVIDENCE_COLLECTORS
-    ]
-
-
-def _resolve_deps(slug: str, key: str, trip: dict, prefs_doc: dict) -> list[str]:
-    template = PHASE_ARTIFACT_DEPS.get(key)
-    if template is None:
-        return []
-    hybrid = bool(trip["plan"].get("hybrid"))
-    deps: list[str] = []
-    for item in template:
-        if item == _SWEEP_DEPS:
-            deps.extend(_direct_sweep_artifacts(trip, prefs_doc))
-        elif item == _EVIDENCE_DEPS:
-            deps.extend(_evidence_artifacts(trip, prefs_doc, slug))
-        elif item in _HYBRID_ONLY_ARTIFACTS and not hybrid:
-            continue
-        else:
-            deps.append(item)
-    return deps
-
-
-def _upstream_fp(slug: str, key: str, trip: dict, prefs_doc: dict) -> str | None:
-    deps = _resolve_deps(slug, key, trip, prefs_doc)
-    if not deps:
+def _upstream_fp(slug: str, node: dict) -> str | None:
+    inputs = node["inputs"]
+    if not inputs:
         return None
     digest = hashlib.sha256()
-    for name in deps:
+    for name in inputs:
         path = _artifact_path(slug, name)
         digest.update(name.encode())
         digest.update(b"\x00")
@@ -390,8 +511,8 @@ def _upstream_fp(slug: str, key: str, trip: dict, prefs_doc: dict) -> str | None
     return digest.hexdigest()
 
 
-def _ttl_ok(record: dict, key: str, now: Callable[[], datetime]) -> bool:
-    ttl = PHASE_TTL_HOURS.get(_phase_base(key))
+def _ttl_ok(record: dict, node: dict, now: Callable[[], datetime]) -> bool:
+    ttl = node["ttl_hours"]
     if ttl is None:
         return True
     completed = datetime.fromisoformat(record["completed_at"])
@@ -410,12 +531,15 @@ def phase_check(
     record = _load_checkpoints(slug).get(key)
     if record is None:
         return False, None
+    node = _node_index(slug).get(key)
+    if node is None:  # a phase the current plan no longer compiles is stale
+        return False, record
     trip = show(slug)
     prefs_doc = prefs.show()
     fresh = (
         record["inputs_fp"] == capture_inputs_fp(trip, prefs_doc, key)
-        and record["upstream_fp"] == _upstream_fp(slug, key, trip, prefs_doc)
-        and _ttl_ok(record, key, now)
+        and record["upstream_fp"] == _upstream_fp(slug, node)
+        and _ttl_ok(record, node, now)
     )
     return fresh, record
 
@@ -427,14 +551,14 @@ def phase_fresh(slug: str, key: str, now: Callable[[], datetime] = utcnow) -> bo
 def phase_done(
     slug: str,
     key: str,
-    artifacts: list[str] | None = None,
     quota_after: int | None = None,
     now: Callable[[], datetime] = utcnow,
     inputs_fp: str | None = None,
 ) -> dict:
-    # ``artifacts`` is accepted for the CLI --artifact flag and factors.py's positional call, but
-    # upstream deps now come from PHASE_ARTIFACT_DEPS, so it no longer feeds the fingerprint.
     _valid_slug(slug)
+    node = _node_index(slug).get(key)
+    if node is None:
+        raise UsageError(f"unknown node id: {key!r}")
     trip = show(slug)
     prefs_doc = prefs.show()
     if inputs_fp is None:
@@ -442,7 +566,7 @@ def phase_done(
     record = {
         "completed_at": now().isoformat(),
         "inputs_fp": inputs_fp,
-        "upstream_fp": _upstream_fp(slug, key, trip, prefs_doc),
+        "upstream_fp": _upstream_fp(slug, node),
     }
     if quota_after is not None:
         record["quota_after"] = quota_after
@@ -450,17 +574,144 @@ def phase_done(
     return record
 
 
+def _validate_sweep_artifact(doc: object, name: str) -> None:
+    doc = require_keys(doc, {"provenance", "search_states", "rows"}, name)
+    require_keys(
+        doc["provenance"],
+        {"source", "fetched_at", "searched", "completeness", "expanded_origins"},
+        f"{name}.provenance",
+    )
+    if not isinstance(doc["search_states"], dict):
+        raise UsageError(f"{name}.search_states must be an object")
+    if not isinstance(doc["rows"], list):
+        raise UsageError(f"{name}.rows must be a list")
+
+
+def _validate_shortlist_artifact(doc: object, name: str) -> None:
+    keys = {"candidates", "considered", "search_states", "leg", "truncation"}
+    doc = require_keys(doc, keys, name)
+    if not isinstance(doc["candidates"], list):
+        raise UsageError(f"{name}.candidates must be a list")
+    if not isinstance(doc["search_states"], dict):
+        raise UsageError(f"{name}.search_states must be an object")
+
+
+def _validate_onward_artifact(doc: object, name: str) -> None:
+    require_keys(doc, {"minima", "bridge_pairs"}, name)
+
+
+def _validate_expand_artifact(doc: object, name: str) -> None:
+    doc = require_keys(
+        doc,
+        {"journeys", "unpaired_outbounds", "gated", "search_states", "leg_states", "provenance"},
+        name,
+    )
+    for key in ("journeys", "unpaired_outbounds", "gated"):
+        if not isinstance(doc[key], list):
+            raise UsageError(f"{name}.{key} must be a list")
+    for key in ("search_states", "leg_states"):
+        if not isinstance(doc[key], dict):
+            raise UsageError(f"{name}.{key} must be an object")
+
+
+def _validate_bridge_artifact(doc: object, name: str) -> None:
+    doc = require_keys(doc, {"quotes"}, name, optional=frozenset({"failures"}))
+    if not isinstance(doc["quotes"], list):
+        raise UsageError(f"{name}.quotes must be a list")
+
+
+def _validate_finalists_artifact(doc: object, name: str) -> None:
+    doc = require_keys(
+        doc,
+        {
+            "trip_type",
+            "journeys",
+            "notable_stretches",
+            "unpaired_leads",
+            "search_states",
+            "dropped",
+        },
+        name,
+    )
+    for key in ("journeys", "notable_stretches", "unpaired_leads", "dropped"):
+        if not isinstance(doc[key], list):
+            raise UsageError(f"{name}.{key} must be a list")
+
+
+def _validate_assess_artifact(doc: object, name: str) -> None:
+    doc = require_keys(doc, {"journeys", "notable_stretches"}, name)
+    if not isinstance(doc["journeys"], dict):
+        raise UsageError(f"{name}.journeys must be an object")
+    if not isinstance(doc["notable_stretches"], list):
+        raise UsageError(f"{name}.notable_stretches must be a list")
+    judged = {f["id"] for f in registry.factors() if f["kind"] in JUDGMENT_FACTOR_KINDS}
+    for jid, entry in doc["journeys"].items():
+        entry = require_keys(entry, {"verdicts"}, f"{name}.journeys[{jid}]")
+        if not isinstance(entry["verdicts"], list):
+            raise UsageError(f"{name}.journeys[{jid}].verdicts must be a list")
+        for i, verdict in enumerate(entry["verdicts"]):
+            label = f"{name}.journeys[{jid}].verdicts[{i}]"
+            verdict = require_keys(verdict, {"factor", "leg", "verdict", "evidence"}, label)
+            factor = require_str(verdict["factor"], f"{label}.factor")
+            if factor not in judged:
+                raise UsageError(
+                    f"{label}.factor {factor!r} is not a judgment-kind factor; "
+                    f"assess may only judge {sorted(judged)}"
+                )
+            if verdict["verdict"] not in ASSESS_VERDICTS:
+                raise UsageError(
+                    f"{label}.verdict {verdict['verdict']!r} "
+                    f"must be one of {sorted(ASSESS_VERDICTS)}"
+                )
+            require_str_or_none(verdict["leg"], f"{label}.leg")
+            require_str(verdict["evidence"], f"{label}.evidence")
+    for i, stretch in enumerate(doc["notable_stretches"]):
+        label = f"{name}.notable_stretches[{i}]"
+        stretch = require_keys(stretch, {"journey_id", "why"}, label)
+        require_str(stretch["journey_id"], f"{label}.journey_id")
+        require_str(stretch["why"], f"{label}.why")
+
+
+def _artifact_validator(leaf: str) -> Callable[[object, str], None] | None:
+    if leaf.startswith("sweep") and leaf.endswith(".json"):
+        return _validate_sweep_artifact
+    if leaf in ("shortlist.json", "shortlist-gateway.json"):
+        return _validate_shortlist_artifact
+    if leaf == "onward.json":
+        return _validate_onward_artifact
+    if leaf == "expand.json":
+        return _validate_expand_artifact
+    if leaf == "bridge.json":
+        return _validate_bridge_artifact
+    if leaf == "finalists.json":
+        return _validate_finalists_artifact
+    if leaf == "assess.json":
+        return _validate_assess_artifact
+    if leaf == "stays.json":
+        from getaway import stays  # lazy: stays imports trips at module load
+
+        return stays.validate_stays_doc
+    return None
+
+
 def artifact_write(slug: str, name: str, content: str) -> None:
     path = _artifact_path(slug, name)
-    try:
-        if name.endswith(".json"):
-            json.loads(content)
-        else:
-            for line in content.splitlines():
-                if line.strip():
+    leaf = name.rsplit("/", 1)[-1]
+    if leaf.endswith(".json"):
+        try:
+            doc = json.loads(content)
+        except json.JSONDecodeError as err:
+            raise UsageError(f"artifact {name!r} failed to parse: {err}") from err
+        validator = _artifact_validator(leaf)
+        if validator is not None:
+            validator(doc, name)
+    else:
+        for line in content.splitlines():
+            if line.strip():
+                try:
                     json.loads(line)
-    except json.JSONDecodeError as err:
-        raise UsageError(f"artifact {name!r} failed to parse: {err}") from err
+                except json.JSONDecodeError as err:
+                    raise UsageError(f"artifact {name!r} failed to parse: {err}") from err
     atomic_write_text(path, content)
 
 
@@ -473,7 +724,11 @@ def artifact_list(slug: str) -> list[str]:
     directory = trip_dir(slug) / "artifacts"
     if not directory.exists():
         return []
-    return sorted(p.name for p in directory.iterdir() if p.is_file() and ARTIFACT_RE.match(p.name))
+    return sorted(
+        str(p.relative_to(directory))
+        for p in directory.rglob("*")
+        if p.is_file() and ARTIFACT_LEAF_RE.match(p.name)
+    )
 
 
 def existing_artifacts(slug: str, names: list[str]) -> list[str]:
@@ -481,42 +736,262 @@ def existing_artifacts(slug: str, names: list[str]) -> list[str]:
     return [name for name in names if name in present]
 
 
-def _optional_artifact(slug: str, name: str) -> dict | None:
-    path = _artifact_path(slug, name)
-    return json.loads(path.read_text()) if path.exists() else None
+def _trip_type(plan: dict) -> str:
+    trip_type = plan.get("trip_type")
+    if trip_type not in TRIP_TYPES:
+        raise UsageError("plan.trip_type must be one_way or round_trip before compiling")
+    return trip_type
 
 
-def _sweep_labels(trip: dict, prefs_doc: dict) -> list[str]:
-    from getaway.sweeps import derive_specs
+def _node(
+    node_id: str,
+    kind: str,
+    *,
+    scope: str,
+    inputs: list[str],
+    outputs: list[str],
+    leg: str | None = None,
+    command: list[str] | None = None,
+    steps: list[dict] | None = None,
+    requires: tuple[str, ...] = (),
+    endpoint_source: dict | None = None,
+    quota_cost: int | None = None,
+) -> dict:
+    return {
+        "id": node_id,
+        "kind": kind,
+        "scope": scope,
+        "leg": leg,
+        "inputs": list(inputs),
+        "outputs": list(outputs),
+        "ttl_hours": NODE_TTL_HOURS.get(kind),
+        "quota_cost": NODE_QUOTA_COST.get(kind, 0) if quota_cost is None else quota_cost,
+        "routing": NODE_ROUTING[kind],
+        "requires": list(requires),
+        "command": command,
+        "steps": list(steps or []),
+        "endpoint_source": endpoint_source,
+    }
 
-    labels = [spec["label"] for spec in derive_specs(trip, prefs_doc)]
-    if trip["plan"].get("hybrid"):
-        labels.append("onward")
-    return labels
+
+def _quota_budget(nodes: list[dict]) -> dict:
+    kind_order = {"sweep": 0, "onward": 1, "bridge": 2, "expand": 3}
+    leg_order = {"outbound": 0, "return": 1, None: 2}
+    costed = [n for n in nodes if n["quota_cost"]]
+    costed.sort(key=lambda n: (kind_order.get(n["kind"], 9), leg_order[n["leg"]], n["id"]))
+    return {
+        "total": sum(n["quota_cost"] for n in costed),
+        "nodes": [{"id": n["id"], "quota_cost": n["quota_cost"]} for n in costed],
+    }
 
 
-def _judgment_profile(trip: dict, prefs_doc: dict, slug: str) -> dict:
-    from getaway import factors, registry
+def compile_graph(slug: str) -> dict:
+    from getaway.sweeps import derive_specs  # lazy: sweeps imports trips at module load
 
-    profile_doc = factors.derive_profile(trip, prefs_doc, slug=slug)
-    kinds = {f["id"]: f["kind"] for f in registry.factors()}
-    return {fid: spec for fid, spec in profile_doc.items() if "judgment" in kinds[fid]}
-
-
-def _phase_keys(trip: dict, prefs_doc: dict, active_judgment: list[str]) -> list[str]:
-    from getaway.constants import EVIDENCE_COLLECTORS
-
+    trip = show(slug)
     plan = trip["plan"]
-    keys = [f"sweep:{label}" for label in _sweep_labels(trip, prefs_doc)]
-    keys.append("shortlist")
-    if plan.get("hybrid"):
-        keys += ["shortlist:gateway", "onward", "bridge"]
-    for fid in active_judgment:
-        collector = EVIDENCE_COLLECTORS.get(fid)
-        if collector is not None:
-            keys.append(f"evidence.{collector}")
-    keys += ["expand", "assess", "rank", "finalize"]
-    return keys
+    trip_type = _trip_type(plan)
+    prefs_doc = prefs.show()
+    has_hybrid = bool(plan.get("hybrid"))
+    has_lodging = "lodging" in plan
+    # A one-way with no explicit checkout has no return-departure date to derive one from.
+    has_stays = has_lodging and (trip_type == "round_trip" or "checkout" in plan["lodging"])
+    specs = derive_specs(trip, prefs_doc)
+    nodes: list[dict] = []
+
+    for spec in specs:
+        label = spec["label"]
+        nodes.append(
+            _node(
+                f"sweep:outbound:{label}",
+                "sweep",
+                scope="leg",
+                leg="outbound",
+                inputs=[],
+                outputs=[f"legs/outbound/sweep-{label}.json"],
+                command=["getaway", "sweep", "run", slug, f"outbound:{label}"],
+            )
+        )
+
+    ob_shortlist = "legs/outbound/shortlist.json"
+    direct_sweeps = [
+        f"legs/outbound/sweep-{s['label']}.json" for s in specs if s["label"] != "gateways"
+    ]
+    nodes.append(
+        _node(
+            "shortlist:outbound",
+            "shortlist",
+            scope="leg",
+            leg="outbound",
+            inputs=direct_sweeps,
+            outputs=[ob_shortlist],
+            command=["getaway", "shortlist", "run", slug, "--leg", "outbound"],
+        )
+    )
+
+    if has_hybrid:
+        gw_shortlist = "legs/outbound/shortlist-gateway.json"
+        nodes.append(
+            _node(
+                "shortlist:outbound:gateway",
+                "shortlist",
+                scope="leg",
+                leg="outbound",
+                inputs=["legs/outbound/sweep-gateways.json"],
+                outputs=[gw_shortlist],
+                command=["getaway", "shortlist", "run", slug, "--leg", "outbound", "--gateway"],
+            )
+        )
+        onward_sweep = "legs/outbound/sweep-onward.json"
+        nodes.append(
+            _node(
+                "sweep:outbound:onward",
+                "sweep",
+                scope="leg",
+                leg="outbound",
+                inputs=[gw_shortlist],
+                outputs=[onward_sweep],
+                command=["getaway", "sweep", "run", slug, "outbound:onward"],
+                endpoint_source={"from": gw_shortlist, "field": "dest"},
+            )
+        )
+        onward = "legs/outbound/onward.json"
+        nodes.append(
+            _node(
+                "onward",
+                "onward",
+                scope="leg",
+                leg="outbound",
+                inputs=[gw_shortlist, onward_sweep],
+                outputs=[onward],
+                command=["getaway", "shortlist", "onward", slug],
+            )
+        )
+        nodes.append(
+            _node(
+                "bridge",
+                "bridge",
+                scope="leg",
+                leg="outbound",
+                inputs=[onward],
+                outputs=["legs/outbound/bridge.json"],
+                command=["getaway", "bridge", slug],
+            )
+        )
+
+    if trip_type == "round_trip":
+        onward_dests = plan.get("hybrid", {}).get("onward_dests", [])
+        ret_sweep = "legs/return/sweep.json"
+        nodes.append(
+            _node(
+                "sweep:return",
+                "sweep",
+                scope="leg",
+                leg="return",
+                inputs=[ob_shortlist],
+                outputs=[ret_sweep],
+                command=["getaway", "sweep", "run", slug, "return"],
+                endpoint_source={
+                    "from": ob_shortlist,
+                    "field": "dest",
+                    "union": list(onward_dests),
+                    "override": plan.get("return"),
+                },
+            )
+        )
+        nodes.append(
+            _node(
+                "shortlist:return",
+                "shortlist",
+                scope="leg",
+                leg="return",
+                inputs=[ret_sweep],
+                outputs=["legs/return/shortlist.json"],
+                command=["getaway", "shortlist", "run", slug, "--leg", "return"],
+            )
+        )
+
+    shortlist_inputs = [ob_shortlist]
+    if trip_type == "round_trip":
+        shortlist_inputs.append("legs/return/shortlist.json")
+    if has_hybrid:
+        shortlist_inputs.append("legs/outbound/shortlist-gateway.json")
+
+    expand_inputs = list(shortlist_inputs)
+    if has_hybrid:
+        # Optional cash-hybrid reads: an absent/failed bridge hashes as absent (never blocks
+        # directs) and re-runs expand once priced.
+        expand_inputs += ["legs/outbound/onward.json", "legs/outbound/bridge.json"]
+
+    nodes.append(
+        _node(
+            "expand",
+            "expand",
+            scope="journey",
+            inputs=expand_inputs,
+            outputs=["expand.json"],
+            command=["getaway", "expand", "run", slug],
+        )
+    )
+    nodes.append(
+        _node("assess", "assess", scope="journey", inputs=["expand.json"], outputs=["assess.json"])
+    )
+    nodes.append(
+        _node(
+            "rank",
+            "rank",
+            scope="journey",
+            inputs=[*shortlist_inputs, "expand.json", "assess.json"],
+            outputs=["rank.json"],
+            command=["getaway", "rank", slug],
+        )
+    )
+    finalize_inputs = ["rank.json"]
+    if has_stays:
+        finalize_inputs.append("stays.json")
+    nodes.append(
+        _node(
+            "finalize",
+            "finalize",
+            scope="journey",
+            inputs=finalize_inputs,
+            outputs=["finalists.json"],
+            command=["getaway", "trip", "finalize", slug],
+        )
+    )
+    if has_stays:
+        # Agent-shaped (command=None like assess); the walker splices these deterministic steps.
+        nodes.append(
+            _node(
+                "stays",
+                "stays",
+                scope="journey",
+                inputs=["rank.json"],
+                outputs=["stays.json"],
+                requires=("rooms_session",),
+                steps=[
+                    {"name": "intervals", "command": ["getaway", "stays", "intervals", slug]},
+                    {"name": "ingest", "command": ["getaway", "stays", "ingest", slug]},
+                ],
+            )
+        )
+
+    return {
+        "slug": slug,
+        "trip_type": trip_type,
+        "lodging": has_lodging,
+        "requires": ["rooms_session"] if has_stays else [],
+        "quota_budget": _quota_budget(nodes),
+        "nodes": nodes,
+    }
+
+
+def explain(slug: str, now: Callable[[], datetime] = utcnow) -> dict:
+    graph = compile_graph(slug)
+    graph["nodes"] = [
+        {**node, "fresh": phase_fresh(slug, node["id"], now=now)} for node in graph["nodes"]
+    ]
+    return graph
 
 
 def _latest_quota(now: Callable[[], datetime]) -> dict | None:
@@ -531,21 +1006,17 @@ def _latest_quota(now: Callable[[], datetime]) -> dict | None:
 
 
 def status(slug: str, now: Callable[[], datetime] = utcnow) -> dict:
-    trip = show(slug)
-    prefs_doc = prefs.show()
-    plan = trip["plan"]
-    judgment_profile = _judgment_profile(trip, prefs_doc, slug)
-    active_judgment = [fid for fid, spec in judgment_profile.items() if spec["active"]]
-    keys = _phase_keys(trip, prefs_doc, active_judgment)
-    phase_map = {key: "fresh" if phase_fresh(slug, key, now=now) else "stale" for key in keys}
+    graph = compile_graph(slug)
+    phase_map = {
+        node["id"]: "fresh" if phase_fresh(slug, node["id"], now=now) else "stale"
+        for node in graph["nodes"]
+    }
     return {
         "slug": slug,
-        "sweep_labels": _sweep_labels(trip, prefs_doc),
-        "hybrid": plan.get("hybrid"),
-        "round_trip": plan.get("round_trip", False),
-        "active_factors": active_judgment,
-        "max_finalists": plan.get("max_finalists", 6),
-        "party": trip["party"],
+        "trip_type": graph["trip_type"],
+        "lodging": graph["lodging"],
+        "requires": graph["requires"],
+        "party": show(slug)["party"],
         "phase_map": phase_map,
         "quota": _latest_quota(now),
     }
@@ -564,7 +1035,7 @@ def resume(slug: str, now: Callable[[], datetime] = utcnow) -> str:
     trip = show(slug)
     st = status(slug, now=now)
     window = trip["window"]
-    lines = [f"Trip {slug} — status: {trip['status']}"]
+    lines = [f"Trip {slug} — status: {trip['status']} ({st['trip_type']})"]
     if trip["ask"]:
         lines.append(f"Ask: {trip['ask']}")
     lines.append(
@@ -573,27 +1044,18 @@ def resume(slug: str, now: Callable[[], datetime] = utcnow) -> str:
     )
     if trip["vibe"]:
         lines.append(f"Vibe: {', '.join(trip['vibe'])}")
+    if st["requires"]:
+        lines.append(f"Requires: {', '.join(st['requires'])}")
     decisions = trip["decisions"][-5:]
     if decisions:
         lines.append("Recent decisions:")
         lines += [f"  - {d['ts']}: {d['text']}" for d in decisions]
-    lines.append("Phase freshness:")
+    lines.append("Node freshness:")
     lines += [f"  {key}: {state}" for key, state in st["phase_map"].items()]
-    finalists = _optional_artifact(slug, "finalists.json")
-    if finalists is not None:
-        directs = finalists["directs"]
-        hybrids = finalists["hybrids"]
-        lines.append(f"Finalists: {len(directs)} direct, {len(hybrids)} hybrid")
-        for entry in directs[:5]:
-            c = entry["candidate"]
-            lines.append(f"  {c['origin']}-{c['dest']} {c['date']} {c['source']} {c['mileage']} mi")
-    expiring = prefs.credit_list("90d", now=now)
+    expiring = prefs.instrument_list("90d", now=now)
     if expiring:
-        lines.append("Credits expiring within 90d:")
-        lines += [
-            f"  {c['issuer']} {c['amount']} {c['currency']} — expires {c['expires']}"
-            for c in expiring
-        ]
+        lines.append("Instruments expiring within 90d:")
+        lines += [f"  {i['type']} — expires {i['expires']}" for i in expiring]
     api = learnings.list_(scope="api", n=5)
     if api:
         lines.append("Recent api learnings:")
@@ -676,13 +1138,10 @@ def _phase_check_cmd(slug: str, key: str) -> None:
 @trip_group.command("phase-done")
 @click.argument("slug")
 @click.argument("key")
-@click.option("--artifact", "artifacts", multiple=True)
 @click.option("--quota-after", type=int, default=None)
 @map_errors
-def _phase_done_cmd(
-    slug: str, key: str, artifacts: tuple[str, ...], quota_after: int | None
-) -> None:
-    emit(phase_done(slug, key, list(artifacts), quota_after))
+def _phase_done_cmd(slug: str, key: str, quota_after: int | None) -> None:
+    emit(phase_done(slug, key, quota_after))
 
 
 @trip_group.command("status")
@@ -690,6 +1149,20 @@ def _phase_done_cmd(
 @map_errors
 def _status_cmd(slug: str) -> None:
     emit(status(slug))
+
+
+@trip_group.command("compile")
+@click.argument("slug")
+@map_errors
+def _compile_cmd(slug: str) -> None:
+    emit(compile_graph(slug))
+
+
+@trip_group.command("explain")
+@click.argument("slug")
+@map_errors
+def _explain_cmd(slug: str) -> None:
+    emit(explain(slug))
 
 
 @trip_group.command("profile")

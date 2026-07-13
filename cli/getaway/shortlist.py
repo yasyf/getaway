@@ -8,9 +8,8 @@ import click
 from getaway import prefs, registry, trips
 from getaway.constants import (
     CABIN_PREFIX,
-    CASH_CUTOFF_MINUTES,
-    EXPANSION_BUFFER_CAP,
-    EXPANSION_BUFFER_FACTOR,
+    EXPANSION_BUDGET_PER_ENDPOINT,
+    RETURN_EXPANSION_BUDGET_PER_ENDPOINT,
 )
 from getaway.paths import cache_db, emit, map_errors, utcnow
 from getaway.store import connect
@@ -19,101 +18,146 @@ DAY_TOKENS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 Row = dict[str, Any]
 
+_NODE_IDS = {
+    "legs/outbound/shortlist.json": "shortlist:outbound",
+    "legs/outbound/shortlist-gateway.json": "shortlist:outbound:gateway",
+    "legs/return/shortlist.json": "shortlist:return",
+}
+
 
 def _weekday_token(date_str: str) -> str:
     return DAY_TOKENS[dt.date.fromisoformat(date_str).weekday()]
 
 
 def _airlines(row: Row) -> list[str]:
-    raw = row["airlines"]
-    return [a for a in raw.split(", ") if a]
+    return [a for a in row["airlines"].split(", ") if a]
 
 
-def _direct_labels(trip: dict, prefs_doc: dict) -> list[str]:
-    from getaway.sweeps import derive_specs
-
-    return [spec["label"] for spec in derive_specs(trip, prefs_doc) if spec["label"] != "gateways"]
-
-
-def _search_labels(trip: dict, prefs_doc: dict) -> list[str]:
-    from getaway.sweeps import derive_specs
-
-    return [spec["label"] for spec in derive_specs(trip, prefs_doc) if spec["kind"] == "search"]
-
-
-def _max_finalists(plan: dict) -> int:
-    return plan.get("max_finalists", 6)
+def _expanded_origins(tokens: list[str]) -> set[str]:
+    """Planned origins expanded to concrete airports; a region with no local airport list (or an
+    undocumented pseudo-code) stays a literal — the sweep-observed set covers its expansion."""
+    result = set(tokens)
+    for token in tokens:
+        try:
+            result.update(registry.expand_region(token))
+        except registry.NoData:
+            pass
+    return result
 
 
-def _buffer(plan: dict) -> int:
-    return min(EXPANSION_BUFFER_FACTOR * _max_finalists(plan), EXPANSION_BUFFER_CAP)
+def _read_sweep(slug: str, name: str) -> dict | None:
+    if name in trips.artifact_list(slug):
+        return json.loads(trips.artifact_read(slug, name))
+    return None
 
 
 def _group_best(candidates: list[Row]) -> list[Row]:
-    best: dict[tuple[str, str, str, str], Row] = {}
+    best: dict[tuple[str, str, str, str, str], Row] = {}
     for cand in candidates:
-        key = (cand["origin"], cand["dest"], cand["date"], cand["source"])
+        key = (cand["origin"], cand["dest"], cand["date"], cand["source"], cand["cabin"])
         current = best.get(key)
         if current is None or cand["mileage"] < current["mileage"]:
             best[key] = cand
     return list(best.values())
 
 
-def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] = utcnow) -> dict:
+def _cohort_select(cands: list[Row], budget: int) -> list[Row]:
+    """Round-robin across (date, source) cohorts, cheapest first — one hot date or program can't
+    fill the per-endpoint budget on its own."""
+    cohorts: dict[tuple[str, str], list[Row]] = {}
+    for cand in sorted(cands, key=lambda c: c["mileage"]):
+        cohorts.setdefault((cand["date"], cand["source"]), []).append(cand)
+    queues = list(cohorts.values())
+    selected: list[Row] = []
+    while len(selected) < budget:
+        progressed = False
+        for queue in queues:
+            if queue and len(selected) < budget:
+                selected.append(queue.pop(0))
+                progressed = True
+        if not progressed:
+            break
+    return selected
+
+
+def _leg_spec(leg: str, gateway: bool, trip: dict, prefs_doc: dict) -> dict:
+    if leg == "return":
+        return {
+            "labels": ["return"],
+            "endpoint_field": "origin",
+            "sweeps": ["legs/return/sweep.json"],
+            "search_sweeps": ["legs/return/sweep.json"],
+            "veto": set(),  # return destinations are home, exempt from the veto
+            "budget": RETURN_EXPANSION_BUDGET_PER_ENDPOINT,
+            "name": "legs/return/shortlist.json",
+            "label": "return",
+        }
+    if gateway:
+        return {
+            "labels": ["outbound:gateways"],
+            "endpoint_field": "dest",
+            "sweeps": ["legs/outbound/sweep-gateways.json"],
+            "search_sweeps": ["legs/outbound/sweep-gateways.json"],
+            "veto": set(),  # gateways are waypoints, not final destinations
+            "budget": EXPANSION_BUDGET_PER_ENDPOINT,
+            "name": "legs/outbound/shortlist-gateway.json",
+            "label": "outbound:gateway",
+        }
+    from getaway.sweeps import derive_specs
+
+    specs = [s for s in derive_specs(trip, prefs_doc) if s["label"] != "gateways"]
+    return {
+        "labels": [f"outbound:{s['label']}" for s in specs],
+        "endpoint_field": "dest",
+        "sweeps": [f"legs/outbound/sweep-{s['label']}.json" for s in specs],
+        "search_sweeps": [
+            f"legs/outbound/sweep-{s['label']}.json" for s in specs if s["kind"] == "search"
+        ],
+        "veto": set(prefs_doc["avoid_destinations"]) | set(trip["avoid_final_destinations"]),
+        "budget": EXPANSION_BUDGET_PER_ENDPOINT,
+        "name": "legs/outbound/shortlist.json",
+        "label": "outbound",
+    }
+
+
+def shortlist(
+    slug: str, leg: str = "outbound", gateway: bool = False, now: Callable[[], dt.datetime] = utcnow
+) -> dict:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
-    cabin_letter = CABIN_PREFIX[trip["cabin"]]
-    party = trip["party"]
-    labels = ["gateways"] if gateway else _direct_labels(trip, prefs_doc)
-    key = "shortlist:gateway" if gateway else "shortlist"
-    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, key)
+    spec = _leg_spec(leg, gateway, trip, prefs_doc)
+    node_id = _NODE_IDS[spec["name"]]
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node_id)
+
+    search_states: dict = {}
+    observed: set[str] = set()
+    for name in spec["sweeps"]:
+        swept = _read_sweep(slug, name)
+        if swept is not None:
+            search_states.update(swept["search_states"])
+            if name in spec["search_sweeps"]:
+                observed.update(swept["provenance"]["expanded_origins"])
 
     store = connect(cache_db(), now=now)
-    rows = (
-        store.query_availability(trip_slug=slug, labels=labels, cabin=cabin_letter)
-        if labels
-        else []
-    )
-    considered = len(rows)
+    rows = store.query_availability(trip_slug=slug, labels=spec["labels"])
+    considered = len({row["id"] for row in rows})
 
-    search_labels = _search_labels(trip, prefs_doc)
-    observed = (
-        {
-            row["origin"]
-            for row in store.query_availability(
-                trip_slug=slug, labels=search_labels, kinds=["search"], cabin=cabin_letter
-            )
-        }
-        if search_labels
-        else set()
-    )
-    origins = registry.expand_origins(plan["origins"]) | observed
+    feasible_origins = _expanded_origins(plan["origins"]) | observed
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
     soft = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "soft"}
-    ceiling = plan.get("mileage_ceiling")
     sources = set(plan["sources"]) if plan.get("sources") else None
-    veto: set[str] = (
-        set()
-        if gateway
-        else set(prefs_doc["avoid_destinations"]) | set(trip["avoid_final_destinations"])
-    )
     departure_days = set(prefs_doc["departure_days"])
 
     candidates: list[Row] = []
     for row in rows:
         if not row["available"]:
             continue
-        if row["origin"] not in origins:  # feasibility: must depart a planned origin
-            continue
-        seats = row["remaining_seats"]
-        if seats and seats < party:  # seats == 0 is absent data and passes
-            continue
-        if ceiling is not None and row["mileage_cost"] > ceiling:
-            continue
+        if leg != "return" and row["origin"] not in feasible_origins:
+            continue  # feasibility: departs a planned (server-expanded) origin
         if sources is not None and row["source"] not in sources:
             continue
-        if not gateway and row["dest"] in veto:
+        if row["dest"] in spec["veto"]:
             continue
         airlines = _airlines(row)
         if airlines and all(a in hard for a in airlines):
@@ -121,12 +165,13 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
         candidates.append(
             {
                 "id": row["id"],
+                "cabin": row["cabin"],
                 "date": row["date"],
                 "origin": row["origin"],
                 "dest": row["dest"],
                 "source": row["source"],
                 "mileage": row["mileage_cost"],
-                "seats": seats,
+                "seats": row["remaining_seats"],
                 "airlines": row["airlines"],
                 "direct": row["direct"],
                 "soft": any(a in soft for a in airlines),
@@ -135,14 +180,29 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
             }
         )
 
-    grouped = _group_best(candidates)
-    grouped.sort(key=lambda c: (int(c["soft"]), c["mileage"], 0 if c["departure_day_match"] else 1))
-    kept = grouped[: _buffer(plan)]
+    field = spec["endpoint_field"]
+    by_endpoint: dict[str, list[Row]] = {}
+    for cand in _group_best(candidates):
+        by_endpoint.setdefault(cand[field], []).append(cand)
 
-    name = "shortlist-gateway.json" if gateway else "shortlist.json"
-    doc = {"candidates": kept, "considered": considered}
-    trips.artifact_write(slug, name, json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, key, inputs_fp=inputs_fp, now=now)
+    kept: list[Row] = []
+    truncation: dict = {}
+    for endpoint, cands in by_endpoint.items():
+        selected = _cohort_select(cands, spec["budget"])
+        kept.extend(selected)
+        if len(cands) > len(selected):
+            truncation[endpoint] = {"considered": len(cands), "kept": len(selected)}
+    kept.sort(key=lambda c: (int(c["soft"]), c["mileage"], 0 if c["departure_day_match"] else 1))
+
+    doc = {
+        "candidates": kept,
+        "considered": considered,
+        "search_states": search_states,
+        "leg": spec["label"],
+        "truncation": truncation,
+    }
+    trips.artifact_write(slug, spec["name"], json.dumps(doc, separators=(",", ":")))
+    trips.phase_done(slug, node_id, inputs_fp=inputs_fp, now=now)
     return doc
 
 
@@ -151,9 +211,8 @@ def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     prefs_doc = prefs.show()
     plan = trip["plan"]
     hybrid = plan["hybrid"]
-    party = trip["party"]
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "onward")
-    gateway_doc = json.loads(trips.artifact_read(slug, "shortlist-gateway.json"))
+    gateway_doc = json.loads(trips.artifact_read(slug, "legs/outbound/shortlist-gateway.json"))
     gateway_dates: dict[str, set[str]] = {}
     for cand in gateway_doc["candidates"]:
         gateway_dates.setdefault(cand["dest"], set()).add(cand["date"])
@@ -162,7 +221,7 @@ def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
 
     store = connect(cache_db(), now=now)
-    rows = store.query_availability(trip_slug=slug, labels=["onward"])
+    rows = store.query_availability(trip_slug=slug, labels=["outbound:onward"])
     minima: dict[tuple[str, str, str, str], Row] = {}
     for row in rows:
         if not row["available"]:
@@ -170,10 +229,7 @@ def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
         if row["origin"] not in gateway_dates or row["dest"] not in onward_dests:
             continue
         if row["date"] < min(gateway_dates[row["origin"]]):
-            continue  # departs before the earliest feasible gateway arrival
-        seats = row["remaining_seats"]
-        if seats and seats < party:
-            continue
+            continue  # structural: departs before the earliest feasible gateway arrival
         airlines = _airlines(row)
         if airlines and all(a in hard for a in airlines):
             continue
@@ -189,33 +245,29 @@ def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
                 "date": row["date"],
                 "source": row["source"],
                 "mileage": row["mileage_cost"],
-                "seats": seats,
+                "seats": row["remaining_seats"],
                 "airlines": row["airlines"],
                 "direct": row["direct"],
             }
 
-    # One bridge pair per distinct feasible onward date; compose joins minima and cash bridge on
-    # this shared (gateway, onward_dest, date) key.
     pair_dates = sorted({(m["gateway"], m["onward_dest"], m["date"]) for m in minima.values()})
-    bridge_pairs = [
-        {"gateway": g, "onward_dest": d, "date": date, "cash_cutoff_minutes": CASH_CUTOFF_MINUTES}
-        for g, d, date in pair_dates
-    ]
+    bridge_pairs = [{"gateway": g, "onward_dest": d, "date": date} for g, d, date in pair_dates]
     doc = {"minima": list(minima.values()), "bridge_pairs": bridge_pairs}
-    trips.artifact_write(slug, "onward.json", json.dumps(doc, separators=(",", ":")))
+    trips.artifact_write(slug, "legs/outbound/onward.json", json.dumps(doc, separators=(",", ":")))
     trips.phase_done(slug, "onward", inputs_fp=inputs_fp, now=now)
     return doc
 
 
-shortlist_group = click.Group("shortlist", help="SQL shortlist over a trip's sweep rows.")
+shortlist_group = click.Group("shortlist", help="Select leg candidates from swept availability.")
 
 
 @shortlist_group.command("run")
 @click.argument("slug")
+@click.option("--leg", default="outbound", type=click.Choice(["outbound", "return"]))
 @click.option("--gateway", is_flag=True)
 @map_errors
-def _run_cmd(slug: str, gateway: bool) -> None:
-    emit(shortlist(slug, gateway=gateway))
+def _run_cmd(slug: str, leg: str, gateway: bool) -> None:
+    emit(shortlist(slug, leg=leg, gateway=gateway))
 
 
 @shortlist_group.command("onward")

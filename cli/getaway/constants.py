@@ -11,28 +11,83 @@ CONTINENTS = (
 
 PRODUCT_VERDICTS = ("suite", "solid", "dated", "barely", "verify")
 
-CASH_CUTOFF_MINUTES = 240
 MILEAGE_BAND = 0.15
-EXPANSION_BUFFER_FACTOR = 2
-EXPANSION_BUFFER_CAP = 12
 DEFAULT_QUOTA_FLOOR = 100
 
-PHASE_TTL_HOURS = {
-    "sweep": 24,
-    "onward": 24,
-    "bridge": 24,
-    "expand": 6,
-    "evidence.verify": 168,
-    "evidence.cash": 24,
+# Presentation (A5): the ranked cut applies only after assess; assess additionally
+# surfaces up to NOTABLE_PREFERENCE_STRETCH_LIMIT excellent journeys from beyond it.
+PRESENTATION_LIMIT = 6
+NOTABLE_PREFERENCE_STRETCH_LIMIT = 2
+
+# --- getaway v2 journey engine (Phase 2: plan model, compile graph, retrieval) ---
+
+# Retrieval policy (A3): soft-date sweeps pad; expansion runs under budgets, not caps.
+SOFT_DATE_SEARCH_PADDING_DAYS = 7
+DATE_WIDEN_STEP_DAYS = 7
+AUTO_WIDEN_CALL_BUDGET_PER_LEG = 2
+SEARCH_PAGE_SIZE = 1000
+EXPANSION_BUDGET_PER_ENDPOINT = 12
+RETURN_EXPANSION_BUDGET_PER_ENDPOINT = 12
+
+# Disjoint stores: prefs.py consumes DISJOINT_TRIP_DOC_KEYS to reject trip-doc keys.
+DISJOINT_DURABLE_PREF_KEYS = frozenset(
+    {
+        "op_ref",
+        "home_airport",
+        "origin_airports",
+        "avoid_transit",
+        "avoid_destinations",
+        "avoid_airlines",
+        "layovers",
+        "statuses",
+        "status_goals",
+        "balances",
+        "credits",
+        "documents",
+    }
+)
+DISJOINT_TRIP_DOC_KEYS = frozenset(
+    {
+        "window",
+        "cabin",
+        "party",
+        "regions",
+        "vibe",
+        "avoid_final_destinations",
+        "plan",
+        "judgment",
+    }
+)
+
+# Model routing per node kind (C2): mechanical runners → sonnet low; research → opus xhigh.
+ROUTING_RUNNER = {"model": "sonnet", "effort": "low"}
+ROUTING_RESEARCH = {"model": "opus", "effort": "xhigh"}
+NODE_ROUTING = {
+    "sweep": ROUTING_RUNNER,
+    "shortlist": ROUTING_RUNNER,
+    "expand": ROUTING_RUNNER,
+    "rank": ROUTING_RUNNER,
+    "finalize": ROUTING_RUNNER,
+    "onward": ROUTING_RUNNER,
+    # bridge prices onward cash legs deterministically via fli (getaway bridge) — a
+    # mechanical runner, not an agent; cabin choice per leg is judgment fed by fit facts.
+    "bridge": ROUTING_RUNNER,
+    "evidence": ROUTING_RESEARCH,
+    "assess": ROUTING_RESEARCH,
+    "stays": ROUTING_RESEARCH,
 }
 
-# Judgment factors that get their own Evidence-phase collector, keyed factor_id -> collector.
-EVIDENCE_COLLECTORS = {
-    "seat_quality": "verify",
-    "cash_anomaly": "cash",
-    "destination_context": "context",
-    "transit_risk": "transit",
-    "return_viability": "return",
+# Freshness TTL (hours) per node kind; a kind absent here never expires by time.
+NODE_TTL_HOURS = {
+    "sweep": 24,
+    "bridge": 24,
+    "expand": 6,
+}
+
+# Worst-case seats.aero quota units per runnable node kind; derived/agent nodes spend none.
+NODE_QUOTA_COST = {
+    "sweep": AUTO_WIDEN_CALL_BUDGET_PER_LEG + 1,
+    "expand": EXPANSION_BUDGET_PER_ENDPOINT,
 }
 
 EXIT_OK = 0

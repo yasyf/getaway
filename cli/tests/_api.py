@@ -65,3 +65,67 @@ def seed(
         "started_at": now().isoformat(),
     }
     store.ingest(rows, sweep=sweep)
+
+
+def sweep_envelope(
+    rows: list[dict] | None = None,
+    *,
+    source: str = "all",
+    expanded_origins: list[str] | None = None,
+    search_states: dict | None = None,
+    completeness: str = "complete",
+    searched: list[dict] | None = None,
+) -> dict:
+    """A leg sweep artifact envelope (provenance + search states + rows)."""
+    rows = rows or []
+    origins = expanded_origins
+    if origins is None:
+        origins = sorted({row["Route"]["OriginAirport"] for row in rows})
+    return {
+        "provenance": {
+            "source": source,
+            "fetched_at": "2026-07-13T12:00:00+00:00",
+            "searched": searched or [{"start": "2026-09-01", "end": "2026-09-14"}],
+            "completeness": completeness,
+            "expanded_origins": origins,
+        },
+        "search_states": search_states or {},
+        "rows": rows,
+    }
+
+
+def shortlist_doc(
+    candidates: list[dict] | None = None,
+    *,
+    considered: int = 0,
+    leg: str = "outbound",
+    search_states: dict | None = None,
+    truncation: dict | None = None,
+) -> dict:
+    """A leg shortlist artifact matching the write-boundary schema."""
+    return {
+        "candidates": candidates or [],
+        "considered": considered,
+        "search_states": search_states or {},
+        "leg": leg,
+        "truncation": truncation or {},
+    }
+
+
+def expand_doc(
+    journeys: list[dict] | None = None,
+    *,
+    unpaired_outbounds: list[dict] | None = None,
+    gated: list[dict] | None = None,
+    search_states: dict | None = None,
+    leg_states: dict | None = None,
+) -> dict:
+    """A composed-journeys artifact matching the expand write-boundary schema."""
+    return {
+        "journeys": journeys or [],
+        "unpaired_outbounds": unpaired_outbounds or [],
+        "gated": gated or [],
+        "search_states": search_states or {},
+        "leg_states": leg_states or {},
+        "provenance": {"fetched_at": "2026-07-13T12:00:00+00:00", "quota_stopped": False},
+    }

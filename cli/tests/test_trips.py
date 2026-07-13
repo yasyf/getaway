@@ -109,9 +109,7 @@ def test_set_patch_merges_valid(ready: Path, patch: dict, key: str, value: objec
         pytest.param({"cabin": "cattle"}, id="cabin-not-a-known-class"),
         pytest.param({"party": 0}, id="party-below-one"),
         pytest.param({"party": "two"}, id="party-not-int"),
-        pytest.param(
-            {"window": {"start": "2026-09-01"}}, id="window-missing-keys"
-        ),
+        pytest.param({"window": {"start": "2026-09-01"}}, id="window-missing-keys"),
         pytest.param(
             {"window": {"start": 5, "end": None, "trip_length_days": None}},
             id="window-start-not-string",
@@ -309,9 +307,7 @@ def test_plan_bucket_name_validated(ready: Path, name: str) -> None:
 
 def test_plan_bucket_valid_name_accepted(ready: Path) -> None:
     trips.new(SLUG)
-    doc = trips.set_patch(
-        SLUG, {"plan": {"buckets": [{"name": "asia-1", "dests": ["NRT"]}]}}
-    )
+    doc = trips.set_patch(SLUG, {"plan": {"buckets": [{"name": "asia-1", "dests": ["NRT"]}]}})
     assert doc["plan"]["buckets"] == [{"name": "asia-1", "dests": ["NRT"]}]
 
 
@@ -334,7 +330,7 @@ def test_trip_set_cli_malformed_json_exits_usage(ready: Path, runner: CliRunner)
 @pytest.mark.parametrize(
     ("name", "content"),
     [
-        pytest.param("shortlist.json", '{"finalists": ["BKK", "SIN"]}', id="json"),
+        pytest.param("notes.json", '{"finalists": ["BKK", "SIN"]}', id="json"),
         pytest.param("sweep.jsonl", '{"route": "SFO-BKK"}\n{"route": "SFO-SIN"}\n', id="jsonl"),
     ],
 )
@@ -383,3 +379,171 @@ def test_current_cli_reports_null_when_unset(ready: Path, runner: CliRunner) -> 
     result = runner.invoke(trips.trip_group, ["current"])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"current": None}
+
+
+# --- A1: preferences/constraints plan model ---
+
+
+@pytest.mark.parametrize("trip_type", ["one_way", "round_trip"])
+def test_trip_type_variants_accepted(ready: Path, trip_type: str) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(SLUG, {"plan": {"trip_type": trip_type}})
+    assert doc["plan"]["trip_type"] == trip_type
+
+
+def test_trip_type_invalid_rejected(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="trip_type"):
+        trips.set_patch(SLUG, {"plan": {"trip_type": "multi_city"}})
+
+
+def test_preference_with_ordinal_priority_accepted(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(
+        SLUG,
+        {"plan": {"preferences": {"cabin": {"value": "business", "priority": "primary"}}}},
+    )
+    assert doc["plan"]["preferences"]["cabin"] == {"value": "business", "priority": "primary"}
+
+
+def test_preference_rejects_non_ordinal_priority(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="priority"):
+        trips.set_patch(
+            SLUG, {"plan": {"preferences": {"cabin": {"value": "business", "priority": 0.7}}}}
+        )
+
+
+def test_preference_rejects_unknown_key(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="preference key"):
+        trips.set_patch(
+            SLUG, {"plan": {"preferences": {"seat_pitch": {"value": 34, "priority": "note"}}}}
+        )
+
+
+def test_preference_return_arrival_by_validates_iso_date(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="ISO date"):
+        trips.set_patch(
+            SLUG,
+            {
+                "plan": {
+                    "preferences": {
+                        "return_arrival_by": {
+                            "value": {"latest_local_date": "next monday"},
+                            "priority": "secondary",
+                        }
+                    }
+                }
+            },
+        )
+
+
+def test_constraint_requires_confirmed_flag(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="confirmed"):
+        trips.set_patch(
+            SLUG,
+            {
+                "plan": {
+                    "constraints": {
+                        "return_arrival_by": {"latest_local_date": "2026-09-14", "confirmed": False}
+                    }
+                }
+            },
+        )
+
+
+def test_constraint_confirmed_accepted(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(
+        SLUG,
+        {"plan": {"constraints": {"mileage_limit": {"miles": 120000}}}},
+    )
+    assert doc["plan"]["constraints"]["mileage_limit"] == {"miles": 120000}
+
+
+def test_same_key_in_both_branches_rejected(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="both preferences and constraints"):
+        trips.set_patch(
+            SLUG,
+            {
+                "plan": {
+                    "preferences": {
+                        "return_arrival_by": {
+                            "value": {"latest_local_date": "2026-09-14"},
+                            "priority": "primary",
+                        }
+                    },
+                    "constraints": {
+                        "return_arrival_by": {"latest_local_date": "2026-09-14", "confirmed": True}
+                    },
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize("branch", ["preferences", "constraints"])
+def test_durable_pref_key_rejected_from_trip_doc(ready: Path, branch: str) -> None:
+    trips.new(SLUG)
+    payload = (
+        {"value": ["ICN"], "priority": "note"} if branch == "preferences" else {"value": ["ICN"]}
+    )
+    with pytest.raises(UsageError, match="durable-preferences key"):
+        trips.set_patch(SLUG, {"plan": {branch: {"avoid_destinations": payload}}})
+
+
+def test_return_override_origins_veto_checked(ready: Path) -> None:
+    prefs.set_patch({"avoid_destinations": ["ICN"]})
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="vetoed"):
+        trips.set_patch(SLUG, {"plan": {"trip_type": "round_trip", "return": {"origins": ["ICN"]}}})
+
+
+def test_return_override_home_dests_exempt(ready: Path) -> None:
+    prefs.set_patch({"avoid_destinations": ["SFO"]})  # even a vetoed home is a valid return dest
+    trips.new(SLUG)
+    ret = {"origins": ["KIX"], "dests": ["SFO"]}
+    doc = trips.set_patch(SLUG, {"plan": {"trip_type": "round_trip", "return": ret}})
+    assert doc["plan"]["return"] == ret
+
+
+def test_return_rejected_for_one_way(ready: Path) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="one-way"):
+        trips.set_patch(SLUG, {"plan": {"trip_type": "one_way", "return": {"origins": ["KIX"]}}})
+
+
+def test_lodging_must_be_object(ready: Path) -> None:
+    trips.new(SLUG)
+    assert trips.set_patch(SLUG, {"plan": {"lodging": {}}})["plan"]["lodging"] == {}
+    with pytest.raises(UsageError, match="lodging"):
+        trips.set_patch(SLUG, {"plan": {"lodging": "a week somewhere warm"}})
+
+
+def test_resume_lists_expiring_instruments_across_variants(
+    ready: Path, frozen_clock: Callable[[], dt.datetime]
+) -> None:
+    # resume() reads only the union's shared type + expires fields, so every instrument variant
+    # renders (the credits→travel_instruments cutover consumer).
+    trips.new(SLUG, now=frozen_clock)
+    window = {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10}
+    plan = {"trip_type": "one_way", "origins": ["SFO"]}
+    plan["buckets"] = [{"name": "a", "dests": ["NRT"]}]
+    trips.set_patch(SLUG, {"cabin": "business", "party": 1, "window": window, "plan": plan})
+    prefs.instrument_add(
+        {
+            "type": "monetary_credit",
+            "issuer": "delta",
+            "amount": 250.0,
+            "currency": "USD",
+            "expires": "2026-08-01",
+        }
+    )
+    prefs.instrument_add({"type": "companion_fare", "issuer": "alaska", "expires": "2026-09-01"})
+    out = trips.resume(SLUG, now=frozen_clock)
+    assert "Instruments expiring within 90d:" in out
+    assert "monetary_credit — expires 2026-08-01" in out
+    assert "companion_fare — expires 2026-09-01" in out
