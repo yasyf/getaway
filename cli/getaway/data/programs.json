@@ -4,7 +4,11 @@
     "domains": [
       "aircanada.ca"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "united": {
@@ -12,7 +16,11 @@
     "domains": [
       "united.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "american": {
@@ -20,7 +28,11 @@
     "domains": [
       "aa.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "delta": {
@@ -28,7 +40,11 @@
     "domains": [
       "delta.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "alaska": {
@@ -36,7 +52,11 @@
     "domains": [
       "alaskaair.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "flyingblue": {
@@ -45,7 +65,11 @@
       "airfrance.com",
       "klm.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "lufthansa": {
@@ -53,7 +77,11 @@
     "domains": [
       "miles-and-more.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "singapore": {
@@ -61,7 +89,11 @@
     "domains": [
       "singaporeair.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": false,
+    "gather_auth": "token",
     "beta": false
   },
   "qatar": {
@@ -69,7 +101,11 @@
     "domains": [
       "qatarairways.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "turkish": {
@@ -77,7 +113,11 @@
     "domains": [
       "turkishairlines.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "emirates": {
@@ -85,7 +125,11 @@
     "domains": [
       "emirates.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "etihad": {
@@ -93,7 +137,11 @@
     "domains": [
       "etihad.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "qantas": {
@@ -101,7 +149,11 @@
     "domains": [
       "qantas.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "velocity": {
@@ -109,7 +161,11 @@
     "domains": [
       "velocityfrequentflyer.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "virginatlantic": {
@@ -117,7 +173,11 @@
     "domains": [
       "virginatlantic.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "jetblue": {
@@ -125,7 +185,11 @@
     "domains": [
       "jetblue.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "token",
     "beta": false
   },
   "finnair": {
@@ -133,7 +197,11 @@
     "domains": [
       "finnair.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "eurobonus": {
@@ -141,7 +209,11 @@
     "domains": [
       "flysas.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "aeromexico": {
@@ -149,7 +221,11 @@
     "domains": [
       "aeromexico.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "connectmiles": {
@@ -157,7 +233,11 @@
     "domains": [
       "copaair.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "azul": {
@@ -165,7 +245,11 @@
     "domains": [
       "voeazul.com.br"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "smiles": {
@@ -173,7 +257,11 @@
     "domains": [
       "smiles.com.br"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "ethiopian": {
@@ -181,7 +269,11 @@
     "domains": [
       "ethiopianairlines.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "saudia": {
@@ -189,7 +281,11 @@
     "domains": [
       "saudia.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "frontier": {
@@ -197,7 +293,11 @@
     "domains": [
       "flyfrontier.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": false
   },
   "spirit": {
@@ -205,7 +305,11 @@
     "domains": [
       "spirit.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": false,
+    "gather_auth": "cookie",
     "beta": false,
     "note": "Spirit Airlines ceased operations 2026-05-02 (court-supervised liquidation); slug retained to mirror the seats.aero source list."
   },
@@ -215,7 +319,11 @@
       "ba.com",
       "britishairways.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": true
   },
   "iberia": {
@@ -223,7 +331,85 @@
     "domains": [
       "iberia.com"
     ],
+    "kind": "airline",
     "seats_aero": true,
+    "rooms_aero": false,
+    "sells_points": true,
+    "gather_auth": "cookie",
     "beta": true
+  },
+  "hyatt": {
+    "name": "World of Hyatt",
+    "domains": [
+      "world.hyatt.com",
+      "hyatt.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false
+  },
+  "hilton": {
+    "name": "Hilton Honors",
+    "domains": [
+      "hilton.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false
+  },
+  "marriott": {
+    "name": "Marriott Bonvoy",
+    "domains": [
+      "marriott.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false
+  },
+  "ihg": {
+    "name": "IHG One Rewards",
+    "domains": [
+      "ihg.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false
+  },
+  "choice": {
+    "name": "Choice Privileges",
+    "domains": [
+      "choicehotels.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false
+  },
+  "wyndham": {
+    "name": "Wyndham Rewards",
+    "domains": [
+      "wyndhamhotels.com"
+    ],
+    "kind": "hotel",
+    "seats_aero": false,
+    "rooms_aero": true,
+    "sells_points": true,
+    "gather_auth": "cookie",
+    "beta": false,
+    "note": "rooms.aero source slug recorded as \"wyndham\", observed-pending-confirmation by a live rooms.aero capture."
   }
 }

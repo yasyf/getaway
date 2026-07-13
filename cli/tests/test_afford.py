@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from getaway import afford, paths
+from getaway import afford, prefs
+from getaway.paths import StateConflictError
 
 
 def _prefs(programs: dict | None = None, transferable: dict | None = None) -> dict:
@@ -125,10 +126,9 @@ def test_no_include_purchase_leaves_purchase_null_even_with_shortfall() -> None:
 
 
 def test_cli_afford_loads_prefs_from_home(getaway_home: Path) -> None:
-    paths.atomic_write_text(paths.prefs_path(), json.dumps(_prefs({"united": 40000})))
-    result = CliRunner().invoke(
-        afford.afford_cmd, ["--program", "united", "--miles", "90000"]
-    )
+    prefs.init()
+    prefs.set_balance("united", 40000)
+    result = CliRunner().invoke(afford.afford_cmd, ["--program", "united", "--miles", "90000"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["balance"] == 40000
@@ -138,3 +138,58 @@ def test_cli_afford_loads_prefs_from_home(getaway_home: Path) -> None:
 def test_cli_afford_unknown_program_exits_no_data(getaway_home: Path) -> None:
     result = CliRunner().invoke(afford.afford_cmd, ["--program", "nope", "--miles", "1000"])
     assert result.exit_code == 4
+
+
+def test_cli_afford_rejects_legacy_prefs_shape(getaway_home: Path) -> None:
+    # The read path routes through prefs.load_or_empty(), so a pre-v2 (credits)
+    # doc is rejected loudly (map_errors maps StateConflictError to exit 3) not read raw.
+    prefs.init()
+    doc = prefs._template()
+    doc["credits"] = doc.pop("travel_instruments")
+    prefs.prefs_path().write_text(json.dumps(doc))
+    result = CliRunner().invoke(afford.afford_cmd, ["--program", "united", "--miles", "90000"])
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == StateConflictError.exit_code
+    assert "pre-v2 shape" in result.stderr
+
+
+def test_cli_afford_missing_prefs_uses_neutral_profile(getaway_home: Path) -> None:
+    # Skipping onboarding is fine: a missing prefs file reads as an empty profile
+    # (balance 0), not an error — load_or_empty tolerates absence.
+    result = CliRunner().invoke(afford.afford_cmd, ["--program", "united", "--miles", "90000"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["balance"] == 0
+    assert payload["covered"] is False
+
+
+def test_hotel_program_transfers_generically() -> None:
+    # A hotel program is just another balances.programs slug; afford resolves its
+    # bank transfer path with no kind-branching (World of Hyatt is Chase-only).
+    result = afford.afford("hyatt", 60000, _prefs({}, {"chase": 60000}))
+    by_bank = {p["bank"]: p for p in result["transfer_paths"]}
+    assert set(by_bank) == {"chase"}
+    assert by_bank["chase"] == {
+        "bank": "chase",
+        "bank_balance": 60000,
+        "ratio": "1:1",
+        "points_required": 60000,
+        "covers": True,
+    }
+
+
+def test_hotel_amex_two_to_one_transfer_arithmetic() -> None:
+    # Amex → Hilton is 1:2, so 20,000 Hilton points cost 10,000 Membership Rewards.
+    result = afford.afford("hilton", 20000, _prefs())
+    hilton = next(p for p in result["transfer_paths"] if p["bank"] == "amex")
+    assert hilton["ratio"] == "1:2"
+    assert hilton["points_required"] == 10000
+
+
+def test_hotel_program_purchase_prices_from_typical_sale() -> None:
+    result = afford.afford("ihg", 50000, _prefs(), include_purchase=True)
+    assert result["purchase"] == {
+        "rate_cents": 0.5,
+        "cost_usd": 250.0,
+        "cap_note": None,
+    }

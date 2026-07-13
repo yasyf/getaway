@@ -49,14 +49,6 @@
       "provenance": "battle-tested"
     },
     {
-      "id": "return_viability",
-      "kind": "judgment",
-      "evidence": "evidence-return collector (cache-only, zero quota)",
-      "activation": "round-trip ask",
-      "default_tier": "secondary",
-      "provenance": "battle-tested"
-    },
-    {
       "id": "destination_context",
       "kind": "judgment",
       "evidence": "evidence-context collector (weather, visa, appeal, events in window)",
@@ -91,9 +83,49 @@
     {
       "id": "trip_credits",
       "kind": "deterministic",
-      "evidence": "rank-time match of finalists against prefs.credits",
-      "activation": "prefs.credits non-empty",
+      "evidence": "rank-time match of journey program/airlines against prefs.travel_instruments monetary_credit variants",
+      "activation": "prefs.travel_instruments has a monetary_credit",
       "default_tier": "note",
+      "provenance": "net-new"
+    },
+    {
+      "id": "window_fit",
+      "kind": "judgment",
+      "evidence": "assess over per-leg window overshoot vs the departure/return window preferences",
+      "activation": "plan.preferences.outbound_departure_window or return_arrival_by set",
+      "default_tier": "secondary",
+      "provenance": "net-new"
+    },
+    {
+      "id": "trip_length_fit",
+      "kind": "judgment",
+      "evidence": "assess over elapsed trip-length delta vs the trip_length preference",
+      "activation": "plan.preferences.trip_length set",
+      "default_tier": "secondary",
+      "provenance": "net-new"
+    },
+    {
+      "id": "departure_day_fit",
+      "kind": "judgment",
+      "evidence": "assess over per-leg departure-day match vs the departure_days preference",
+      "activation": "plan.preferences.departure_days set",
+      "default_tier": "note",
+      "provenance": "net-new"
+    },
+    {
+      "id": "mileage_fit",
+      "kind": "judgment",
+      "evidence": "assess over mileage vs the mileage_target preference",
+      "activation": "plan.preferences.mileage_target set",
+      "default_tier": "secondary",
+      "provenance": "net-new"
+    },
+    {
+      "id": "cabin_fit",
+      "kind": "judgment",
+      "evidence": "assess over per-leg cabin match vs the cabin preference",
+      "activation": "plan.preferences.cabin set",
+      "default_tier": "secondary",
       "provenance": "net-new"
     }
   ]

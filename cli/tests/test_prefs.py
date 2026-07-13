@@ -40,7 +40,7 @@ def test_init_writes_neutral_template(getaway_home: Path) -> None:
         "statuses": {},
         "status_goals": [],
         "balances": {"programs": {}, "transferable": {}},
-        "credits": [],
+        "travel_instruments": [],
         "documents": {"passports": [], "residency": [], "visas": []},
     }
     assert json.loads(prefs.prefs_path().read_text()) == doc
@@ -136,9 +136,7 @@ def test_status_cli_exit_codes(ready: Path, runner: CliRunner) -> None:
         ),
     ],
 )
-def test_set_patch_merges_valid(
-    ready: Path, patch: dict, key: str, value: object
-) -> None:
+def test_set_patch_merges_valid(ready: Path, patch: dict, key: str, value: object) -> None:
     result = prefs.set_patch(patch)
     assert result[key] == value
     # untouched keys keep their template defaults
@@ -209,33 +207,48 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
         pytest.param({"balances": {"programs": {}}}, id="balances-missing-transferable"),
         pytest.param(
             {
-                "credits": [
+                "travel_instruments": [
                     {
                         "id": "x",
-                        "kind": "bogus",
-                        "issuer": "Delta",
+                        "type": "bogus",
+                        "issuer": "delta",
                         "amount": 200,
                         "currency": "USD",
                         "expires": "2026-08-01",
                     }
                 ]
             },
-            id="credit-bad-kind",
+            id="instrument-bad-type",
         ),
         pytest.param(
             {
-                "credits": [
+                "travel_instruments": [
                     {
                         "id": "x",
-                        "kind": "voucher",
-                        "issuer": "Delta",
+                        "type": "monetary_credit",
+                        "issuer": "delta",
                         "amount": 200,
                         "currency": "USD",
                         "expires": "not-a-date",
                     }
                 ]
             },
-            id="credit-bad-expires",
+            id="instrument-bad-expires",
+        ),
+        pytest.param(
+            {
+                "travel_instruments": [
+                    {
+                        "id": "x",
+                        "type": "hotel_night_certificate",
+                        "program": "delta",
+                        "nights": 1,
+                        "cap": {"type": "anytime"},
+                        "expires": "2026-08-01",
+                    }
+                ]
+            },
+            id="instrument-cert-non-hotel-program",
         ),
         pytest.param(
             {"documents": {"passports": [], "residency": []}}, id="documents-missing-visas"
@@ -292,6 +305,8 @@ def test_set_patch_cli_malformed_json_exits_usage(ready: Path, runner: CliRunner
     [
         pytest.param("aeroplan", 50000, "programs", id="program-slug-routes-to-programs"),
         pytest.param("united", 12345, "programs", id="another-program-slug"),
+        pytest.param("hyatt", 85000, "programs", id="hotel-slug-routes-to-programs"),
+        pytest.param("choice", 40000, "programs", id="another-hotel-slug"),
         pytest.param("amex", 120000, "transferable", id="bank-slug-routes-to-transferable"),
         pytest.param("chase", 80000, "transferable", id="another-bank-slug"),
     ],
@@ -320,46 +335,155 @@ def test_set_status_writes_and_validates(ready: Path) -> None:
         prefs.set_status("not-a-program", "gold")
 
 
-def test_credit_add_generates_short_hex_id(ready: Path) -> None:
-    row = prefs.credit_add("voucher", "Delta", 200, "USD", "2026-08-01")
+def test_set_status_accepts_hotel_tier(ready: Path) -> None:
+    doc = prefs.set_status("hyatt", "Globalist")
+    assert doc["statuses"] == {"hyatt": "Globalist"}
+
+
+MONETARY = {
+    "type": "monetary_credit",
+    "issuer": "delta",
+    "amount": 250.0,
+    "currency": "USD",
+    "expires": "2026-12-01",
+}
+HOTEL_CERT_CATEGORY = {
+    "type": "hotel_night_certificate",
+    "program": "hyatt",
+    "nights": 1,
+    "cap": {"type": "category", "category": "1-4"},
+    "expires": "2026-10-01",
+}
+HOTEL_CERT_POINTS = {
+    "type": "hotel_night_certificate",
+    "program": "marriott",
+    "nights": 2,
+    "cap": {"type": "points", "points": 35000},
+    "expires": "2027-01-01",
+}
+COMPANION = {"type": "companion_fare", "issuer": "alaska", "expires": "2026-09-01"}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param(MONETARY, id="monetary-credit"),
+        pytest.param(HOTEL_CERT_CATEGORY, id="hotel-cert-category-cap"),
+        pytest.param(HOTEL_CERT_POINTS, id="hotel-cert-points-cap"),
+        pytest.param(
+            {**HOTEL_CERT_CATEGORY, "cap": {"type": "anytime"}}, id="hotel-cert-anytime-cap"
+        ),
+        pytest.param(COMPANION, id="companion-fare"),
+        pytest.param({**MONETARY, "note": "airline eCredit"}, id="monetary-with-note"),
+    ],
+)
+def test_instrument_add_accepts_each_variant(ready: Path, spec: dict) -> None:
+    row = prefs.instrument_add(spec)
     assert len(row["id"]) == 8
     int(row["id"], 16)  # hex-parseable
-    assert prefs.show()["credits"] == [row]
+    assert row == {"id": row["id"], **spec}
+    assert prefs.show()["travel_instruments"] == [row]
 
 
-def test_credit_add_rejects_bad_kind(ready: Path) -> None:
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param({"type": "gift_card", "amount": 5}, id="unknown-type"),
+        pytest.param({k: v for k, v in MONETARY.items() if k != "type"}, id="missing-type"),
+        pytest.param(
+            {k: v for k, v in MONETARY.items() if k != "currency"}, id="monetary-missing-currency"
+        ),
+        pytest.param({**MONETARY, "amount": 0}, id="monetary-zero-amount"),
+        pytest.param({**MONETARY, "amount": -5}, id="monetary-negative-amount"),
+        pytest.param({**MONETARY, "expires": "not-a-date"}, id="monetary-bad-expires"),
+        pytest.param({**HOTEL_CERT_CATEGORY, "program": "delta"}, id="cert-non-hotel-program"),
+        pytest.param({**HOTEL_CERT_CATEGORY, "nights": 0}, id="cert-zero-nights"),
+        pytest.param(
+            {**HOTEL_CERT_CATEGORY, "cap": {"type": "stars", "n": 5}}, id="cert-bad-cap-type"
+        ),
+        pytest.param(
+            {**HOTEL_CERT_CATEGORY, "cap": {"type": "points"}}, id="cert-points-cap-missing-points"
+        ),
+        pytest.param(
+            {**COMPANION, "amount": 1, "currency": "certificate"},
+            id="companion-is-not-amount-in-currency",
+        ),
+        pytest.param({**COMPANION, "id": "deadbeef"}, id="caller-supplied-id"),
+    ],
+)
+def test_instrument_add_rejects_invalid(ready: Path, spec: dict) -> None:
     with pytest.raises(UsageError):
-        prefs.credit_add("frequent-flyer", "Delta", 200, "USD", "2026-08-01")
+        prefs.instrument_add(spec)
 
 
-def test_credit_remove_lifecycle(ready: Path) -> None:
-    a = prefs.credit_add("voucher", "Delta", 200, "USD", "2026-08-01")
-    b = prefs.credit_add("certificate", "United", 1, "USD", "2026-09-01")
-    prefs.credit_remove(a["id"])
-    assert [c["id"] for c in prefs.show()["credits"]] == [b["id"]]
+def test_instrument_remove_lifecycle(ready: Path) -> None:
+    a = prefs.instrument_add(MONETARY)
+    b = prefs.instrument_add(COMPANION)
+    prefs.instrument_remove(a["id"])
+    assert [i["id"] for i in prefs.show()["travel_instruments"]] == [b["id"]]
     with pytest.raises(UsageError):
-        prefs.credit_remove(a["id"])
+        prefs.instrument_remove(a["id"])
 
 
-def test_credit_list_expiring_within_filters_against_frozen_clock(
+def test_instrument_list_expiring_within_filters_across_variants(
     ready: Path, frozen_clock: Callable[[], dt.datetime]
 ) -> None:
     # frozen clock is 2026-07-13; 90d window is [2026-07-13, 2026-10-11]
-    soon = prefs.credit_add("voucher", "Delta", 200, "USD", "2026-07-20")
-    today = prefs.credit_add("credit", "United", 50, "USD", "2026-07-13")
-    beyond = prefs.credit_add("certificate", "Amex", 1, "USD", "2026-11-01")
-    expired = prefs.credit_add("companion", "Alaska", 1, "USD", "2026-06-30")
+    soon = prefs.instrument_add({**MONETARY, "expires": "2026-07-20"})
+    today = prefs.instrument_add({**COMPANION, "expires": "2026-07-13"})
+    beyond = prefs.instrument_add({**HOTEL_CERT_CATEGORY, "expires": "2026-11-01"})
+    expired = prefs.instrument_add({**HOTEL_CERT_POINTS, "expires": "2026-06-30"})
 
-    within_90 = {c["id"] for c in prefs.credit_list("90d", now=frozen_clock)}
+    within_90 = {i["id"] for i in prefs.instrument_list("90d", now=frozen_clock)}
     assert within_90 == {soon["id"], today["id"]}
 
-    within_200 = {c["id"] for c in prefs.credit_list("200d", now=frozen_clock)}
+    within_200 = {i["id"] for i in prefs.instrument_list("200d", now=frozen_clock)}
     assert within_200 == {soon["id"], today["id"], beyond["id"]}
 
     assert expired["id"] not in within_200
-    assert len(prefs.credit_list(now=frozen_clock)) == 4
+    assert len(prefs.instrument_list(now=frozen_clock)) == 4
 
 
-def test_credit_list_rejects_malformed_window(ready: Path) -> None:
+def test_instrument_list_rejects_malformed_window(ready: Path) -> None:
     with pytest.raises(UsageError):
-        prefs.credit_list("3 months")
+        prefs.instrument_list("3 months")
+
+
+def test_instrument_add_cli_roundtrips_stdin_json(ready: Path, runner: CliRunner) -> None:
+    result = runner.invoke(prefs.prefs_group, ["instrument-add"], input=json.dumps(COMPANION))
+    assert result.exit_code == 0
+    row = json.loads(result.stdout)
+    assert row["type"] == "companion_fare" and len(row["id"]) == 8
+
+
+def _legacy_doc() -> dict:
+    doc = prefs._template()
+    doc["credits"] = doc.pop("travel_instruments")
+    return doc
+
+
+def test_legacy_credits_shape_rejected_on_read(ready: Path) -> None:
+    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
+    with pytest.raises(StateConflictError, match="re-run getaway onboarding"):
+        prefs.show()
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda: prefs.set_balance("hyatt", 1), id="set-balance"),
+        pytest.param(lambda: prefs.set_status("united", "1K"), id="set-status"),
+        pytest.param(lambda: prefs.instrument_add(MONETARY), id="instrument-add"),
+        pytest.param(prefs.configured, id="configured"),
+    ],
+)
+def test_legacy_credits_shape_rejects_every_path(ready: Path, mutate: Callable[[], object]) -> None:
+    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
+    with pytest.raises(StateConflictError):
+        mutate()
+
+
+def test_legacy_shape_status_cli_exits_state_conflict(ready: Path, runner: CliRunner) -> None:
+    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
+    result = runner.invoke(prefs.prefs_group, ["status"])
+    assert result.exit_code == 3

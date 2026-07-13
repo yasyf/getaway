@@ -18,6 +18,12 @@
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
+      "program": "choice",
+      "ratio": "1:1",
+      "increment": null,
+      "note": "Choice Privileges is a current Amex hotel partner (verified 2026-07-13); transfers 1:1."
+    },
+    {
       "program": "delta",
       "ratio": "1:1",
       "increment": null,
@@ -35,10 +41,21 @@
       "increment": null
     },
     {
+      "program": "hilton",
+      "ratio": "1:2",
+      "increment": null,
+      "note": "Membership Rewards transfer into Hilton Honors at the long-standing 1:2 ratio."
+    },
+    {
       "program": "jetblue",
       "ratio": "1:0.8",
       "increment": null,
       "note": "Amex adds a federal excise-tax offset fee (about $0.60 per 1,000 points, capped at $99) on this US carrier."
+    },
+    {
+      "program": "marriott",
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "qantas",
@@ -84,7 +101,25 @@
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
+      "program": "hyatt",
+      "ratio": "1:1",
+      "increment": 1000,
+      "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Sapphire Reserve transfers 1:1; Sapphire Preferred and Ink Business Preferred move to 4:3 for applications on/after 2026-06-15, and existing Sapphire Preferred holders convert from 1:1 to 4:3 on 2026-10-01 (per Chase, verified 2026-07-13)."
+    },
+    {
+      "program": "ihg",
+      "ratio": "1:1",
+      "increment": 1000,
+      "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
+    },
+    {
       "program": "jetblue",
+      "ratio": "1:1",
+      "increment": 1000,
+      "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
+    },
+    {
+      "program": "marriott",
       "ratio": "1:1",
       "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
@@ -106,6 +141,12 @@
       "ratio": "1:1",
       "increment": 1000,
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
+    },
+    {
+      "program": "wyndham",
+      "ratio": "1:1",
+      "increment": 1000,
+      "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Wyndham added 2026-02-25, Chase's first new transfer partner since 2021."
     }
   ],
   "citi": [
@@ -114,6 +155,12 @@
       "ratio": "1:1",
       "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
+    },
+    {
+      "program": "choice",
+      "ratio": "1:1.5",
+      "increment": null,
+      "note": "Citi devalued this from 1:2 to 1:1.5 on 2026-04-19; requires a premium ThankYou card (Strata Premier, Strata Elite, or legacy Prestige)."
     },
     {
       "program": "emirates",
@@ -168,6 +215,12 @@
       "ratio": "1:1",
       "increment": null,
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
+    },
+    {
+      "program": "wyndham",
+      "ratio": "1:1",
+      "increment": null,
+      "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     }
   ],
   "capitalone": [
@@ -186,6 +239,11 @@
       "ratio": "1:1",
       "increment": null,
       "note": "Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
+    },
+    {
+      "program": "choice",
+      "ratio": "1:1",
+      "increment": null
     },
     {
       "program": "emirates",
@@ -240,6 +298,11 @@
       "ratio": "1:1",
       "increment": null,
       "note": "Capital One's partner is nominally Virgin Red; linked accounts share one Virgin Points balance that books Flying Club awards directly."
+    },
+    {
+      "program": "wyndham",
+      "ratio": "1:1",
+      "increment": null
     }
   ]
 }

@@ -25,10 +25,20 @@ from getaway.paths import (
 
 LAYOVER_STYLES = frozenset({"minimize", "explore"})
 AIRLINE_STRENGTHS = frozenset({"soft", "hard"})
-CREDIT_KINDS = frozenset({"voucher", "credit", "certificate", "companion"})
 DAY_TOKENS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
-CREDIT_REQUIRED = frozenset({"id", "kind", "issuer", "amount", "currency", "expires"})
 LAYOVER_KEYS = frozenset({"style", "min_connection_minutes", "prefer_cities", "avoid_cities"})
+
+INSTRUMENT_TYPES = frozenset({"monetary_credit", "hotel_night_certificate", "companion_fare"})
+CERT_CAP_TYPES = frozenset({"points", "category", "anytime"})
+MONETARY_CREDIT_REQUIRED = frozenset({"id", "type", "issuer", "amount", "currency", "expires"})
+HOTEL_CERT_REQUIRED = frozenset({"id", "type", "program", "nights", "cap", "expires"})
+COMPANION_FARE_REQUIRED = frozenset({"id", "type", "issuer", "expires"})
+INSTRUMENT_OPTIONAL = frozenset({"note"})
+
+# Prefs docs written before the v2 loyalty cutover carry this removed key; a clean
+# cutover rejects them loudly rather than migrating (STYLEGUIDE: no compat layers).
+LEGACY_KEYS = frozenset({"credits"})
+
 _EXPIRING_RE = re.compile(r"^(\d+)d$")
 
 
@@ -50,7 +60,7 @@ def _template() -> dict:
         "statuses": {},
         "status_goals": [],
         "balances": {"programs": {}, "transferable": {}},
-        "credits": [],
+        "travel_instruments": [],
         "documents": {"passports": [], "residency": [], "visas": []},
     }
 
@@ -62,16 +72,41 @@ def _load_data(name: str) -> dict:
     return json.loads((resources.files("getaway") / "data" / name).read_text())
 
 
+def _hotel_programs() -> set[str]:
+    return {slug for slug, row in _load_data("programs.json").items() if row["kind"] == "hotel"}
+
+
+def _reject_legacy(doc: dict) -> None:
+    if not doc:
+        return
+    if LEGACY_KEYS & set(doc) or "travel_instruments" not in doc:
+        raise StateConflictError(
+            "preferences use a pre-v2 shape (the credits list became travel_instruments); "
+            f"delete {prefs_path()} and re-run getaway onboarding"
+        )
+
+
 def _load() -> dict:
     path = prefs_path()
     if not path.exists():
         raise StateConflictError("preferences not initialized; run prefs init")
-    return json.loads(path.read_text())
+    doc = json.loads(path.read_text())
+    _reject_legacy(doc)
+    return doc
+
+
+def load_or_empty() -> dict:
+    """Preferences doc, or an empty dict when onboarding is skipped; a pre-v2 shape raises."""
+    path = prefs_path()
+    doc = json.loads(path.read_text()) if path.exists() else {}
+    _reject_legacy(doc)
+    return doc
 
 
 def _require_initialized(current: dict) -> None:
     if not current:
         raise StateConflictError("preferences not initialized; run prefs init")
+    _reject_legacy(current)
 
 
 def _check_iso_date(value: object, label: str) -> None:
@@ -91,17 +126,75 @@ def _require_int_dict(value: object, label: str) -> None:
             raise UsageError(f"{label}[{key}] must be an integer")
 
 
-def _validate_credit(row: object, label: str) -> None:
-    row = require_keys(row, set(CREDIT_REQUIRED), label, optional=frozenset({"note"}))
-    if row["kind"] not in CREDIT_KINDS:
-        raise UsageError(f"{label}.kind must be one of {sorted(CREDIT_KINDS)}")
+def _check_positive_number(value: object, label: str) -> None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise UsageError(f"{label} must be a number")
+    if value <= 0:
+        raise UsageError(f"{label} must be positive")
+
+
+def _validate_cert_cap(cap: object, label: str) -> None:
+    if not isinstance(cap, dict):
+        raise UsageError(f"{label} must be an object")
+    ctype = cap.get("type")
+    if ctype == "points":
+        cap = require_keys(cap, {"type", "points"}, label)
+        if require_int(cap["points"], f"{label}.points") < 1:
+            raise UsageError(f"{label}.points must be at least 1")
+    elif ctype == "category":
+        cap = require_keys(cap, {"type", "category"}, label)
+        require_str(cap["category"], f"{label}.category")
+    elif ctype == "anytime":
+        require_keys(cap, {"type"}, label)
+    else:
+        raise UsageError(f"{label}.type must be one of {sorted(CERT_CAP_TYPES)}")
+
+
+def _validate_monetary_credit(row: dict, label: str) -> None:
+    require_keys(row, set(MONETARY_CREDIT_REQUIRED), label, optional=INSTRUMENT_OPTIONAL)
     require_str(row["issuer"], f"{label}.issuer")
+    _check_positive_number(row["amount"], f"{label}.amount")
     require_str(row["currency"], f"{label}.currency")
-    if not isinstance(row["amount"], (int, float)) or isinstance(row["amount"], bool):
-        raise UsageError(f"{label}.amount must be a number")
     _check_iso_date(row["expires"], f"{label}.expires")
     if "note" in row:
         require_str(row["note"], f"{label}.note")
+
+
+def _validate_hotel_night_certificate(row: dict, label: str) -> None:
+    require_keys(row, set(HOTEL_CERT_REQUIRED), label, optional=INSTRUMENT_OPTIONAL)
+    program = require_str(row["program"], f"{label}.program")
+    if program not in _hotel_programs():
+        raise UsageError(f"{label}.program must be a hotel program: {program!r}")
+    if require_int(row["nights"], f"{label}.nights") < 1:
+        raise UsageError(f"{label}.nights must be at least 1")
+    _validate_cert_cap(row["cap"], f"{label}.cap")
+    _check_iso_date(row["expires"], f"{label}.expires")
+    if "note" in row:
+        require_str(row["note"], f"{label}.note")
+
+
+def _validate_companion_fare(row: dict, label: str) -> None:
+    require_keys(row, set(COMPANION_FARE_REQUIRED), label, optional=INSTRUMENT_OPTIONAL)
+    require_str(row["issuer"], f"{label}.issuer")
+    _check_iso_date(row["expires"], f"{label}.expires")
+    if "note" in row:
+        require_str(row["note"], f"{label}.note")
+
+
+_INSTRUMENT_VALIDATORS = {
+    "monetary_credit": _validate_monetary_credit,
+    "hotel_night_certificate": _validate_hotel_night_certificate,
+    "companion_fare": _validate_companion_fare,
+}
+
+
+def _validate_instrument(row: object, label: str) -> None:
+    if not isinstance(row, dict):
+        raise UsageError(f"{label} must be an object")
+    validator = _INSTRUMENT_VALIDATORS.get(row.get("type"))
+    if validator is None:
+        raise UsageError(f"{label}.type must be one of {sorted(INSTRUMENT_TYPES)}")
+    validator(row, label)
 
 
 def _validate(doc: dict) -> None:
@@ -142,10 +235,10 @@ def _validate(doc: dict) -> None:
     balances = require_keys(doc["balances"], {"programs", "transferable"}, "balances")
     _require_int_dict(balances["programs"], "balances.programs")
     _require_int_dict(balances["transferable"], "balances.transferable")
-    if not isinstance(doc["credits"], list):
-        raise UsageError("credits must be a list")
-    for row in doc["credits"]:
-        _validate_credit(row, "credits row")
+    if not isinstance(doc["travel_instruments"], list):
+        raise UsageError("travel_instruments must be a list")
+    for row in doc["travel_instruments"]:
+        _validate_instrument(row, "travel_instruments row")
     require_keys(doc["documents"], {"passports", "residency", "visas"}, "documents")
     for section in ("passports", "residency", "visas"):
         require_str_list(doc["documents"][section], f"documents.{section}")
@@ -153,6 +246,7 @@ def _validate(doc: dict) -> None:
 
 def init() -> dict:
     def _mut(current: dict) -> dict:
+        _reject_legacy(current)
         if current:
             raise StateConflictError("preferences already initialized")
         return _template()
@@ -168,7 +262,9 @@ def configured() -> bool:
     path = prefs_path()
     if not path.exists():
         return False
-    balances = json.loads(path.read_text())["balances"]
+    doc = json.loads(path.read_text())
+    _reject_legacy(doc)
+    balances = doc["balances"]
     return bool(balances["programs"] or balances["transferable"])
 
 
@@ -213,56 +309,44 @@ def set_status(program: str, tier: str) -> dict:
     return atomic_update(prefs_path(), _mut)
 
 
-def credit_add(
-    kind: str,
-    issuer: str,
-    amount: float,
-    currency: str,
-    expires: str,
-    note: str | None = None,
-) -> dict:
-    row = {
-        "id": uuid.uuid4().hex[:8],
-        "kind": kind,
-        "issuer": issuer,
-        "amount": amount,
-        "currency": currency,
-        "expires": expires,
-    }
-    if note is not None:
-        row["note"] = note
+def instrument_add(spec: dict) -> dict:
+    if not isinstance(spec, dict):
+        raise UsageError("instrument must be an object")
+    if "id" in spec:
+        raise UsageError("instrument id is generated; omit it")
+    row = {"id": uuid.uuid4().hex[:8], **spec}
 
     def _mut(current: dict) -> dict:
         _require_initialized(current)
-        _validate_credit(row, "credit")
-        current["credits"].append(row)
+        _validate_instrument(row, "instrument")
+        current["travel_instruments"].append(row)
         return current
 
     atomic_update(prefs_path(), _mut)
     return row
 
 
-def credit_list(
+def instrument_list(
     expiring_within: str | None = None, now: Callable[[], datetime] = utcnow
 ) -> list[dict]:
-    credits = _load()["credits"]
+    instruments = _load()["travel_instruments"]
     if expiring_within is None:
-        return credits
+        return instruments
     match = _EXPIRING_RE.match(expiring_within)
     if match is None:
         raise UsageError(f"expiring-within must look like '90d': {expiring_within!r}")
     today = now().date()
     cutoff = today + timedelta(days=int(match.group(1)))
-    return [c for c in credits if today <= date.fromisoformat(c["expires"]) <= cutoff]
+    return [i for i in instruments if today <= date.fromisoformat(i["expires"]) <= cutoff]
 
 
-def credit_remove(credit_id: str) -> dict:
+def instrument_remove(instrument_id: str) -> dict:
     def _mut(current: dict) -> dict:
         _require_initialized(current)
-        remaining = [c for c in current["credits"] if c["id"] != credit_id]
-        if len(remaining) == len(current["credits"]):
-            raise UsageError(f"no credit with id {credit_id!r}")
-        current["credits"] = remaining
+        remaining = [i for i in current["travel_instruments"] if i["id"] != instrument_id]
+        if len(remaining) == len(current["travel_instruments"]):
+            raise UsageError(f"no instrument with id {instrument_id!r}")
+        current["travel_instruments"] = remaining
         return current
 
     return atomic_update(prefs_path(), _mut)
@@ -318,29 +402,25 @@ def _set_status_cmd(program: str, tier: str) -> None:
     emit(set_status(program, tier))
 
 
-@prefs_group.command("credit-add")
-@click.option("--kind", required=True)
-@click.option("--issuer", required=True)
-@click.option("--amount", required=True, type=float)
-@click.option("--currency", required=True)
-@click.option("--expires", required=True)
-@click.option("--note", default=None)
+@prefs_group.command("instrument-add")
 @map_errors
-def _credit_add_cmd(
-    kind: str, issuer: str, amount: float, currency: str, expires: str, note: str | None
-) -> None:
-    emit(credit_add(kind, issuer, amount, currency, expires, note))
+def _instrument_add_cmd() -> None:
+    try:
+        spec = json.loads(click.get_text_stream("stdin").read())
+    except json.JSONDecodeError as err:
+        raise UsageError(f"invalid JSON on stdin: {err}") from err
+    emit(instrument_add(spec))
 
 
-@prefs_group.command("credit-list")
+@prefs_group.command("instrument-list")
 @click.option("--expiring-within", default=None)
 @map_errors
-def _credit_list_cmd(expiring_within: str | None) -> None:
-    emit(credit_list(expiring_within))
+def _instrument_list_cmd(expiring_within: str | None) -> None:
+    emit(instrument_list(expiring_within))
 
 
-@prefs_group.command("credit-remove")
-@click.argument("credit_id")
+@prefs_group.command("instrument-remove")
+@click.argument("instrument_id")
 @map_errors
-def _credit_remove_cmd(credit_id: str) -> None:
-    emit(credit_remove(credit_id))
+def _instrument_remove_cmd(instrument_id: str) -> None:
+    emit(instrument_remove(instrument_id))

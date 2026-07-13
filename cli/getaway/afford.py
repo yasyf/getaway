@@ -1,10 +1,9 @@
-import json
 import math
 
 import click
 
-from getaway import registry
-from getaway.paths import prefs_path
+from getaway import prefs, registry
+from getaway.paths import map_errors
 
 
 def _parse_ratio(ratio: str) -> tuple[float, float]:
@@ -77,16 +76,12 @@ def afford(
     }
 
 
-def _load_prefs() -> dict:
-    path = prefs_path()
-    return json.loads(path.read_text()) if path.exists() else {}
-
-
 @click.command("afford")
 @click.option("--program", required=True, help="Target mileage program slug.")
 @click.option("--miles", "miles_needed", type=int, required=True, help="Miles the award needs.")
 @click.option("--include-purchase", is_flag=True, help="Price buying the shortfall.")
+@map_errors
 def afford_cmd(program: str, miles_needed: int, include_purchase: bool) -> None:
     if not registry.is_program(program):
         raise registry.ExitNoData(f"unknown program {program}")
-    registry.emit(afford(program, miles_needed, _load_prefs(), include_purchase))
+    registry.emit(afford(program, miles_needed, prefs.load_or_empty(), include_purchase))

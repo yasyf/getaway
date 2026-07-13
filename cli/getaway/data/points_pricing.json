@@ -53,6 +53,15 @@
     "note": "Standard price ranges 2.3c-3.25c/Avios by volume; a 40% bonus flash sale (Jul 9-16 2026, live on avios.com's T&Cs) drops it to 1.64c/Avios. Annual cap 200,000 Avios, confirmed on avios.com/collect-avios/buy. Beta seats.aero source, not in gather.md's 26-program table. Sources: onemileatatime.com, thepointcalculator.com, avios.com (accessed 2026-07-13).",
     "confidence": "high"
   },
+  "choice": {
+    "sells_points": true,
+    "buy_rate_cents": 1.1,
+    "typical_sale_cents": 0.74,
+    "sale_cadence": "near-constant, roughly monthly bonus sales (35-40% bonus typical through 2026)",
+    "annual_cap": 180000,
+    "note": "Choice Privileges sells points on a tiered base of ~1.03-1.28c/pt; near-perpetual 35-40% bonus sales cut the effective price to ~0.74c/pt. Base annual cap ~180,000 pts, higher during promos. Sources: onemileatatime.com, awardwallet.com (accessed 2026-07-13).",
+    "confidence": "medium"
+  },
   "connectmiles": {
     "sells_points": true,
     "buy_rate_cents": 3,
@@ -134,6 +143,24 @@
     "note": "Standard ~2.68c/mile; a 100% bonus (1.61c) ran through 2026-07-10 and a 150% bonus (1.08c) through 2026-06-12. No annual cap found; sources conflict on per-transaction max (25k-50k miles). Sources: awardwallet.com, upgradedpoints.com (viewed 2026-07-13).",
     "confidence": "medium"
   },
+  "hilton": {
+    "sells_points": true,
+    "buy_rate_cents": 1.0,
+    "typical_sale_cents": 0.5,
+    "sale_cadence": "near-constant, 100% bonus sales run most of the year",
+    "annual_cap": 160000,
+    "note": "Hilton Honors sells points at $10/1,000 (1.0c/pt) standard; 100% bonus sales run near-continuously, halving the effective price to 0.5c/pt. Base cap 160,000 pts/year, raised to 240,000 during bonus promos. Sources: onemileatatime.com, loyaltylobby.com, upgradedpoints.com (accessed 2026-07-13).",
+    "confidence": "high"
+  },
+  "hyatt": {
+    "sells_points": true,
+    "buy_rate_cents": 2.6,
+    "typical_sale_cents": 2.1,
+    "sale_cadence": "rare and shallow - occasional 20-25% discounts or bonuses, no deep sales",
+    "annual_cap": 55000,
+    "note": "World of Hyatt sells points at a ~2.6c/pt base (reconciled from a 20% bonus landing near 2.17c/pt); Hyatt's sales are genuinely rare and small versus other hotel programs. Cap 55,000 pts/year. Sources: onemileatatime.com, awardwallet.com (accessed 2026-07-13).",
+    "confidence": "medium"
+  },
   "iberia": {
     "sells_points": true,
     "buy_rate_cents": 2,
@@ -142,6 +169,15 @@
     "annual_cap": 200000,
     "note": "Standard ~2.0c/Avios (cheaper in EUR than USD); bonus sales cut this to ~1.5c (50% bonus) or ~1.82c (25%). Min 2,000/max 200,000 Avios per transaction, cap 200,000/year pre-bonus; buyers must be members 3+ months with 1+ earned Avios. Beta seats.aero source, not in gather.md's 26-program table. Sources: awardwallet.com, onemileatatime.com (viewed 2026-07-13).",
     "confidence": "medium"
+  },
+  "ihg": {
+    "sells_points": true,
+    "buy_rate_cents": 1.0,
+    "typical_sale_cents": 0.5,
+    "sale_cadence": "very frequent, 80-100% bonus sales",
+    "annual_cap": 150000,
+    "note": "IHG One Rewards sells points at $10/1,000 (1.0c/pt) standard; frequent 80-100% bonus sales drop the effective price to ~0.5c/pt. Base cap 150,000 pts/year, raised to 200,000 during promos. Sources: onemileatatime.com, loyaltylobby.com (accessed 2026-07-13).",
+    "confidence": "high"
   },
   "jetblue": {
     "sells_points": true,
@@ -159,6 +195,15 @@
     "sale_cadence": "near-monthly tiered Bundle&Go bonus promos (Feb, Mar, May, Jul 2026 found)",
     "annual_cap": 250000,
     "note": "Sold as tiered bundles, not a flat per-mile rate: pre-bonus baseline ~1.39-2.44c/mile by bundle size; a 50% bonus through 2026-07-31 brings the large bundle to ~1.39c (a 60% bonus in May 2026 hit 1.29c). Cap 250,000 miles/year via Bundle&Go. Representative single figures - see cadence note. Sources: onemileatatime.com, headforpoints.com (viewed 2026-07-13).",
+    "confidence": "medium"
+  },
+  "marriott": {
+    "sells_points": true,
+    "buy_rate_cents": 1.25,
+    "typical_sale_cents": 0.8,
+    "sale_cadence": "frequent, up to ~40% bonus or 30% off",
+    "annual_cap": 150000,
+    "note": "Marriott Bonvoy sells points at $12.50/1,000 (1.25c/pt) standard; frequent sales (up to ~40% bonus or 30% off) reach ~0.8c/pt. Base cap 150,000 pts/year, plus a separate 100,000-pt booking-path allowance. Sources: onemileatatime.com, awardwallet.com (accessed 2026-07-13).",
     "confidence": "medium"
   },
   "qantas": {
@@ -249,6 +294,15 @@
     "sale_cadence": "frequent, roughly quarterly-plus (sales found Feb-Mar and Jun-Jul 2026)",
     "annual_cap": 200000,
     "note": "Standard $25/1,000 points (2.5c) for USD accounts, cheaper in GBP (GBP 15/1,000, ~1.9 USc equivalent). A 70% bonus (1.48c USD / ~1.19c GBP-equivalent) ran through 2026-07-07, matching an earlier 70% sale through 2026-03-31. Cap 200,000 points/year pre-bonus. Sources: loyaltylobby.com, flywith.virginatlantic.com buy-points page (viewed 2026-07-13).",
+    "confidence": "high"
+  },
+  "wyndham": {
+    "sells_points": true,
+    "buy_rate_cents": 1.3,
+    "typical_sale_cents": 0.72,
+    "sale_cadence": "near-continuous, 70-100% (targeted) bonus sales run most of the year",
+    "annual_cap": 100000,
+    "note": "Wyndham Rewards sells points at 1.3c/pt standard; near-perpetual 70-100% targeted bonus sales drop the effective price to ~0.72c/pt. Base cap 100,000 pts/year, raised to 200,000 during promos. Sources: awardwallet.com, onemileatatime.com, loyaltylobby.com (accessed 2026-07-13).",
     "confidence": "high"
   }
 }

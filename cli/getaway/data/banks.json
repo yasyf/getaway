@@ -3,24 +3,28 @@
     "name": "American Express",
     "domain": "americanexpress.com",
     "dashboard_host": "global.americanexpress.com",
-    "currency": "Membership Rewards"
+    "currency": "Membership Rewards",
+    "gather_auth": "device_wall"
   },
   "chase": {
     "name": "Chase",
     "domain": "chase.com",
     "dashboard_host": "secure.chase.com",
-    "currency": "Ultimate Rewards"
+    "currency": "Ultimate Rewards",
+    "gather_auth": "cookie"
   },
   "citi": {
     "name": "Citi",
     "domain": "citi.com",
     "dashboard_host": "online.citi.com",
-    "currency": "ThankYou Points"
+    "currency": "ThankYou Points",
+    "gather_auth": "cookie"
   },
   "capitalone": {
     "name": "Capital One",
     "domain": "capitalone.com",
     "dashboard_host": "myaccounts.capitalone.com",
-    "currency": "Capital One miles"
+    "currency": "Capital One miles",
+    "gather_auth": "token"
   }
 }
