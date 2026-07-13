@@ -27,6 +27,7 @@ jobs:
         run: |
           bash -n skills/getaway/getaway.sh
           shellcheck skills/getaway/getaway.sh
+          node --check skills/getaway/plan-trip.js
       - name: Prefs round-trip
         run: |
           export HOME="$(mktemp -d)"

@@ -5,11 +5,12 @@ export const meta = {
   whenToUse:
     'Invoked by the getaway skill for planning asks spanning 2+ destination buckets or programs. Args come from stored preferences plus AskUserQuestion answers. Returns the merged finalists; the calling session builds the cc-present board.',
   phases: [
-    { title: 'Sweep', detail: 'One agent per destination bucket or program runs a single seats.aero search/availability call into a scratchpad JSONL.' },
-    { title: 'Shortlist', detail: 'One offline jq pass over every sweep file filters, dedups, and ranks down to the finalists — zero API calls.' },
-    { title: 'Expand', detail: 'One agent per finalist expands its trip ID into bookable truth: integer miles, exact taxes, segments, booking link — and on business asks, classifies the longest business segment against the seat-quality table.' },
-    { title: 'Verify', detail: 'Business only: one WebSearch agent per mixed-fleet or table-absent candidate resolves the product before the re-rank — no quota spent.' },
-    { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per destination adds weather, visa, and appeal color — no quota spent.' },
+    { title: 'Sweep', detail: 'One agent per destination bucket or program runs a single seats.aero search/availability call into a scratchpad JSONL; a hybrid ask adds one gateway sweep from the origins to the gateway set.' },
+    { title: 'Shortlist', detail: 'Offline jq over the sweep files filters, dedups, and ranks the direct finalists, and separately shortlists each gateway\'s best award — zero API calls.' },
+    { title: 'Onward', detail: 'Hybrid only: one search from the top gateways to the onward destinations, jq-projected to per-(origin, dest, cabin) award minimums — the two-award-stitch sweep across every program in one call.' },
+    { title: 'Bridge', detail: 'Hybrid only: one fli agent per gateway-to-onward pair prices the cash hop — economy first, business when it runs past the cash-cabin cutoff — spending zero seats.aero quota.' },
+    { title: 'Expand', detail: 'One agent per direct finalist and per hybrid award leg expands its trip ID into bookable truth at that leg\'s cabin: integer miles, exact taxes, segments, booking link — and on a business leg, classifies the longest business segment against the seat-quality table.' },
+    { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per direct and onward destination adds weather, visa, and appeal color — no quota spent.' },
   ],
 };
 
@@ -72,6 +73,36 @@ const ENRICH_SCHEMA = {
   required: ['dest', 'weather', 'visaNote', 'appeal'],
   properties: { dest: { type: 'string' }, weather: { type: 'string' }, visaNote: { type: 'string' }, appeal: { type: 'string' } },
 };
+const ONWARD_SCHEMA = {
+  type: 'object',
+  required: ['rows', 'quota'],
+  properties: {
+    quota: { type: 'number' },
+    rows: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['origin', 'dest', 'cabin', 'id', 'date', 'source', 'mileage', 'seats'],
+        properties: {
+          origin: { type: 'string' }, dest: { type: 'string' }, cabin: { type: 'string' },
+          id: { type: 'string' }, date: { type: 'string' }, source: { type: 'string' },
+          mileage: { type: 'number' }, seats: { type: 'number' },
+          airlines: { type: 'string' }, direct: { type: 'boolean' },
+        },
+      },
+    },
+  },
+};
+const BRIDGE_SCHEMA = {
+  type: 'object',
+  required: ['gateway', 'dest', 'date', 'cabin', 'price', 'currency'],
+  properties: {
+    gateway: { type: 'string' }, dest: { type: 'string' }, date: { type: 'string' },
+    durationMinutes: { type: 'number' }, cabin: { enum: ['economy', 'business'] },
+    price: { type: 'number' }, currency: { type: 'string' },
+    airline: { type: 'string' }, flightNumber: { type: 'string' }, stops: { type: 'number' },
+  },
+};
 
 // Validate every arg up front; the regexes double as the injection guard for strings
 // interpolated into the Bash command lines the agents run.
@@ -131,6 +162,24 @@ const vibe = a.vibe;
 const quotaFloor = a.quotaFloor ?? 100;
 if (!Number.isInteger(quotaFloor)) throw new Error('plan-trip: quotaFloor must be an integer');
 
+// Hybrid routings are opt-in; absent, every hybrid phase is skipped and behavior is unchanged.
+// The IATA regex doubles as the injection guard, and an onward destination is a final
+// destination — so it must clear avoidDestinations, while gateways stay exempt as waypoints.
+const hybrid = a.hybrid;
+let cashCutoffMinutes = 240;
+let maxHybrids = 3;
+if (hybrid !== undefined) {
+  if (typeof hybrid !== 'object' || hybrid === null || Array.isArray(hybrid)) throw new Error('plan-trip: hybrid must be an object');
+  if (!Array.isArray(hybrid.gateways) || hybrid.gateways.length === 0 || !hybrid.gateways.every(g => typeof g === 'string' && IATA.test(g))) throw new Error('plan-trip: hybrid.gateways must be a non-empty array of IATA codes');
+  if (hybrid.onwardDests !== undefined && (!Array.isArray(hybrid.onwardDests) || !hybrid.onwardDests.every(d => typeof d === 'string' && IATA.test(d)))) throw new Error('plan-trip: hybrid.onwardDests must be IATA codes');
+  if (hybrid.onwardDests !== undefined && hybrid.onwardDests.some(d => avoidDestinations.includes(d))) throw new Error('plan-trip: hybrid.onwardDests must not intersect avoidDestinations; an onward destination is a final destination');
+  cashCutoffMinutes = hybrid.cashCutoffMinutes ?? 240;
+  if (!Number.isInteger(cashCutoffMinutes) || cashCutoffMinutes <= 0) throw new Error('plan-trip: hybrid.cashCutoffMinutes must be a positive integer');
+  maxHybrids = hybrid.maxHybrids ?? 3;
+  if (!Number.isInteger(maxHybrids) || maxHybrids < 1) throw new Error('plan-trip: hybrid.maxHybrids must be a positive integer');
+  maxHybrids = Math.min(maxHybrids, 4);
+}
+
 const { script, scratchpad, startDate, endDate, origins } = a;
 const slug = s => s.toLowerCase().replace(/ /g, '-');
 
@@ -145,6 +194,12 @@ const sweepSpecs = [
     file: `${scratchpad}/sweep-${p.source}-${slug(p.destRegion)}.jsonl`,
     cmd: `"${script}" availability --source ${p.source} --cabin ${cabin} --dest-region "${p.destRegion}" --take 1000 --start ${startDate} --end ${endDate}`,
   })),
+  ...(hybrid !== undefined ? [{
+    label: 'gateways',
+    gateway: true,
+    file: `${scratchpad}/sweep-gateways.jsonl`,
+    cmd: `"${script}" search --origin ${origins.join(',')} --dest ${hybrid.gateways.join(',')} --start ${startDate} --end ${endDate} --cabin ${cabin} --take 1000 --order lowest_mileage`,
+  }] : []),
 ];
 if (new Set(sweepSpecs.map(s => s.file)).size !== sweepSpecs.length) throw new Error('plan-trip: sweep filenames collide; bucket names and program sweeps must be distinct');
 
@@ -161,6 +216,9 @@ const sweepResults = await pipeline(sweepSpecs, spec => agent(
 // Trust our own paths, never an agent-echoed string, in the shortlist command line.
 const okSweeps = sweepResults.filter(Boolean);
 const sweepFiles = sweepSpecs.filter((s, i) => sweepResults[i]).map(s => s.file);
+// The gateway sweep feeds only the hybrid shortlist; the direct shortlist never sees it.
+const directSweepFiles = sweepSpecs.filter((s, i) => sweepResults[i] && !s.gateway).map(s => s.file);
+const gatewaySweepFiles = sweepSpecs.filter((s, i) => sweepResults[i] && s.gateway).map(s => s.file);
 if (sweepResults.length - okSweeps.length > 0) log(`${sweepResults.length - okSweeps.length} sweep agent(s) died; their files are excluded`);
 
 // The on-disk quota cache is last-writer-wins under a parallel burst, so trust the
@@ -169,18 +227,20 @@ const quotas = okSweeps.map(r => r.quota).filter(q => q >= 0);
 const minQuota = quotas.length ? Math.min(...quotas) : -1;
 const quotaLow = minQuota >= 0 && minQuota < quotaFloor;
 const enrichRan = Boolean(vibe) && !quotaLow;
+// Low quota gates every API-spending hybrid phase — Onward, Bridge, and the hybrid expansions.
+const hybridOn = hybrid !== undefined && !quotaLow;
 let expandCap = expandTarget;
 let expandTrimmedTo = null;
 if (quotaLow) {
   expandCap = Math.min(maxFinalists, 3, minQuota);
   expandTrimmedTo = expandCap;
-  log(`quota low (${minQuota} < floor ${quotaFloor}): trimming Expand to ${expandCap} finalists and skipping Enrich`);
+  log(`quota low (${minQuota} < floor ${quotaFloor}): trimming Expand to ${expandCap} finalists and skipping Enrich and hybrids`);
 }
-const skipped = { enrich: !enrichRan, expandTrimmedTo };
+const skipped = { enrich: !enrichRan, expandTrimmedTo, hybrids: hybrid !== undefined && quotaLow };
 
 if (sweepFiles.length === 0) {
   log('no sweep files produced; returning empty finalists');
-  return { finalists: [], sweepFiles, considered: 0, quota: minQuota, skipped };
+  return { finalists: [], hybrids: [], sweepFiles, considered: 0, quota: minQuota, skipped };
 }
 
 const avail = `.${jc}Available`;
@@ -190,25 +250,37 @@ const airlinesF = `.${jc}Airlines`;
 const directF = `.${jc}Direct`;
 const hard = JSON.stringify(avoidAirlines.filter(x => x.strength === 'hard').map(x => x.code));
 const soft = JSON.stringify(avoidAirlines.filter(x => x.strength === 'soft').map(x => x.code));
-const clauses = [
+const baseHead = [
   `${avail} == true`,
   ...(mileageCeiling !== undefined ? [`${mileageF} <= ${mileageCeiling}`] : []),
   `${seatsF} >= ${travelers}`,
   `(.Route.OriginAirport as $o | (${JSON.stringify(origins)} | index($o)) != null)`,
   ...(sources.length ? [`(.Source as $s | (${JSON.stringify(sources)} | index($s)) != null)`] : []),
-  `(.Route.DestinationAirport as $d | (${JSON.stringify(avoidDestinations)} | index($d)) | not)`,
-  `(${airlinesF} | split(", ") | all(. as $c | ${hard} | index($c) == null))`,
-].join('\n        and ');
+];
+// The avoid-destinations veto is a direct-shortlist clause only — a gateway is a waypoint, never an endpoint.
+const avoidDestClause = `(.Route.DestinationAirport as $d | (${JSON.stringify(avoidDestinations)} | index($d)) | not)`;
+const airlinesHardClause = `(${airlinesF} | split(", ") | all(. as $c | ${hard} | index($c) == null))`;
+const clauses = [...baseHead, avoidDestClause, airlinesHardClause].join('\n        and ');
+const gatewayClauses = [...baseHead, airlinesHardClause].join('\n        and ');
+const rowProj =
+  `{ id: .ID, date: .Date, origin: .Route.OriginAirport, dest: .Route.DestinationAirport,\n` +
+  `                source: .Source, mileage: ${mileageF}, seats: ${seatsF},\n` +
+  `                airlines: ${airlinesF}, direct: ${directF},\n` +
+  `                soft: (${airlinesF} | split(", ") | any(. as $c | ${soft} | index($c) != null)) }`;
 const shortlistJq =
   `jq -s '{ considered: length,\n` +
   `  rows: ( [ .[] | select(${clauses})\n` +
-  `            | { id: .ID, date: .Date, origin: .Route.OriginAirport, dest: .Route.DestinationAirport,\n` +
-  `                source: .Source, mileage: ${mileageF}, seats: ${seatsF},\n` +
-  `                airlines: ${airlinesF}, direct: ${directF},\n` +
-  `                soft: (${airlinesF} | split(", ") | any(. as $c | ${soft} | index($c) != null)) } ]\n` +
+  `            | ${rowProj} ]\n` +
   `          | group_by([.origin, .dest, .date, .source]) | map(sort_by(.soft, .mileage) | .[0])\n` +
   `          | sort_by(.soft, .mileage) | .[0:${expandTarget}] ) }' ` +
-  sweepFiles.map(f => `"${f}"`).join(' ');
+  directSweepFiles.map(f => `"${f}"`).join(' ');
+const gatewayShortlistJq =
+  `jq -s '{ considered: length,\n` +
+  `  rows: ( [ .[] | select(${gatewayClauses})\n` +
+  `            | ${rowProj} ]\n` +
+  `          | group_by(.dest) | map(sort_by(.soft, .mileage) | .[0])\n` +
+  `          | sort_by(.soft, .mileage) | .[0:3] ) }' ` +
+  gatewaySweepFiles.map(f => `"${f}"`).join(' ');
 
 phase('Shortlist');
 const shortlist = await agent(
@@ -218,7 +290,18 @@ const shortlist = await agent(
 );
 if (!shortlist || shortlist.rows.length === 0) {
   log('shortlist produced 0 rows; no finalists');
-  return { finalists: [], sweepFiles, considered: shortlist?.considered ?? 0, quota: minQuota, skipped };
+  return { finalists: [], hybrids: [], sweepFiles, considered: shortlist?.considered ?? 0, quota: minQuota, skipped };
+}
+
+// Gateway shortlist: each gateway's best award, deduped to one row per hub, at most 3 distinct gateways.
+let gatewayRows = [];
+if (hybridOn && gatewaySweepFiles.length) {
+  const gatewayShortlist = await agent(
+    `Run exactly this one Bash command — a single offline jq pass over the gateway sweep file, zero API calls, run no getaway.sh command:\n\n${gatewayShortlistJq}\n\n` +
+    `Return its JSON output: considered (total rows scanned) and rows (each gateway's best award, each with id, date, origin, dest, source, mileage, seats, airlines, direct, soft). mileage and seats are numbers; direct and soft are booleans.`,
+    { label: 'shortlist:gateways', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
+  );
+  if (gatewayShortlist) gatewayRows = gatewayShortlist.rows;
 }
 
 const rows = shortlist.rows.slice(0, expandCap);
@@ -232,33 +315,141 @@ const transitClause = avoidTransit.length
 
 // Derive the seat-quality doc from the validated script path, never an agent-echoed string.
 const seatDoc = script.replace(/[^/]+$/, 'seat-quality.md');
-const longhaulProj = isBiz
-  ? `,\n        longhaul: ((.AvailabilitySegments | map(select(.Cabin == "${cabin}")) | max_by(.Distance)) as $s\n` +
-    `          | if $s == null then null else "\\($s.FlightNumber) \\($s.OriginAirport)-\\($s.DestinationAirport) (\\($s.AircraftName))" end)`
-  : '';
+const longhaulProjFor = c =>
+  `,\n        longhaul: ((.AvailabilitySegments | map(select(.Cabin == "${c}")) | max_by(.Distance)) as $s\n` +
+  `          | if $s == null then null else "\\($s.FlightNumber) \\($s.OriginAirport)-\\($s.DestinationAirport) (\\($s.AircraftName))" end)`;
+
+// Onward, Bridge, Compose: build hybrid routings — a gateway award plus a cash hop (gateway-cash)
+// or a stitched onward award (two-award). Every award leg is expanded below with the directs, so
+// composition only decides which leg ids and cabins to expand.
+const onwardDests = hybridOn ? (hybrid.onwardDests ?? [...new Set(shortlist.rows.map(r => r.dest))].slice(0, 4)) : [];
+const gatewayRowByDest = {};
+for (const r of gatewayRows) {
+  if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: gateway row id failed the injection guard: ${r.id}`);
+  if (!DATE.test(r.date)) throw new Error(`plan-trip: gateway row date failed the injection guard: ${r.date}`);
+  gatewayRowByDest[r.dest] = r;
+}
+const topGateways = Object.keys(gatewayRowByDest);
+for (const g of topGateways) if (!IATA.test(g)) throw new Error(`plan-trip: gateway dest failed the injection guard: ${g}`);
+for (const d of onwardDests) if (!IATA.test(d)) throw new Error(`plan-trip: onward dest failed the injection guard: ${d}`);
+
+let composed = [];
+if (hybridOn && topGateways.length && onwardDests.length) {
+  const onwardBlocks = ['economy', 'business'].map(cab => {
+    const p = CABIN_PREFIX[cab];
+    return `[ .[] | select(.${p}Available == true and (.${p}RemainingSeats|tonumber) >= ${travelers})\n` +
+      `        | { origin: .Route.OriginAirport, dest: .Route.DestinationAirport, cabin: "${cab}",\n` +
+      `            id: .ID, date: .Date, source: .Source, mileage: (.${p}MileageCost|tonumber),\n` +
+      `            seats: (.${p}RemainingSeats|tonumber), airlines: .${p}Airlines, direct: .${p}Direct } ]`;
+  }).join('\n      + ');
+  const onwardFile = `${scratchpad}/onward.jsonl`;
+  const onwardSearchCmd = `"${script}" search --origin ${topGateways.join(',')} --dest ${onwardDests.join(',')} --start ${startDate} --end ${endDate} --take 1000 --order lowest_mileage`;
+  const onwardJq =
+    `jq -s '{ rows: ( ${onwardBlocks}\n` +
+    `      | group_by([.origin, .dest, .cabin]) | map(min_by(.mileage)) ) }' "${onwardFile}"`;
+
+  phase('Onward');
+  const onward = await agent(
+    `Run exactly these two Bash commands in order, nothing else — the search spends one seats.aero call, the jq is offline; run no other getaway.sh command:\n\n` +
+    `${onwardSearchCmd} > "${onwardFile}"\n\n${onwardJq}\n\n` +
+    `The search prints \`quota remaining: N\` to stderr. Return:\n` +
+    `- rows: the jq output's rows (each with origin, dest, cabin, id, date, source, mileage, seats, airlines, direct; mileage and seats are numbers, direct a boolean)\n` +
+    `- quota: the integer N from the \`quota remaining: N\` stderr line, or -1 if that line is absent.`,
+    { label: 'onward', phase: 'Onward', schema: ONWARD_SCHEMA },
+  );
+  const onwardRows = onward ? onward.rows : [];
+  for (const r of onwardRows) if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: onward row id failed the injection guard: ${r.id}`);
+  if (onward && onward.quota >= 0) quotas.push(onward.quota);
+
+  const bridgePairs = [];
+  for (const g of topGateways) for (const d of onwardDests) if (d !== g) bridgePairs.push({ gateway: g, dest: d, date: gatewayRowByDest[g].date });
+  const cappedBridgePairs = bridgePairs.slice(0, 8);
+
+  phase('Bridge');
+  const bridgeQuotes = await pipeline(cappedBridgePairs, pair => agent(
+    `Price the ${pair.gateway}-${pair.dest} cash hop on ${pair.date} with fli via uvx — zero seats.aero quota, run no getaway.sh command. Economy first:\n\n` +
+    `uvx --from "flights[mcp]" fli flights ${pair.gateway} ${pair.dest} ${pair.date} --class ECONOMY --format json | jq '{cheapest: (.flights | min_by(.price) | {price, currency, stops, duration, airline: .legs[0].airline.code, flight: .legs[0].flight_number})}'\n\n` +
+    `If cheapest.duration exceeds ${cashCutoffMinutes} minutes, re-quote business — the same command with \`--class BUSINESS\` — and report that quote instead; otherwise report the economy quote. Return:\n` +
+    `- gateway: "${pair.gateway}"\n- dest: "${pair.dest}"\n- date: "${pair.date}"\n` +
+    `- durationMinutes: the reported cheapest.duration (a number)\n` +
+    `- cabin: "economy" when you kept the economy quote, "business" when you re-quoted\n` +
+    `- price: cheapest.price (a number)\n- currency: cheapest.currency\n- stops: cheapest.stops (a number)\n` +
+    `- airline: cheapest.airline\n- flightNumber: cheapest.flight`,
+    { label: `bridge:${pair.gateway}-${pair.dest}`, phase: 'Bridge', schema: BRIDGE_SCHEMA },
+  ));
+  const bridgeByPair = {};
+  for (const q of bridgeQuotes.filter(Boolean)) bridgeByPair[`${q.gateway}|${q.dest}`] = q;
+  const onwardByKey = {};
+  for (const r of onwardRows) onwardByKey[`${r.origin}|${r.dest}|${r.cabin}`] = r;
+
+  for (const pair of cappedBridgePairs) {
+    const bridge = bridgeByPair[`${pair.gateway}|${pair.dest}`];
+    if (!bridge) continue;
+    const award = gatewayRowByDest[pair.gateway];
+    composed.push({
+      kind: 'gateway-cash', gateway: pair.gateway, dest: pair.dest, award,
+      onward: { mode: 'cash', cabin: bridge.cabin, price: bridge.price, currency: bridge.currency,
+                durationMinutes: bridge.durationMinutes, stops: bridge.stops,
+                airline: bridge.airline, flightNumber: bridge.flightNumber, date: bridge.date },
+    });
+    // Two-award stitch: the onward award at the cutoff-picked cabin, departing on/after the gateway award.
+    const onwardRow = onwardByKey[`${pair.gateway}|${pair.dest}|${bridge.cabin}`];
+    if (onwardRow && onwardRow.date >= award.date) {
+      composed.push({
+        kind: 'two-award', gateway: pair.gateway, dest: pair.dest, award,
+        onward: { mode: 'award', cabin: bridge.cabin, id: onwardRow.id, date: onwardRow.date,
+                  source: onwardRow.source, mileage: onwardRow.mileage, seats: onwardRow.seats,
+                  airlines: onwardRow.airlines, direct: onwardRow.direct },
+      });
+    }
+  }
+  // Rank by total miles then cash; the cash leg carries no miles. Keep the cheapest maxHybrids.
+  const totalMiles = h => h.award.mileage + (h.onward.mode === 'award' ? h.onward.mileage : 0);
+  const cashMinor = h => (h.onward.mode === 'cash' ? Math.round(h.onward.price * 100) : 0);
+  composed.sort((a, b) => (totalMiles(a) - totalMiles(b)) || (cashMinor(a) - cashMinor(b)));
+  composed = composed.slice(0, maxHybrids);
+}
+
+// Every award leg expands at its own cabin: directs and gateway legs at the trip cabin,
+// stitched onward legs at the cabin the cutoff picked.
+const directItems = rows.map(r => ({ id: r.id, cabin, label: r.dest }));
+const hybridItems = [];
+const seenItem = new Set();
+for (const h of composed) {
+  const gKey = `${h.award.id}|${cabin}`;
+  if (!seenItem.has(gKey)) { seenItem.add(gKey); hybridItems.push({ id: h.award.id, cabin, label: h.gateway }); }
+  if (h.onward.mode === 'award') {
+    const oKey = `${h.onward.id}|${h.onward.cabin}`;
+    if (!seenItem.has(oKey)) { seenItem.add(oKey); hybridItems.push({ id: h.onward.id, cabin: h.onward.cabin, label: h.dest }); }
+  }
+}
+const expandItems = [...directItems, ...hybridItems];
 
 phase('Expand');
-const trips = await pipeline(rows, row => agent(
-  (isBiz
+const expandResults = await pipeline(expandItems, item => agent(
+  (item.cabin === 'business'
     ? `Run exactly this one Bash pipeline, then one local file read — no other getaway.sh command:\n\n`
     : `Run exactly this one Bash pipeline, nothing else:\n\n`) +
-  `"${script}" trip ${row.id} | jq '{ bookingPrimary: ([.booking_links[] | select(.primary) | .label][0]),\n` +
-  `  best: ((.data | map(select(.Cabin == "${cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)) as $t\n` +
+  `"${script}" trip ${item.id} | jq '{ bookingPrimary: ([.booking_links[] | select(.primary) | .label][0]),\n` +
+  `  best: ((.data | map(select(.Cabin == "${item.cabin}" and .RemainingSeats >= ${travelers}${transitClause})) | min_by(.MileageCost)) as $t\n` +
   `    | if $t == null then null else $t | { MileageCost, TotalTaxes, TaxesCurrency, RemainingSeats, FlightNumbers, UpdatedAt,\n` +
-  `        segments: [.AvailabilitySegments[] | "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"]${longhaulProj} } end) }'\n\n` +
+  `        segments: [.AvailabilitySegments[] | "\\(.FlightNumber) \\(.OriginAirport)-\\(.DestinationAirport) \\(.Cabin) (\\(.AircraftName))"]${item.cabin === 'business' ? longhaulProjFor(item.cabin) : ''} } end) }'\n\n` +
   `It also prints \`quota remaining: N\` to stderr. If \`best\` is null — no trip in that cabin seats ` +
   `${travelers} traveler(s) and clears the connection rules — return only id and quota. Otherwise return:\n` +
-  `- id: "${row.id}"\n- mileageCost: best.MileageCost\n- totalTaxes: best.TotalTaxes\n- taxesCurrency: best.TaxesCurrency\n` +
+  `- id: "${item.id}"\n- mileageCost: best.MileageCost\n- totalTaxes: best.TotalTaxes\n- taxesCurrency: best.TaxesCurrency\n` +
   `- remainingSeats: best.RemainingSeats\n- flightNumbers: best.FlightNumbers\n- segments: best.segments\n` +
   `- updatedAt: best.UpdatedAt\n- bookingPrimary: bookingPrimary\n- quota: the integer N from the stderr line, or -1 if absent.` +
-  (isBiz
+  (item.cabin === 'business'
     ? `\n\nThen read the local file ${seatDoc} and classify \`best.longhaul\`, the longest business segment: take the operating carrier from its flight-number prefix plus its aircraft, match that carrier+aircraft against the table, and also return — all three required whenever best is non-null:\n` +
       `- longhaul: best.longhaul (the segment string, or null)\n` +
       `- product: that row's Verdict — but \`verify\` when the row is Verify-marked, and \`unknown\` when the carrier+aircraft is absent from the table or best.longhaul is null\n` +
       `- productNote: the product name plus one clause (e.g. "old Club World — yin-yang 2-3-2, barely business")`
     : ''),
-  { label: `trip:${row.dest}`, phase: 'Expand', schema: TRIP_SCHEMA },
+  { label: `trip:${item.label}`, phase: 'Expand', schema: TRIP_SCHEMA },
 ));
+const trips = expandResults.slice(0, rows.length);
+const tripByKey = {};
+expandItems.forEach((it, i) => { if (expandResults[i]) tripByKey[`${it.id}|${it.cabin}`] = expandResults[i]; });
 
 // Business only, zero quota: resolve Verify-marked and table-absent products against the
 // live seat map before the re-rank truncates, so a resolved `barely` never displaces a true flat.
@@ -293,10 +484,22 @@ const kept = candidates.slice(0, maxFinalists);
 const died = rows.length - candidates.length;
 if (died > 0) log(`${died} finalist(s) dropped: expansion agent died or no live trip seats the party`);
 
+// Attach each hybrid leg's bookable truth; drop a hybrid whose award leg did not expand to a seatable trip.
+const finalHybrids = composed
+  .map(h => {
+    const awardTrip = tripByKey[`${h.award.id}|${cabin}`];
+    const onwardTrip = h.onward.mode === 'award' ? tripByKey[`${h.onward.id}|${h.onward.cabin}`] : null;
+    return { ...h, award: { ...h.award, trip: awardTrip }, onward: onwardTrip ? { ...h.onward, trip: onwardTrip } : { ...h.onward } };
+  })
+  .filter(h => h.award.trip && typeof h.award.trip.mileageCost === 'number'
+    && (h.onward.mode !== 'award' || (h.onward.trip && typeof h.onward.trip.mileageCost === 'number')));
+const hybridsDied = composed.length - finalHybrids.length;
+if (hybridsDied > 0) log(`${hybridsDied} hybrid(s) dropped: an award leg did not expand to a seatable trip`);
+
 const enrichByDest = {};
 if (enrichRan) {
   phase('Enrich');
-  const dests = [...new Set(kept.map(c => c.row.dest))];
+  const dests = [...new Set([...kept.map(c => c.row.dest), ...finalHybrids.map(h => h.dest)])];
   const enriched = await pipeline(dests, dest => agent(
     `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to research airport ${dest} for travel in ${startDate.slice(0, 7)}. Return:\n` +
     `- dest: "${dest}"\n- weather: the typical weather and season for that window\n` +
@@ -310,6 +513,10 @@ const finalists = kept.map(({ row, trip }) => {
   const enrich = enrichByDest[row.dest];
   return enrich ? { ...row, trip, enrich } : { ...row, trip };
 });
+const hybrids = finalHybrids.map(h => {
+  const enrich = enrichByDest[h.dest];
+  return enrich ? { ...h, enrich } : h;
+});
 
-const allQuotas = [...quotas, ...trips.filter(Boolean).map(t => t.quota).filter(q => q >= 0)];
-return { finalists, sweepFiles, considered: shortlist.considered, quota: allQuotas.length ? Math.min(...allQuotas) : -1, skipped };
+const allQuotas = [...quotas, ...expandResults.filter(Boolean).map(t => t.quota).filter(q => q >= 0)];
+return { finalists, hybrids, sweepFiles, considered: shortlist.considered, quota: allQuotas.length ? Math.min(...allQuotas) : -1, skipped };
