@@ -47,16 +47,22 @@ export function makeHarness(script) {
     calls.push({ prompt, opts });
     const entry = lookup(opts.label);
     const payload = typeof entry === 'function' ? entry(opts, prompt) : entry;
-    for (const key of (opts.schema && opts.schema.required) || []) {
-      if (payload == null || !(key in payload)) {
-        throw new Error(`harness: agent ${opts.label} payload missing required key ${key}`);
+    // Schema-required enforcement applies to object payloads only: production schema-forcing has
+    // been observed to let a raw prose string (and parallel-failure nulls) through to the caller.
+    if (payload !== null && typeof payload === 'object') {
+      for (const key of (opts.schema && opts.schema.required) || []) {
+        if (!(key in payload)) {
+          throw new Error(`harness: agent ${opts.label} payload missing required key ${key}`);
+        }
       }
     }
     return payload;
   };
 
-  const pipeline = async (items, fn) => Promise.all(items.map((item, i) => fn(item, i)));
-  const parallel = async (branches) => Promise.all(branches.map((b) => (typeof b === 'function' ? b() : b)));
+  // Production pipeline()/parallel() resolve a failed branch to null, never a rejection.
+  const settle = (p) => Promise.resolve(p).then((v) => v, () => null);
+  const pipeline = async (items, fn) => Promise.all(items.map((item, i) => settle(fn(item, i))));
+  const parallel = async (branches) => Promise.all(branches.map((b) => settle(typeof b === 'function' ? b() : b)));
   const phase = (name) => { phases.push(name); };
   const log = (msg) => { logs.push(msg); };
 
