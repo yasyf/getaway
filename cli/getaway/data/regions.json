@@ -506,7 +506,7 @@
     "code": "WST",
     "label": "West Coast, United States",
     "kind": "regional",
-    "note": "Observed /search expansion (2026-07-10) is a superset of the UI list: SFO, SEA, LAX, YVR, LAS, PHX, PDX, SAN, SLC — adds LAX, SEA, PHX.",
+    "note": "Airports are the union of the UI-documented list and the observed /search expansion (2026-07-10, which added LAX, SEA, and PHX); this is a floor, not the exact expansion.",
     "airports": [
       "SFO",
       "SJC",
@@ -515,7 +515,10 @@
       "DEN",
       "YVR",
       "LAS",
-      "SLC"
+      "SLC",
+      "LAX",
+      "SEA",
+      "PHX"
     ]
   },
   {

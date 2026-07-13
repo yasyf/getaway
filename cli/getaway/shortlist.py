@@ -5,7 +5,7 @@ from typing import Any
 
 import click
 
-from getaway import prefs, trips
+from getaway import prefs, registry, trips
 from getaway.constants import (
     CABIN_PREFIX,
     CASH_CUTOFF_MINUTES,
@@ -33,6 +33,12 @@ def _direct_labels(trip: dict, prefs_doc: dict) -> list[str]:
     from getaway.sweeps import derive_specs
 
     return [spec["label"] for spec in derive_specs(trip, prefs_doc) if spec["label"] != "gateways"]
+
+
+def _search_labels(trip: dict, prefs_doc: dict) -> list[str]:
+    from getaway.sweeps import derive_specs
+
+    return [spec["label"] for spec in derive_specs(trip, prefs_doc) if spec["kind"] == "search"]
 
 
 def _max_finalists(plan: dict) -> int:
@@ -71,7 +77,18 @@ def shortlist(slug: str, gateway: bool = False, now: Callable[[], dt.datetime] =
     )
     considered = len(rows)
 
-    origins = set(plan["origins"])
+    search_labels = _search_labels(trip, prefs_doc)
+    observed = (
+        {
+            row["origin"]
+            for row in store.query_availability(
+                trip_slug=slug, labels=search_labels, kinds=["search"], cabin=cabin_letter
+            )
+        }
+        if search_labels
+        else set()
+    )
+    origins = registry.expand_origins(plan["origins"]) | observed
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
     soft = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "soft"}
     ceiling = plan.get("mileage_ceiling")

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterable
 from functools import cache
 from importlib.resources import files
 from typing import Any
@@ -77,6 +78,14 @@ def expand_region(code: str) -> list[str]:
     if airports is None:
         raise NoData(f"region {code} has no local airport list")
     return airports
+
+
+def expand_origins(tokens: Iterable[str]) -> set[str]:
+    expanded = set(tokens)
+    codes = {row["code"] for row in regions()}
+    for token in sorted(expanded & codes):
+        expanded.update(expand_region(token))
+    return expanded
 
 
 def factor_ids() -> list[str]:

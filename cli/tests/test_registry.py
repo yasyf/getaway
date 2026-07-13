@@ -20,7 +20,19 @@ FACTOR_IDS = [
     "trip_credits",
 ]
 
-WST_AIRPORTS = ["SFO", "SJC", "SAN", "PDX", "DEN", "YVR", "LAS", "SLC"]
+WST_AIRPORTS = [
+    "SFO",
+    "SJC",
+    "SAN",
+    "PDX",
+    "DEN",
+    "YVR",
+    "LAS",
+    "SLC",
+    "LAX",
+    "SEA",
+    "PHX",
+]
 
 
 def test_program_count_is_twenty_eight() -> None:
@@ -55,8 +67,32 @@ def test_every_seat_quality_row_has_product_key() -> None:
     assert all("product" in row for row in rows)
 
 
-def test_expand_region_returns_documented_list() -> None:
+def test_expand_region_returns_merged_floor() -> None:
     assert registry.expand_region("WST") == WST_AIRPORTS
+
+
+@pytest.mark.parametrize(
+    ("tokens", "expected"),
+    [
+        pytest.param(["SFO", "JFK"], {"SFO", "JFK"}, id="literals"),
+        pytest.param(["WST"], {"WST", *WST_AIRPORTS}, id="region"),
+        pytest.param(
+            ["WST", "JFK"], {"WST", "JFK", *WST_AIRPORTS}, id="literal-beside-region"
+        ),
+        pytest.param(
+            ["SEA"],
+            {"SEA", "SIN", "KUL", "BKK", "SGN", "HAN", "MNL", "CGK", "DPS"},
+            id="iata-collision-keeps-literal",
+        ),
+    ],
+)
+def test_expand_origins(tokens: list[str], expected: set[str]) -> None:
+    assert registry.expand_origins(tokens) == expected
+
+
+def test_expand_origins_null_airports_region_raises() -> None:
+    with pytest.raises(registry.NoData):
+        registry.expand_origins(["SFO", "QAF"])
 
 
 def test_expand_region_without_airports_raises() -> None:

@@ -159,6 +159,8 @@ def _validate_bucket(bucket: object) -> None:
 
 def _validate_plan(plan: object, merged: dict) -> None:
     plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
+    if "origins" in plan:
+        require_str_list(plan["origins"], "plan.origins")
     if "round_trip" in plan and not isinstance(plan["round_trip"], bool):
         raise UsageError("plan.round_trip must be a boolean")
     if "buckets" in plan:

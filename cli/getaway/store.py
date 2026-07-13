@@ -244,6 +244,7 @@ class Store:
         direct_only: bool = False,
         trip_slug: str | None = None,
         labels: Iterable[str] | None = None,
+        kinds: Iterable[str] | None = None,
     ) -> list[Row]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -251,20 +252,25 @@ class Store:
         dests = list(dests) if dests is not None else None
         sources = list(sources) if sources is not None else None
         labels = list(labels) if labels is not None else None
+        kinds = list(kinds) if kinds is not None else None
         if trip_slug is not None:
             placeholders = ",".join("?" for _ in labels) if labels else ""
             label_clause = f"AND s.label IN ({placeholders})" if labels else ""
+            kind_placeholders = ",".join("?" for _ in kinds) if kinds else ""
+            kind_clause = f"AND s.kind IN ({kind_placeholders})" if kinds else ""
             # Only the latest sweep per (trip_slug, label) counts: a refreshed
             # sweep's smaller result set must supersede the prior one, not union.
             clauses.append(
                 "a.id IN (SELECT sr.availability_id FROM sweep_rows sr "
                 "WHERE sr.sweep_id IN ("
                 "SELECT MAX(s.id) FROM sweeps s "
-                f"WHERE s.trip_slug = ? {label_clause} GROUP BY s.label))"
+                f"WHERE s.trip_slug = ? {label_clause} {kind_clause} GROUP BY s.label))"
             )
             params.append(trip_slug)
             if labels:
                 params.extend(labels)
+            if kinds:
+                params.extend(kinds)
         if origins:
             clauses.append(f"a.origin IN ({','.join('?' for _ in origins)})")
             params.extend(origins)

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from _api import api_row, seed
 
-from getaway import prefs, shortlist, trips
+from getaway import prefs, registry, shortlist, trips
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 SLUG = "2026-09-warm"
@@ -86,22 +86,98 @@ def run_onward(slug: str, gateway_cands: list[dict], onward_rows: list[dict]) ->
 def test_direct_mode_filters_origin_outside_plan(base: str) -> None:
     # A dest-region program sweep can return rows from any origin; a row not departing an origin
     # in plan.origins is infeasible and must be dropped even when it is the cheapest.
+    set_plan(base, program_sweeps=[{"source": "united", "dest_region": "Asia"}])
     rows = [
         api_row("HOME", "SFO", "NRT", "2026-09-05", "united", biz("80000")),
         api_row("FOREIGN", "FRA", "NRT", "2026-09-06", "united", biz("70000")),
     ]
-    doc = run(base, rows)
+    seed(base, "united-asia", "availability", rows, clock())
+
+    doc = shortlist.shortlist(base, now=clock())
+
     assert ids(doc) == ["HOME"]
 
 
-def test_gateway_mode_filters_origin_outside_plan(base: str) -> None:
-    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+def test_direct_mode_expands_region_code_origins(base: str) -> None:
+    set_plan(
+        base,
+        origins=["WST", "JFK"],
+        program_sweeps=[{"source": "united", "dest_region": "Asia"}],
+    )
     rows = [
-        api_row("G-HOME", "SFO", "NRT", "2026-09-05", "united", biz("80000")),
-        api_row("G-FOREIGN", "FRA", "NRT", "2026-09-06", "united", biz("70000")),
+        api_row("REGION", "LAX", "NRT", "2026-09-05", "united", biz("80000")),
+        api_row("LITERAL", "JFK", "NRT", "2026-09-06", "united", biz("70000")),
+        api_row("FOREIGN", "FRA", "NRT", "2026-09-07", "united", biz("60000")),
     ]
+    seed(base, "united-asia", "availability", rows, clock())
+
+    doc = shortlist.shortlist(base, now=clock())
+
+    assert ids(doc) == ["LITERAL", "REGION"]
+    assert doc["considered"] == 3
+
+
+def test_gateway_mode_expands_region_code_origins(base: str) -> None:
+    set_plan(
+        base,
+        origins=["WST"],
+        hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3},
+    )
+    rows = [api_row("REGION", "LAX", "NRT", "2026-09-05", "united", biz("80000"))]
+
     doc = run(base, rows, gateway=True, label="gateways")
-    assert ids(doc) == ["G-HOME"]
+
+    assert ids(doc) == ["REGION"]
+
+
+def test_observed_origins_supplement_registry(base: str) -> None:
+    set_plan(
+        base,
+        origins=["WST"],
+        program_sweeps=[{"source": "united", "dest_region": "Hawaii"}],
+    )
+    observed = api_row(
+        "OBSERVED",
+        "BUR",
+        "NRT",
+        "2026-09-05",
+        "united",
+        {"J": {"mileage": "0", "available": False}},
+    )
+    seed(base, "asia", "search", [observed], clock())
+    rows = [
+        api_row("DRIFT", "BUR", "HNL", "2026-09-06", "united", biz("80000")),
+        api_row("FOREIGN", "PHL", "HNL", "2026-09-07", "united", biz("70000")),
+    ]
+    seed(base, "united-hawaii", "availability", rows, clock())
+
+    doc = shortlist.shortlist(base, now=clock())
+
+    assert ids(doc) == ["DRIFT"]
+
+
+def test_observed_origins_ignore_availability_sweep_under_colliding_label(base: str) -> None:
+    # A bucket named like a program-sweep label makes the two specs share one label;
+    # the availability sweep's arbitrary origins must not feed the observed set.
+    set_plan(
+        base,
+        origins=["WST"],
+        buckets=[{"name": "united-asia", "dests": DESTS}],
+        program_sweeps=[{"source": "united", "dest_region": "Asia"}],
+    )
+    rows = [api_row("STOWAWAY", "PHL", "NRT", "2026-09-05", "united", biz("80000"))]
+    seed(base, "united-asia", "availability", rows, clock())
+
+    doc = shortlist.shortlist(base, now=clock())
+
+    assert ids(doc) == []
+
+
+def test_region_origin_without_airport_list_raises(base: str) -> None:
+    set_plan(base, origins=["QAF"])
+
+    with pytest.raises(registry.NoData):
+        shortlist.shortlist(base, now=clock())
 
 
 def test_onward_drops_rows_before_earliest_gateway_date(base: str) -> None:

@@ -6,6 +6,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Region pseudo-code origins now expand against both the packaged airport floor and origins observed in search sweeps, preventing valid shortlist rows from being dropped.
+
 ## [1.0.0] - 2026-07-13
 
 The v2 rewrite: the planning engine moves from a shell script plus prose

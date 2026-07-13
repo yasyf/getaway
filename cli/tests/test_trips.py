@@ -270,6 +270,25 @@ def test_plan_allowlist_rejects_unknown_key(ready: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "origins",
+    [
+        pytest.param("WST", id="bare-string"),
+        pytest.param([1], id="non-string-member"),
+    ],
+)
+def test_plan_origins_shape_validated(ready: Path, origins: object) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match="plan.origins"):
+        trips.set_patch(SLUG, {"plan": {"origins": origins}})
+
+
+def test_plan_origins_string_list_accepted(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(SLUG, {"plan": {"origins": ["WST"]}})
+    assert doc["plan"]["origins"] == ["WST"]
+
+
+@pytest.mark.parametrize(
     "name",
     [
         pytest.param("week_end", id="underscore-breaks-artifact-regex"),
