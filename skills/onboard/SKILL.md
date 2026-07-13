@@ -1,14 +1,15 @@
 ---
 name: onboard
-description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, status goals, trip credits (airline eCredits, vouchers, companion certificates), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
+description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, airline and hotel points balances, elite statuses, status goals, travel instruments (airline eCredits, vouchers, companion certificates, hotel free-night certificates), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
 allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Bash(uv:*), Agent
 ---
 
 # onboard
 
-Onboarding collects the user's airports, balances, elite statuses,
-status goals, trip credits, travel documents — passports, residency,
-standing visas — and avoid lists and writes them in one pass. It is
+Onboarding collects the user's airports, balances — airline and hotel
+programs alike — elite statuses, status goals, travel instruments,
+travel documents — passports, residency, standing visas — and avoid
+lists and writes them in one pass. It is
 optional: the user may skip it and plan on the neutral template. The
 CLI shorthand throughout:
 
@@ -34,7 +35,7 @@ form is never delegated.
 
 This section is the Gmail subagent's brief. Spawn it with the chosen
 account and the tally-narrowed `from:` list; it returns
-`{programs, statuses, balances, credits, home_airport,
+`{programs, statuses, balances, instruments, home_airport,
 origin_candidates, document_signals, notes}` as JSON. Query 1 runs at
 the main level first, so the tally can seed both gatherers.
 
@@ -52,7 +53,7 @@ gatherers spawn — the lone pre-spawn question in this flow.
 Run the six reads below — five headers-first Gmail queries and one
 calendar read — fetching at most 10 message bodies total across
 queries 1–5 per gather.md's body-fetch rule (the flight-history
-fallback and the credits-mining read carry their own budgets: 25 and
+fallback and the instruments-mining read carry their own budgets: 25 and
 10):
 
 1. **Programs, airlines, and banks** — `from:(<every domain from
@@ -97,14 +98,14 @@ fallback and the credits-mining read carry their own budgets: 25 and
    are suggestion material only: they reach the form's document fields
    as label suffixes ("— Gmail: 6 uscis.dhs.gov mails, 'green card'
    subjects"), never as adopted values.
-6. **Trip credits** — the
-   [credits-mining flow](../refresh/gather.md#credits-mining-gmail)
+6. **Travel instruments** — the
+   [instruments-mining flow](../refresh/gather.md#instruments-mining-gmail)
    verbatim: headers-first over the registry domains, its own 10-body
-   budget, returning `credits` as
-   `[{issuer, kind, amount, currency, expires?, evidence}]` with
-   issuer slugs from the registry. Rows reach the form's trip-credits
-   section as label suffixes — mined values are suggestions, adopted
-   only by typing.
+   budget, returning `instruments` as tagged-union rows
+   (`monetary_credit`, `hotel_night_certificate`, `companion_fare`)
+   with issuer and program slugs from the registry. Rows reach the
+   form's travel-instruments section as label suffixes — mined values
+   are suggestions, adopted only by typing.
 
 The flight-history fallback: `from:(<the program domains from
 registry programs --domains>)
@@ -133,14 +134,17 @@ after the spawn reach the form as Gmail-sourced label suffixes — offer
 a second browser pass only when the user wants exact numbers.
 
 Derive the host list automatically: the Gmail-tally programs and
-banks, any programs or banks the user has named, and the keys already
-in `balances.programs`, `statuses`, and `balances.transferable` —
-banks need no special casing, since each host gets its own gatherer
-and session and the shared per-session grant keeps the whole fan-out
-at one tap — mapped to login domains through
-`$CLI registry programs --domains` and `$CLI registry banks`
+banks, any programs, hotels, or banks the user has named, and the
+keys already in `balances.programs`, `statuses`, and
+`balances.transferable` — banks and hotels need no special casing,
+since each host gets its own gatherer and session and the shared
+per-session grant keeps the whole fan-out at one tap — mapped to
+login hosts and `gather_auth` classes through `$CLI registry hosts`
 (gather.md's
 [Program and bank registries](../refresh/gather.md#program-and-bank-registries)).
+Route by class per gather.md's browser read: cookie hosts fan out in
+parallel; token and device-wall hosts ride one sequential Arc-CDP
+gatherer.
 The mechanics — the priming `auth`, the per-host cookie pulls,
 per-site extraction, the failure branches — are gather.md's
 [Browser read](../refresh/gather.md#browser-read).
@@ -179,12 +183,13 @@ This document passes `cc-present push --dry-run`:
     { "id": "layovers-avoid-cities", "type": "input", "label": "Cities never worth a long layover — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
     { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
+    { "id": "balances-hotels", "type": "input", "label": "Hotel programs (program:points, comma-separated)", "placeholder": "hyatt:60000, marriott:120000", "multiline": true },
     { "id": "balances-transferable", "type": "input", "label": "Transferable points (bank:points, comma-separated)", "placeholder": "amex:150000, chase:80000", "multiline": true },
-    { "id": "statuses", "type": "input", "label": "Elite status (program:tier, comma-separated)", "placeholder": "united:1K, alaska:MVP Gold 75K", "multiline": true },
+    { "id": "statuses", "type": "input", "label": "Elite status (program:tier, comma-separated)", "placeholder": "united:1K, hyatt:Globalist", "multiline": true },
     { "id": "sec-status-goals", "type": "section", "title": "Status goals" },
     { "id": "status-goals", "type": "input", "label": "Status targets (program:target:by, comma-separated — by is an ISO date)", "placeholder": "none", "multiline": true },
-    { "id": "sec-credits", "type": "section", "title": "Trip credits", "md": "Credits to add — the placeholder lists what's already on file. One per line: kind:issuer:amount:currency:expires[:note]. kind is voucher, credit, certificate, or companion; issuer is a registry slug; expires is an ISO date." },
-    { "id": "credits-add", "type": "input", "label": "Credits to add (kind:issuer:amount:currency:expires[:note], one per line)", "placeholder": "none", "multiline": true },
+    { "id": "sec-instruments", "type": "section", "title": "Travel instruments", "md": "Instruments to add — the placeholder lists what's already on file. One per line, free text with the expiry date included: a monetary credit (delta eCredit $300 expires 2026-12-31), a hotel free-night certificate (hyatt free night, Category 1-4, expires 2027-01-31), or a companion fare (alaska companion fare expires 2027-06-30)." },
+    { "id": "instruments-add", "type": "input", "label": "Instruments to add (one per line, expiry included)", "placeholder": "none", "multiline": true },
     { "id": "sec-documents", "type": "section", "title": "Travel documents" },
     { "id": "documents-passports", "type": "input", "label": "Passports held (countries, comma-separated)", "placeholder": "none" },
     { "id": "documents-residency", "type": "input", "label": "Residency and long-stay permits (comma-separated — US green card, UK ILR…)", "placeholder": "none" },
@@ -234,13 +239,15 @@ the preference schema differ:
   always send all four fields, merged with the current values — a blank
   field keeps its current subvalue, and a partially answered section
   still sends the full object.
-- Balance answers are `program:points` free text. Parse the points to
+- Balance answers are `program:points` free text — the airline, hotel,
+  and transferable fields all parse the same way. Parse the points to
   integers; resolve names to registry slugs (Alaska is `alaska`,
-  Aeroplan is `aeroplan`, Amex is `amex`). Each pair writes as one
+  Hyatt is `hyatt`, Amex is `amex`). Each pair writes as one
   `$CLI prefs set-balance <slug> <points>` — the CLI validates the
-  slug against the registry and routes it itself, programs to
-  `balances.programs` and banks to `balances.transferable`. No merge
-  dance: untouched balances stay put.
+  slug against the registry and routes it itself, airline and hotel
+  programs to `balances.programs` and banks to
+  `balances.transferable`. No merge dance: untouched balances stay
+  put.
 - Status answers are `program:tier` free text. Resolve program names to
   slugs the same way and keep the tier string verbatim (`1K`,
   `MVP Gold 75K`). Each pair writes as one
@@ -251,14 +258,21 @@ the preference schema differ:
   `{program, target, by}` rows; the whole list rides the scalar patch
   as `status_goals`, and the patch replaces it whole, so send it
   merged with the current rows. A literal `none` clears it to `[]`.
-- Credit answers are `kind:issuer:amount:currency:expires[:note]`
-  lines, one `$CLI prefs credit-add` each. The kind must be `voucher`,
-  `credit`, `certificate`, or `companion`; the issuer must resolve to
-  a registry slug; `--expires` takes only an ISO date — `credit-add`
-  rejects anything else, a mined row missing its expiry included, so
-  the date has to come from the user. This field only adds: blank adds
-  nothing, and the on-file list never shrinks here — removal is
-  `$CLI prefs credit-remove <id>`, run only when the user asks.
+- Instrument answers are free-text lines, one instrument each. Build
+  the tagged-union object per line — `monetary_credit`
+  (`{type, issuer, amount, currency, expires}`),
+  `hotel_night_certificate` (`{type, program, nights, cap, expires}`,
+  the program a hotel slug and `cap` one of
+  `{type: "points", points}` / `{type: "category", category}` /
+  `{type: "anytime"}`), or `companion_fare` (`{type, issuer,
+  expires}`, with no amount field at all) — and write each as one
+  `$CLI prefs instrument-add` with the JSON object on stdin. The CLI
+  generates the `id`, requires the expiry, and rejects unknown types,
+  missing or extra keys, and non-hotel certificate programs — a mined
+  row missing its expiry included, so the date has to come from the
+  user. This field only adds: blank adds nothing, and the on-file
+  list keeps every record — removal is
+  `$CLI prefs instrument-remove <id>`, run only when the user asks.
 - Document answers are comma-separated free text kept verbatim
   (`Canada`, `US green card`, `US B1/B2 to 2030`) — one array per
   field. A blank field keeps the current array; a literal `none` clears
@@ -280,10 +294,14 @@ value. A real write:
 ```bash
 CLI="uv run --project $CLAUDE_PLUGIN_ROOT/cli getaway"
 $CLI prefs set-balance aeroplan 88000
+$CLI prefs set-balance hyatt 60000
 $CLI prefs set-balance amex 150000
 $CLI prefs set-status united 1K
-$CLI prefs credit-add --kind credit --issuer delta --amount 300 \
-  --currency USD --expires 2026-12-31 --note "eCredit from cancelled LAX"
+$CLI prefs instrument-add <<'JSON'
+{"type": "monetary_credit", "issuer": "delta", "amount": 300,
+ "currency": "USD", "expires": "2026-12-31",
+ "note": "eCredit from cancelled LAX"}
+JSON
 $CLI prefs set <<'JSON'
 {"home_airport": "SFO",
  "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
