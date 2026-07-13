@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,8 +16,11 @@ from getaway import paths
 from getaway.constants import EXIT_NEGATIVE, EXIT_NO_DATA
 
 APPLICATION_ID = 0x47544157  # 'GTAW'
-USER_VERSION = 1
+USER_VERSION = 2
 BUSY_TIMEOUT_MS = 5000
+# A reservation older than this is an abandoned in-flight call (the process died
+# mid-request); reserve prunes it so a crash can't lock quota below the floor forever.
+QUOTA_RESERVATION_TTL = dt.timedelta(minutes=5)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS availability (
@@ -75,6 +79,11 @@ CREATE TABLE IF NOT EXISTS quota_events (
     remaining INTEGER NOT NULL,
     recorded_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS quota_reservations (
+    token TEXT PRIMARY KEY,
+    reserved_at TEXT NOT NULL
+);
 """
 
 _DURATION_PATTERN = re.compile(r"^(\d+)([hd])$")
@@ -86,6 +95,10 @@ Sweep = dict[str, Any]
 
 class NoData(Exception):
     """A cache lookup found no rows where at least one was required."""
+
+
+class QuotaFloorError(Exception):
+    """Reserving a call would draw the seats.aero allowance below the floor."""
 
 
 def _utcnow() -> dt.datetime:
@@ -143,12 +156,13 @@ def connect(path: Path, now: Clock = _utcnow) -> Store:
             sidecar = Path(str(path) + suffix)
             if sidecar.exists():
                 sidecar.chmod(0o600)
-    return Store(conn, now=now)
+    return Store(conn, path, now=now)
 
 
 class Store:
-    def __init__(self, conn: sqlite3.Connection, now: Clock = _utcnow) -> None:
+    def __init__(self, conn: sqlite3.Connection, path: Path, now: Clock = _utcnow) -> None:
         self._conn = conn
+        self._path = path
         self._now = now
 
     def ingest(self, rows: Sequence[Row], sweep: Sweep | None = None) -> dict[str, int]:
@@ -341,26 +355,101 @@ class Store:
         )
         self._conn.commit()
 
+    def reserve_quota(self, floor: int) -> str:
+        """Claim one call's worth of quota, refusing if it would cross the floor.
+
+        Runs a short read-modify-write under the store lock — never spanning the
+        HTTP call — so two processes cannot jointly draw the allowance below
+        ``floor``. The reservation counts against every other in-flight caller
+        until ``reconcile_quota`` releases it. When today's allowance is not yet
+        known (a fresh day, or the first call ever), a lone caller is admitted so
+        the response header can teach it, but a concurrent second caller is
+        refused until that bootstrap reconciles — two callers admitting under an
+        unknown quota could otherwise jointly overshoot the floor. Raises
+        ``QuotaFloorError`` otherwise.
+        """
+        token = uuid.uuid4().hex
+        with paths.locked(self._path):
+            self._prune_stale_reservations()
+            remaining = self._today_remaining()
+            in_flight = self._conn.execute(
+                "SELECT COUNT(*) FROM quota_reservations"
+            ).fetchone()[0]
+            if remaining is None:
+                if in_flight:
+                    raise QuotaFloorError(
+                        "seats.aero quota unknown; a bootstrap call is in flight"
+                    )
+            elif remaining - (in_flight + 1) < floor:
+                raise QuotaFloorError(
+                    f"seats.aero quota floor {floor} reached: {remaining} remaining, "
+                    f"{in_flight} in flight"
+                )
+            self._conn.execute(
+                "INSERT INTO quota_reservations (token, reserved_at) VALUES (?, ?)",
+                (token, self._now().isoformat()),
+            )
+            self._conn.commit()
+        return token
+
+    def reconcile_quota(self, token: str, endpoint: str, remaining: int | None) -> None:
+        """Release a reservation and fold in the response's quota header.
+
+        A second short critical section, disjoint from the HTTP call. Recording a
+        header is monotonic by construction: ``latest_quota`` and ``reserve_quota``
+        read the day's *minimum* recorded remaining, so an out-of-order response
+        carrying a staler (higher) count can never restore quota.
+        """
+        with paths.locked(self._path):
+            self._conn.execute("DELETE FROM quota_reservations WHERE token = ?", (token,))
+            if remaining is not None:
+                self._conn.execute(
+                    "INSERT INTO quota_events (endpoint, remaining, recorded_at) VALUES (?, ?, ?)",
+                    (endpoint, remaining, self._now().isoformat()),
+                )
+            self._conn.commit()
+
     def latest_quota(self) -> Row:
-        # Order by recorded_at, not insertion id: a slower response recorded
-        # later can carry a staler (higher) remaining count. Tie-break to the
-        # lower remaining so a concurrent burst reports the conservative value.
-        row = self._conn.execute(
+        # The allowance only decreases within a UTC day, so the day's minimum
+        # recorded remaining is the conservative truth: an out-of-order response
+        # with a staler (higher) count can't raise it.
+        today = self._conn.execute(
+            "SELECT endpoint, remaining, recorded_at FROM quota_events "
+            "WHERE recorded_at >= ? ORDER BY remaining ASC, recorded_at DESC LIMIT 1",
+            (self._day_start().isoformat(),),
+        ).fetchone()
+        if today is not None:
+            return {
+                "endpoint": today["endpoint"],
+                "remaining": today["remaining"],
+                "recorded_at": today["recorded_at"],
+                "reset": False,
+            }
+        # No event today: the midnight-UTC reset means the last known count no
+        # longer reflects the allowance, so flag it and let the next call relearn.
+        latest = self._conn.execute(
             "SELECT endpoint, remaining, recorded_at FROM quota_events "
             "ORDER BY recorded_at DESC, remaining ASC LIMIT 1"
         ).fetchone()
-        if row is None:
+        if latest is None:
             raise NoData("no quota events recorded")
-        recorded_at = row["recorded_at"]
-        # The seats.aero allowance resets at midnight UTC, so an event from a
-        # prior UTC day no longer reflects today's remaining allowance.
-        reset = dt.datetime.fromisoformat(recorded_at) < self._day_start()
         return {
-            "endpoint": row["endpoint"],
-            "remaining": row["remaining"],
-            "recorded_at": recorded_at,
-            "reset": reset,
+            "endpoint": latest["endpoint"],
+            "remaining": latest["remaining"],
+            "recorded_at": latest["recorded_at"],
+            "reset": True,
         }
+
+    def _today_remaining(self) -> int | None:
+        row = self._conn.execute(
+            "SELECT MIN(remaining) AS remaining FROM quota_events WHERE recorded_at >= ?",
+            (self._day_start().isoformat(),),
+        ).fetchone()
+        return row["remaining"]
+
+    def _prune_stale_reservations(self) -> None:
+        cutoff = (self._now() - QUOTA_RESERVATION_TTL).isoformat()
+        self._conn.execute("DELETE FROM quota_reservations WHERE reserved_at < ?", (cutoff,))
 
     def _day_start(self) -> dt.datetime:
         return self._now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -526,9 +615,7 @@ def quota_check(floor: int) -> None:
         raise SystemExit(EXIT_NO_DATA) from err
     remaining = latest["remaining"]
     if latest["reset"]:
-        click.echo(
-            "quota allowance reset at midnight UTC; last event predates today", err=True
-        )
+        click.echo("quota allowance reset at midnight UTC; last event predates today", err=True)
         click.echo(json.dumps({"remaining": remaining, "floor": floor, "ok": True, "reset": True}))
         return
     if remaining < floor:

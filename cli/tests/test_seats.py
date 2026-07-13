@@ -1,5 +1,8 @@
 import datetime as dt
+import fcntl
 import json
+import os
+import sqlite3
 import types
 from pathlib import Path
 
@@ -8,10 +11,10 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from getaway import paths, seats, store
-from getaway.constants import EXIT_AUTH, EXIT_NO_DATA, EXIT_OK
+from getaway import paths, prefs, seats, store
+from getaway.constants import EXIT_AUTH, EXIT_NEGATIVE, EXIT_NO_DATA, EXIT_OK
 from getaway.seats import AuthError, SeatsClient
-from getaway.store import NoData
+from getaway.store import NoData, QuotaFloorError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -66,9 +69,7 @@ def test_search_second_request_carries_cursor_and_skip(client: SeatsClient) -> N
 @respx.mock
 def test_search_respects_page_budget(client: SeatsClient) -> None:
     pages = load("search_page.json")
-    respx.get(SEARCH_URL).mock(
-        side_effect=[httpx.Response(200, json=pages["page1"])]
-    )
+    respx.get(SEARCH_URL).mock(side_effect=[httpx.Response(200, json=pages["page1"])])
     rows = client.search(["SFO"], ["NRT"], pages=1)
     assert [row["ID"] for row in rows] == ["AAA", "BBB"]
     assert respx.get(SEARCH_URL).call_count == 1
@@ -243,6 +244,13 @@ def test_auth_status_raises_auth_error_without_key(client: SeatsClient, status: 
     assert "test-key" not in str(excinfo.value)
 
 
+def _write_prefs_op_ref(op_ref: str) -> None:
+    # A real v2 prefs doc, not a bare {"op_ref": ...} stub: the op_ref read now
+    # routes through the loader, which rejects any pre-v2 (legacy) shape.
+    prefs.init()
+    prefs.set_patch({"op_ref": op_ref})
+
+
 def test_env_key_takes_precedence_over_op_ref(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -257,12 +265,31 @@ def test_env_key_takes_precedence_over_op_ref(
     assert seats.resolve_api_key() == "env-secret-key"
 
 
-def test_op_ref_resolves_via_op_read(
+def test_env_key_resolves_without_a_prefs_file(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "env-secret-key")
+    assert not paths.prefs_path().exists()  # onboarding skipped: no prefs on disk
+    assert seats.resolve_api_key() == "env-secret-key"  # op_ref read tolerates absence
+
+
+def test_onboarded_without_op_ref_and_no_env_raises_auth_error(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
-    paths.prefs_path().parent.mkdir(parents=True, exist_ok=True)
-    paths.prefs_path().write_text(json.dumps({"op_ref": "op://Vault/seats/credential"}))
+    prefs.init()
+    # A v2 doc where op_ref is unset: the key may be absent entirely, so the read
+    # must .get() it (None -> friendly AuthError), never subscript it (KeyError).
+    doc = json.loads(paths.prefs_path().read_text())
+    del doc["op_ref"]
+    paths.prefs_path().write_text(json.dumps(doc))
+    with pytest.raises(AuthError):
+        seats.resolve_api_key()
+
+
+def test_op_ref_resolves_via_op_read(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
+    _write_prefs_op_ref("op://Vault/seats/credential")
     captured: dict[str, list[str]] = {}
 
     def _fake_run(argv: list[str], **_kwargs: object) -> object:
@@ -274,12 +301,9 @@ def test_op_ref_resolves_via_op_read(
     assert captured["argv"] == ["op", "read", "op://Vault/seats/credential"]
 
 
-def test_op_ref_prefix_is_enforced(
-    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_op_ref_prefix_is_enforced(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
-    paths.prefs_path().parent.mkdir(parents=True, exist_ok=True)
-    paths.prefs_path().write_text(json.dumps({"op_ref": "Vault/seats/credential"}))
+    _write_prefs_op_ref("Vault/seats/credential")
 
     def _forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("op must not run for a non-op:// reference")
@@ -298,12 +322,29 @@ def test_missing_credentials_raise_auth_error(
         seats.resolve_api_key()
 
 
-def test_op_failure_does_not_leak_reference(
+def test_legacy_prefs_doc_rejected_when_reading_op_ref(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
     paths.prefs_path().parent.mkdir(parents=True, exist_ok=True)
-    paths.prefs_path().write_text(json.dumps({"op_ref": "op://Vault/seats/credential"}))
+    # Pre-v2 shape: carries the removed `credits` key, lacks travel_instruments.
+    paths.prefs_path().write_text(
+        json.dumps({"op_ref": "op://Vault/seats/credential", "credits": []})
+    )
+
+    def _forbidden(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("op must not run for a legacy prefs doc")
+
+    monkeypatch.setattr(seats.subprocess, "run", _forbidden)
+    with pytest.raises(paths.StateConflictError):
+        seats.resolve_api_key()
+
+
+def test_op_failure_does_not_leak_reference(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
+    _write_prefs_op_ref("op://Vault/seats/credential")
 
     def _fail(*_args: object, **_kwargs: object) -> object:
         return types.SimpleNamespace(
@@ -325,8 +366,7 @@ def test_malformed_key_rejected_without_leaking(
         monkeypatch.setenv(seats.API_KEY_ENV, bad_key)
     else:
         monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
-        paths.prefs_path().parent.mkdir(parents=True, exist_ok=True)
-        paths.prefs_path().write_text(json.dumps({"op_ref": "op://Vault/seats/credential"}))
+        _write_prefs_op_ref("op://Vault/seats/credential")
         monkeypatch.setattr(
             seats.subprocess,
             "run",
@@ -386,9 +426,7 @@ def test_expand_command_no_matching_cabin_exits_no_data(
     assert result.exit_code == EXIT_NO_DATA
 
 
-def test_expand_command_requires_cabin(
-    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_expand_command_requires_cabin(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
     result = CliRunner().invoke(seats.expand_cmd, ["AAA"])
     assert result.exit_code != EXIT_OK
@@ -410,3 +448,124 @@ def test_search_command_without_credentials_exits_auth(
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
     result = CliRunner().invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
     assert result.exit_code == EXIT_AUTH
+
+
+def _reservations(db_path: Path) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute("SELECT COUNT(*) FROM quota_reservations").fetchone()[0]
+    finally:
+        conn.close()
+
+
+@respx.mock
+def test_search_normalizes_string_mileage_to_int(client: SeatsClient) -> None:
+    respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(200, json=load("search_page.json")["page1"])
+    )
+    rows = client.search(["SFO"], ["NRT"])
+    row = next(r for r in rows if r["ID"] == "AAA")
+    assert row["YMileageCost"] == 35000
+    assert isinstance(row["YMileageCost"], int)
+    assert row["JMileageCost"] == 80000
+
+
+def test_client_sets_an_explicit_bounded_timeout(tmp_store: store.Store) -> None:
+    timeout = SeatsClient(tmp_store, api_key="test-key")._client.timeout
+    assert timeout == seats.HTTP_TIMEOUT
+    # bounded on every phase, never None (unbounded), so a hung request cannot
+    # outlive its quota reservation.
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (30.0, 30.0, 30.0, 30.0)
+
+
+@respx.mock
+def test_store_lock_is_free_during_the_http_request(client: SeatsClient, tmp_path: Path) -> None:
+    lock_path = str(tmp_path / "cache.db.lock")
+    observed: list[str] = []
+
+    def during_request(_request: httpx.Request) -> httpx.Response:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            # A non-blocking acquire raises if the reserve section still holds the
+            # lock; success proves the lock was released before the network call.
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            observed.append("free")
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+        return httpx.Response(
+            200, json=load("routes.json"), headers={seats.RATE_LIMIT_HEADER: "500"}
+        )
+
+    respx.get(ROUTES_URL).mock(side_effect=during_request)
+    client.routes("aeroplan")
+    assert observed == ["free"]
+
+
+@respx.mock
+def test_client_refuses_below_floor_before_any_http(tmp_store: store.Store) -> None:
+    tmp_store.record_quota("/search", 50)
+    client = SeatsClient(tmp_store, api_key="test-key", floor=100)
+    route = respx.get(ROUTES_URL).mock(return_value=httpx.Response(200, json=load("routes.json")))
+    with pytest.raises(QuotaFloorError):
+        client.routes("aeroplan")
+    assert route.call_count == 0  # reservation is refused before the network call
+
+
+@respx.mock
+def test_reservation_released_after_http_error(client: SeatsClient, tmp_path: Path) -> None:
+    respx.get(ROUTES_URL).mock(return_value=httpx.Response(503, json={"error": "unavailable"}))
+    with pytest.raises(httpx.HTTPStatusError):
+        client.routes("aeroplan")
+    assert _reservations(tmp_path / "cache.db") == 0
+
+
+@respx.mock
+def test_reservation_released_after_transport_error(client: SeatsClient, tmp_path: Path) -> None:
+    respx.get(ROUTES_URL).mock(side_effect=httpx.ConnectError("boom"))
+    with pytest.raises(httpx.ConnectError):
+        client.routes("aeroplan")
+    assert _reservations(tmp_path / "cache.db") == 0
+
+
+@respx.mock
+def test_bootstrap_call_proceeds_despite_floor_and_learns(tmp_store: store.Store) -> None:
+    client = SeatsClient(tmp_store, api_key="test-key", floor=999)
+    respx.get(ROUTES_URL).mock(
+        return_value=httpx.Response(
+            200, json=load("routes.json"), headers={seats.RATE_LIMIT_HEADER: "500"}
+        )
+    )
+    client.routes("aeroplan")  # unknown quota bootstraps regardless of the floor
+    assert tmp_store.latest_quota()["remaining"] == 500
+
+
+@respx.mock
+def test_search_command_quota_floor_zero_spends_below_default(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    store.connect(paths.cache_db()).record_quota("/search", 50)  # below the default floor of 100
+    respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200, json=load("search_page.json")["page1"], headers={seats.RATE_LIMIT_HEADER: "49"}
+        )
+    )
+    result = CliRunner().invoke(
+        seats.search_cmd, ["--origin", "SFO", "--dest", "NRT", "--quota-floor", "0"]
+    )
+    assert result.exit_code == EXIT_OK
+
+
+@respx.mock
+def test_search_command_default_floor_blocks_spend_below_floor(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    store.connect(paths.cache_db()).record_quota("/search", 50)
+    route = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(200, json=load("search_page.json")["page1"])
+    )
+    result = CliRunner().invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
+    assert result.exit_code == EXIT_NEGATIVE
+    assert route.call_count == 0

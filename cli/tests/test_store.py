@@ -1,9 +1,13 @@
 import datetime as dt
 import json
+import os
 import sqlite3
 import stat
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -11,7 +15,9 @@ from click.testing import CliRunner
 
 from getaway import store
 from getaway.constants import EXIT_NEGATIVE, EXIT_NO_DATA, EXIT_OK
-from getaway.store import NoData, Store
+from getaway.store import NoData, QuotaFloorError, Store
+
+RUNNER = str(Path(__file__).parent / "_runner.py")
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 
@@ -213,8 +219,16 @@ def _ids(rows: list[dict]) -> set[tuple[str, str]]:
     [
         pytest.param(
             {"origins": ["SFO"]},
-            {("R1", "Y"), ("R1", "W"), ("R1", "J"), ("R1", "F"),
-             ("R3", "Y"), ("R3", "W"), ("R3", "J"), ("R3", "F")},
+            {
+                ("R1", "Y"),
+                ("R1", "W"),
+                ("R1", "J"),
+                ("R1", "F"),
+                ("R3", "Y"),
+                ("R3", "W"),
+                ("R3", "J"),
+                ("R3", "F"),
+            },
             id="origins-filter",
         ),
         pytest.param(
@@ -224,8 +238,16 @@ def _ids(rows: list[dict]) -> set[tuple[str, str]]:
         ),
         pytest.param(
             {"date_start": "2026-09-05"},
-            {("R2", "Y"), ("R2", "W"), ("R2", "J"), ("R2", "F"),
-             ("R3", "Y"), ("R3", "W"), ("R3", "J"), ("R3", "F")},
+            {
+                ("R2", "Y"),
+                ("R2", "W"),
+                ("R2", "J"),
+                ("R2", "F"),
+                ("R3", "Y"),
+                ("R3", "W"),
+                ("R3", "J"),
+                ("R3", "F"),
+            },
             id="date-start-filter",
         ),
         pytest.param(
@@ -475,3 +497,166 @@ def test_quota_check_without_events_exits_no_data(getaway_home: Path) -> None:
     store.connect(getaway_home / "cache.db", now=_clock(FROZEN))
     result = CliRunner().invoke(store.quota_cmd, ["check", "--floor", "100"])
     assert result.exit_code == EXIT_NO_DATA
+
+
+def _reservations(db_path: Path) -> int:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute("SELECT COUNT(*) FROM quota_reservations").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_reserve_bootstrap_admits_lone_caller_regardless_of_floor(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    # No recorded remaining today: a lone first caller proceeds to learn the
+    # header whatever the floor, tracked as in flight.
+    st.reserve_quota(999)
+    assert _reservations(db_path) == 1
+
+
+def test_reserve_serializes_concurrent_bootstrap(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    # Two first-ever callers under an unknown quota must not both admit: the
+    # second sees the bootstrap in flight and is refused, not double-spent.
+    st.reserve_quota(100)
+    with pytest.raises(QuotaFloorError) as excinfo:
+        st.reserve_quota(100)
+    assert "in flight" in str(excinfo.value)
+    assert _reservations(db_path) == 1  # the refused bootstrap left no row
+
+
+def test_reserve_governed_by_floor_after_bootstrap_reconciles(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    token = st.reserve_quota(100)  # bootstrap admits under an unknown quota
+    st.reconcile_quota(token, "/search", 500)  # header teaches remaining=500
+    st.reserve_quota(100)  # now the learned floor governs, not the bootstrap rule
+    assert _reservations(db_path) == 1
+    assert st.latest_quota()["remaining"] == 500
+
+
+def test_reserve_refuses_the_call_that_would_cross_the_floor(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 101)
+    st.reserve_quota(100)  # 101 - 1 == 100, still at the floor
+    with pytest.raises(QuotaFloorError) as excinfo:
+        st.reserve_quota(100)  # 101 - 2 == 99, below the floor
+    assert "floor 100" in str(excinfo.value)
+    assert _reservations(db_path) == 1  # the refused reservation left no row
+
+
+def test_reserve_counts_reservations_against_the_floor(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 103)
+    for _ in range(3):
+        st.reserve_quota(100)  # 103 down to exactly 100
+    with pytest.raises(QuotaFloorError):
+        st.reserve_quota(100)
+    assert _reservations(db_path) == 3
+
+
+@pytest.mark.parametrize(
+    ("remaining", "floor", "allowed"),
+    [
+        pytest.param(50, 0, True, id="floor-zero-spends-below-default"),
+        pytest.param(1, 0, True, id="floor-zero-spends-last-unit"),
+        pytest.param(50, 100, False, id="default-floor-blocks-below"),
+    ],
+)
+def test_reserve_floor_policy(db_path: Path, remaining: int, floor: int, allowed: bool) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", remaining)
+    if allowed:
+        st.reserve_quota(floor)
+        assert _reservations(db_path) == 1
+    else:
+        with pytest.raises(QuotaFloorError):
+            st.reserve_quota(floor)
+        assert _reservations(db_path) == 0
+
+
+def test_reconcile_releases_reservation_and_records_header(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    token = st.reserve_quota(100)
+    st.reconcile_quota(token, "/search", 500)
+    assert _reservations(db_path) == 0
+    assert st.latest_quota()["remaining"] == 500
+
+
+def test_reconcile_without_header_releases_without_recording(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    token = st.reserve_quota(100)
+    st.reconcile_quota(token, "/routes", None)
+    assert _reservations(db_path) == 0
+    assert st.quota_events() == []
+
+
+def test_out_of_order_header_cannot_restore_quota(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 800)
+    st.record_quota("/search", 900)  # a slower, staler response arriving later
+    assert st.latest_quota()["remaining"] == 800  # the day minimum, never restored
+
+
+def test_reserve_reads_conservative_remaining_under_out_of_order(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 101)
+    st.record_quota("/search", 200)  # out-of-order high value must not lift the floor check
+    with pytest.raises(QuotaFloorError):
+        st.reserve_quota(101)  # min(101, 200) - 1 == 100 < 101
+
+
+def test_reserve_prunes_abandoned_reservations(db_path: Path) -> None:
+    stale_moment = FROZEN - store.QUOTA_RESERVATION_TTL - dt.timedelta(seconds=1)
+    dead = store.connect(db_path, now=_clock(stale_moment))
+    dead.record_quota("/search", 101)
+    dead.reserve_quota(100)  # a reservation the crashed process never released
+    live = store.connect(db_path, now=_clock(FROZEN))
+    live.reserve_quota(100)  # allowed only because the abandoned one is pruned
+    assert _reservations(db_path) == 1
+
+
+def test_concurrent_processes_cannot_jointly_cross_the_floor(db_path: Path) -> None:
+    store.connect(db_path).record_quota("/search", 103)  # real clock: 3 calls allowed above 100
+    workers = 8
+    env = os.environ.copy()
+
+    def reserve(_: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, RUNNER, "reserve", str(db_path), "100"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(reserve, range(workers)))
+    reserved = [r for r in results if r.returncode == EXIT_OK]
+    refused = [r for r in results if r.returncode == EXIT_NEGATIVE]
+    assert len(reserved) + len(refused) == workers, [r.stderr for r in results]
+    assert len(reserved) == 3  # exactly remaining - floor calls land; the rest are refused
+    assert _reservations(db_path) == 3
+
+
+def test_concurrent_bootstrap_admits_exactly_one(db_path: Path) -> None:
+    store.connect(db_path)  # schema only: no recorded quota, so every caller bootstraps
+    workers = 8
+    env = os.environ.copy()
+
+    def reserve(_: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, RUNNER, "reserve", str(db_path), "100"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(reserve, range(workers)))
+    reserved = [r for r in results if r.returncode == EXIT_OK]
+    refused = [r for r in results if r.returncode == EXIT_NEGATIVE]
+    assert len(reserved) + len(refused) == workers, [r.stderr for r in results]
+    assert len(reserved) == 1  # only the first bootstrap admits; the rest are refused
+    assert _reservations(db_path) == 1

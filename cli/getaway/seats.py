@@ -12,17 +12,29 @@ from typing import Any
 import click
 import httpx
 
-from getaway import paths
-from getaway.constants import CABIN_PREFIX, EXIT_AUTH, EXIT_NO_DATA
-from getaway.store import NoData, Store, connect, parse_duration
+from getaway import paths, prefs
+from getaway.constants import (
+    CABIN_PREFIX,
+    DEFAULT_QUOTA_FLOOR,
+    EXIT_AUTH,
+    EXIT_NEGATIVE,
+    EXIT_NO_DATA,
+)
+from getaway.store import NoData, QuotaFloorError, Store, connect, parse_duration
 
 BASE_URL = "https://seats.aero/partnerapi"
 AUTH_HEADER = "Partner-Authorization"
 API_KEY_ENV = "SEATS_AERO_API_KEY"
 RATE_LIMIT_HEADER = "X-RateLimit-Remaining"
 DEFAULT_TAKE = 500
+# Bound each request well under the 5-min quota-reservation TTL; a hung socket must
+# free its reservation before the stale-prune cutoff or two callers could double-spend.
+HTTP_TIMEOUT = httpx.Timeout(30.0)
 _OP_PREFIX = "op://"
 _KEY_RE = re.compile(r"[!-~]+")
+# /search and /availability return MileageCost as a string; /trips as an int.
+# Normalize at the client boundary so integers flow everywhere downstream.
+_MILEAGE_FIELDS = tuple(f"{cabin}MileageCost" for cabin in CABIN_PREFIX.values())
 
 Row = dict[str, Any]
 
@@ -43,6 +55,21 @@ def cabin_rows(row: Row) -> list[Row]:
         }
         for cabin in CABIN_PREFIX.values()
     ]
+
+
+def _normalize_availability_row(row: Row) -> Row:
+    for field in _MILEAGE_FIELDS:
+        row[field] = int(row[field])
+    return row
+
+
+def _endpoint(path: str) -> str:
+    return "/" + path.strip("/").split("/")[0]
+
+
+def _remaining_header(response: httpx.Response) -> int | None:
+    remaining = response.headers.get(RATE_LIMIT_HEADER)
+    return int(remaining) if remaining is not None else None
 
 
 def _strip_z(timestamp: str) -> str:
@@ -98,10 +125,9 @@ def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
 
 
 def _prefs_op_ref() -> str | None:
-    path = paths.prefs_path()
-    if not path.exists():
-        return None
-    return json.loads(path.read_text()).get("op_ref")
+    # load_or_empty tolerates a missing file / absent op_ref (both -> None, env
+    # fallback) and rejects a pre-v2 shape loudly.
+    return prefs.load_or_empty().get("op_ref")
 
 
 def _op_read(ref: str) -> str:
@@ -130,10 +156,13 @@ def resolve_api_key() -> str:
 
 
 class SeatsClient:
-    def __init__(self, store: Store, api_key: str | None = None) -> None:
+    def __init__(
+        self, store: Store, api_key: str | None = None, floor: int = DEFAULT_QUOTA_FLOOR
+    ) -> None:
         self._store = store
+        self._floor = floor
         key = api_key if api_key is not None else resolve_api_key()
-        self._client = httpx.Client(headers={AUTH_HEADER: key})
+        self._client = httpx.Client(headers={AUTH_HEADER: key}, timeout=HTTP_TIMEOUT)
 
     def search(
         self,
@@ -201,8 +230,17 @@ class SeatsClient:
         return _normalize_trip(availability_id, payload, cabin)
 
     def _get(self, path: str, params: Row) -> Any:
-        response = self._client.get(f"{BASE_URL}{path}", params=params)
-        self._record_quota(path, response)
+        # Reconcile in finally so a failed request frees its reservation. A lost
+        # response records no header; the next call's MIN-over-today reconcile
+        # self-corrects. Bounded, not a retry gap.
+        endpoint = _endpoint(path)
+        token = self._store.reserve_quota(self._floor)
+        response: httpx.Response | None = None
+        try:
+            response = self._client.get(f"{BASE_URL}{path}", params=params)
+        finally:
+            remaining = _remaining_header(response) if response is not None else None
+            self._store.reconcile_quota(token, endpoint, remaining)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -227,19 +265,12 @@ class SeatsClient:
             for row in page_rows:
                 if row["ID"] not in seen:
                     seen.add(row["ID"])
-                    rows.append(row)
+                    rows.append(_normalize_availability_row(row))
             skip += len(page_rows)
             if not payload.get("hasMore"):
                 break
             cursor = payload["cursor"]
         return rows
-
-    def _record_quota(self, path: str, response: httpx.Response) -> None:
-        remaining = response.headers.get(RATE_LIMIT_HEADER)
-        if remaining is None:
-            return
-        endpoint = "/" + path.strip("/").split("/")[0]
-        self._store.record_quota(endpoint, int(remaining))
 
 
 def _open_store() -> Store:
@@ -267,7 +298,7 @@ def _sweep_spec(
     }
 
 
-def _map_auth(fn: Callable[..., None]) -> Callable[..., None]:
+def _map_errors(fn: Callable[..., None]) -> Callable[..., None]:
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> None:
         try:
@@ -275,6 +306,9 @@ def _map_auth(fn: Callable[..., None]) -> Callable[..., None]:
         except AuthError as err:
             click.echo(str(err), err=True)
             raise SystemExit(EXIT_AUTH) from err
+        except QuotaFloorError as err:
+            click.echo(str(err), err=True)
+            raise SystemExit(EXIT_NEGATIVE) from err
 
     return wrapper
 
@@ -293,7 +327,8 @@ def _map_auth(fn: Callable[..., None]) -> Callable[..., None]:
 @click.option("--pages", type=int, default=1)
 @click.option("--trip")
 @click.option("--label")
-@_map_auth
+@click.option("--quota-floor", type=int, default=DEFAULT_QUOTA_FLOOR)
+@_map_errors
 def search_cmd(
     origins: tuple[str, ...],
     dests: tuple[str, ...],
@@ -308,9 +343,10 @@ def search_cmd(
     pages: int,
     trip: str | None,
     label: str | None,
+    quota_floor: int,
 ) -> None:
     store = _open_store()
-    client = SeatsClient(store)
+    client = SeatsClient(store, floor=quota_floor)
     rows = client.search(
         list(origins),
         list(dests),
@@ -340,7 +376,8 @@ def search_cmd(
 @click.option("--pages", type=int, default=1)
 @click.option("--trip")
 @click.option("--label")
-@_map_auth
+@click.option("--quota-floor", type=int, default=DEFAULT_QUOTA_FLOOR)
+@_map_errors
 def availability_cmd(
     source: str,
     cabin: str | None,
@@ -352,9 +389,10 @@ def availability_cmd(
     pages: int,
     trip: str | None,
     label: str | None,
+    quota_floor: int,
 ) -> None:
     store = _open_store()
-    client = SeatsClient(store)
+    client = SeatsClient(store, floor=quota_floor)
     rows = client.availability(
         source,
         cabin=cabin,
@@ -373,10 +411,13 @@ def availability_cmd(
 @click.argument("source")
 @click.option("--origin-region")
 @click.option("--dest-region")
-@_map_auth
-def routes_cmd(source: str, origin_region: str | None, dest_region: str | None) -> None:
+@click.option("--quota-floor", type=int, default=DEFAULT_QUOTA_FLOOR)
+@_map_errors
+def routes_cmd(
+    source: str, origin_region: str | None, dest_region: str | None, quota_floor: int
+) -> None:
     store = _open_store()
-    client = SeatsClient(store)
+    client = SeatsClient(store, floor=quota_floor)
     rows = client.routes(source)
     if origin_region:
         rows = [row for row in rows if row["OriginRegion"] == origin_region]
@@ -390,8 +431,11 @@ def routes_cmd(source: str, origin_region: str | None, dest_region: str | None) 
 @click.option("--cabin", required=True)
 @click.option("--fresh-within", default="6h")
 @click.option("--refresh", is_flag=True)
-@_map_auth
-def expand_cmd(availability_id: str, cabin: str, fresh_within: str, refresh: bool) -> None:
+@click.option("--quota-floor", type=int, default=DEFAULT_QUOTA_FLOOR)
+@_map_errors
+def expand_cmd(
+    availability_id: str, cabin: str, fresh_within: str, refresh: bool, quota_floor: int
+) -> None:
     """Emit the lowest-mileage bookable itinerary in --cabin for an availability id.
 
     Selects among the /trips itineraries the cheapest one flown entirely in the
@@ -404,7 +448,7 @@ def expand_cmd(availability_id: str, cabin: str, fresh_within: str, refresh: boo
         if cached is not None:
             click.echo(json.dumps(cached))
             return
-    client = SeatsClient(store)
+    client = SeatsClient(store, floor=quota_floor)
     try:
         normalized = client.trip_detail(availability_id, cabin)
     except NoData as err:
