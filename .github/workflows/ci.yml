@@ -44,7 +44,9 @@ jobs:
           jq 'del(.statuses)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
           echo '{"balances": {"programs": {"jetblue": 12000}, "transferable": {}}}' | skills/getaway/getaway.sh prefs-set >/dev/null
           skills/getaway/getaway.sh prefs | jq -e '.balances.programs.jetblue == 12000' >/dev/null
-          for bad in '{"statuses": null}' '{"statuses": false}' '{"statuses": [1]}' '{"balances": {"programs": null}}' '{"balances": {"transferable": null}}'; do
+          echo '{"documents": {"passports": ["Canada"], "residency": ["US green card"], "visas": []}}' | skills/getaway/getaway.sh prefs-set >/dev/null
+          skills/getaway/getaway.sh prefs | jq -e '.documents.passports == ["Canada"] and .documents.residency == ["US green card"] and (.documents.visas | length) == 0' >/dev/null
+          for bad in '{"statuses": null}' '{"statuses": false}' '{"statuses": [1]}' '{"balances": {"programs": null}}' '{"balances": {"transferable": null}}' '{"documents": null}' '{"documents": [1]}' '{"documents": {"passports": []}}' '{"documents": {"passports": "Canada", "residency": [], "visas": []}}' '{"documents": {"passports": [1], "residency": [], "visas": []}}'; do
             before=$(cat "$prefs_file")
             echo "$bad" | skills/getaway/getaway.sh prefs-set >/dev/null 2>&1 && rc=0 || rc=$?
             test "$rc" = 3 || { echo "expected shape-failure exit 3 for $bad, got $rc" >&2; exit 1; }
@@ -59,6 +61,9 @@ jobs:
           test "$rc" = 3 || { echo "expected stale merged-key exit 3, got $rc" >&2; exit 1; }
           test "$(cat "$prefs_file")" = "$before" || { echo "prefs changed after stale-key rejection" >&2; exit 1; }
           jq 'del(.cabin)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          jq 'del(.documents)' "$prefs_file" >"$prefs_file.tmp" && mv "$prefs_file.tmp" "$prefs_file"
+          echo '{"statuses": {"united": "1K"}}' | skills/getaway/getaway.sh prefs-set >/dev/null
+          skills/getaway/getaway.sh prefs | jq -e '.statuses.united == "1K"' >/dev/null
       - name: Plan round-trip
         run: |
           export HOME="$(mktemp -d)"

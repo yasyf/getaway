@@ -44,7 +44,7 @@ defaults:
 ```
 
 ```json
-{"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"statuses":{},"balances":{"programs":{},"transferable":{}},"learnings":[]}
+{"op_ref":null,"home_airport":"SFO","origin_airports":["SFO","SJC","SAN","PDX","DEN","LAS","SLC","YVR"],"avoid_transit":[],"avoid_airlines":[{"code":"ET","name":"Ethiopian Airlines","strength":"soft"}],"statuses":{},"balances":{"programs":{},"transferable":{}},"documents":{"passports":[],"residency":[],"visas":[]},"learnings":[]}
 ```
 
 The keys that steer planning:
@@ -56,6 +56,7 @@ The keys that steer planning:
 | `avoid_airlines` | `{code, name, strength}` objects; `soft` demotes, `hard` drops, and matching keys on `code` |
 | `statuses` | Program slug to elite tier, verbatim (`{"united": "1K"}`); ties on mileage cost break toward these carriers |
 | `balances.programs`, `balances.transferable` | Program slug to points; bank currencies |
+| `documents` | Free-text `passports`, `residency`, and `visas` arrays; personalize the Enrich visa notes and the transit/entry flags — all empty means US-passport phrasing and no Transit pass |
 | `learnings` | Session takeaways; see [Learnings](#learnings) |
 
 Everything here is always-true. Trip-shaped constraints — dates, cabin,
@@ -242,7 +243,7 @@ defaults to read. A `PostToolUse` hook (`hooks/onboard.py`, sibling to
 `reflect.py`) backstops the offer once per session and never blocks.
 
 1. Read the globals with `prefs`: the origin set, `avoid_transit`,
-   `avoid_airlines`, and which programs hold points. Balances bias
+   `avoid_airlines`, `documents`, and which programs hold points. Balances bias
    ordering and feed the
    [affordability annotations](#affordability-and-top-ups); a zero or
    missing balance never removes a program from a sweep or a shortlist.
@@ -281,6 +282,7 @@ Workflow({
               {name: "africa", dests: ["QAF"]}],
     avoidDestinations: ["ICN", "GMP"], avoidTransit: ["IST"],
     avoidAirlines: [{code: "ET", strength: "soft"}],
+    documents: {passports: ["Canada"], residency: ["US green card"], visas: []},
     mileageCeiling: 90000, travelers: 2, maxFinalists: 6,
     vibe: "warm",
     hybrid: {gateways: ["LIS", "MAD", "LHR", "CDG"],
@@ -305,7 +307,11 @@ never derive it from balances. `programSweeps`
 described in step 4.
 `avoidDestinations` takes the plan's `avoid_final_destinations`;
 `avoidTransit` takes the preference of the same name; leave `vibe` out
-to skip enrichment. `hybrid` rides every region- or vibe-scale ask:
+to skip enrichment. `documents` takes the preference of the same name:
+omitted or all-empty, visa notes keep the US-passport phrasing and the
+Transit pass is skipped; with documents on file, finalists and hybrids
+routed through a flagged point return a `transit` array of
+`{airport, risk, transitNote}` flags for the board. `hybrid` rides every region- or vibe-scale ask:
 `gateways` (required, non-empty, concrete IATA — never pseudo-codes)
 is the [gateway set](#gateway-sets); `onwardDests` (optional IATA)
 defaults to the direct shortlist's distinct destinations, top 4;
@@ -383,11 +389,17 @@ steps 4–8 by hand instead.
 8. Enrich when the ask has a vibe ("warm", "beachy"): `WebSearch` for
    seasonal weather, visa rules, and destination color. The API knows
    seats, not sunshine. One `WebSearch` subagent per shortlisted
-   destination; enrichment spends zero API quota. Verify-marked seat
+   destination; enrichment spends zero API quota. Visa notes address
+   the traveler `documents` describes — all arrays empty keeps the
+   US-passport phrasing. Verify-marked seat
    products resolve here too — one `WebSearch` per mixed-fleet
-   finalist, vibe or no vibe.
+   finalist, vibe or no vibe. With documents on file, the Transit pass
+   runs the same way by hand: one `WebSearch` subagent per unique
+   connection airport and per hybrid gateway, flagging the risky ones —
+   a flag never drops a routing.
 9. Present the shortlist as a [cc-present board](#presenting-options) —
-   directs and hybrids together, each with its total-cost line — and
+   directs and hybrids together, each with its total-cost line, plus a
+   "Transit check" section when any option carries transit flags — and
    iterate rounds until the user submits. Log each round's outcome in
    the plan's `decisions`.
 10. Deliver the final plan: per leg, the program, integer miles and exact
@@ -650,6 +662,12 @@ plugin is; every field is documented in
   World — barely business, ranked below every true flat bed"). Pack
   schemas are closed; totals, cash components, affordability, and seat
   verdicts ride the `md` body, never extra fields on a pack block.
+- A "Transit check" `section` block whenever any finalist or hybrid
+  carries transit flags — one line per flagged option: the airport,
+  transit versus entry, the risk, and what to verify ("MAD entry —
+  possible: self-transfer means clearing Schengen immigration; confirm
+  visa-free entry for a Canadian passport"). A flag never pulls an
+  option off the board.
 - One `getaway.itinerary` per expanded finalist, fed only from
   `/trips/{id}`: integer miles, minor-unit taxes plus currency, remaining
   seats, the primary booking link, the row's `UpdatedAt`, and the segments
@@ -681,7 +699,9 @@ A trip is a composition of legs, not one availability row. Every
 region- or vibe-scale plan generates hybrid routings alongside the
 direct awards, and they all compete on the same axis: total cost —
 miles plus taxes plus cash. Any legal composition of legs is fair
-game — invent the shape, then price it.
+game — invent the shape, then price it. A self-transfer gateway on
+separate tickets is an entry point, not a connection — the Transit
+pass flags its entry requirements for the traveler's `documents`.
 
 The levers:
 

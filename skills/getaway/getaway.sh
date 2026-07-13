@@ -139,6 +139,7 @@ prefs_template() {
   "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
   "statuses": {},
   "balances": {"programs": {}, "transferable": {}},
+  "documents": {"passports": [], "residency": [], "visas": []},
   "learnings": []
 }
 JSON
@@ -200,7 +201,7 @@ cmd_prefs_set() {
   jq --argjson patch "$patch" '. + $patch' <<<"$base" >"$tmp"
   extra=$(jq -c --argjson t "$(prefs_template)" '(keys - ($t | keys))' "$tmp")
   [[ "$extra" == "[]" ]] || { echo "prefs-set: merged preferences carry keys absent from the template: $extra; refusing to write" >&2; exit 3; }
-  jq -e 'has("op_ref") and has("home_airport") and ((has("avoid_transit") | not) or (.avoid_transit | type == "array")) and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object"))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
+  jq -e 'has("op_ref") and has("home_airport") and ((has("avoid_transit") | not) or (.avoid_transit | type == "array")) and ((has("statuses") | not) or (.statuses | type == "object")) and (.balances | type == "object") and ((.balances | has("programs") | not) or (.balances.programs | type == "object")) and ((.balances | has("transferable") | not) or (.balances.transferable | type == "object")) and ((has("documents") | not) or (.documents | type == "object" and (.passports | type == "array" and all(.[]; type == "string")) and (.residency | type == "array" and all(.[]; type == "string")) and (.visas | type == "array" and all(.[]; type == "string"))))' "$tmp" >/dev/null || { echo "prefs-set produced invalid preferences; refusing to write" >&2; exit 3; }
   mv -f "$tmp" "$PREFS"
   echo "$PREFS"
 }

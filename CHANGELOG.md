@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   destinations, and Bridge, fli cash quotes per gateway pair — and
   the return gains a `hybrids` list of gateway-cash and two-award
   candidates beside the direct finalists.
+- `documents` preference — free-text `passports`, `residency`, and
+  `visas` arrays: onboarding collects them in a new form section with
+  Gmail immigration-sender signals as suggestions, Enrich visa notes
+  address the actual traveler instead of "a US passport holder", and a
+  zero-quota Transit pass flags same-ticket connections that may need
+  a transit visa and self-transfer gateways' entry requirements —
+  flag, never filter.
 
 ### Changed
 - The browser read rides agent-browser-with-cookies 0.12.0: each

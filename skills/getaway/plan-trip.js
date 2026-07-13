@@ -1,7 +1,7 @@
 export const meta = {
   name: 'getaway-plan-trip',
   description:
-    'Award-trip planning fan-out: parallel seats.aero sweeps, an offline jq shortlist, per-finalist trip expansion, and optional vibe enrichment.',
+    'Award-trip planning fan-out: parallel seats.aero sweeps, an offline jq shortlist, per-finalist trip expansion, optional vibe enrichment, and transit-visa flags for connections and self-transfer gateways.',
   whenToUse:
     'Invoked by the getaway skill for planning asks spanning 2+ destination buckets or programs. Args come from stored preferences plus AskUserQuestion answers. Returns the merged finalists; the calling session builds the cc-present board.',
   phases: [
@@ -11,6 +11,7 @@ export const meta = {
     { title: 'Bridge', detail: 'Hybrid only: one fli agent per gateway-to-onward pair prices the cash hop — economy first, business when it runs past the cash-cabin cutoff — spending zero seats.aero quota.' },
     { title: 'Expand', detail: 'One agent per direct finalist and per hybrid award leg expands its trip ID into bookable truth at that leg\'s cabin: integer miles, exact taxes, segments, booking link — and on a business leg, classifies the longest business segment against the seat-quality table.' },
     { title: 'Verify', detail: 'Business only: one WebSearch agent per Verify-marked or table-absent business leg — direct finalist or hybrid award leg — pins the hard product against the live seat map before the re-rank truncates.' },
+    { title: 'Transit', detail: 'Documents only: one WebSearch agent per unique same-ticket connection airport and per hybrid gateway (a separate-ticket self-transfer, so an entry check) flags transit-visa or entry risk against the traveler\'s documents — no quota spent.' },
     { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per direct and onward destination adds weather, visa, and appeal color — no quota spent.' },
   ],
 };
@@ -23,6 +24,7 @@ const SOURCE = /^[a-z0-9_]+$/;
 const CABIN = /^[a-z]+$/;
 const AIRLINE = /^[A-Z0-9]{2}$/;
 const TRIP_ID = /^[A-Za-z0-9._-]+$/;
+const DOC = /^[A-Za-z0-9][A-Za-z0-9 ()./+-]*$/;
 const REGIONS = ['North America', 'South America', 'Africa', 'Asia', 'Europe', 'Oceania'];
 const CABIN_PREFIX = { economy: 'Y', premium: 'W', business: 'J', first: 'F' };
 const PRODUCT = ['suite', 'solid', 'dated', 'barely', 'verify', 'unknown'];
@@ -73,6 +75,11 @@ const ENRICH_SCHEMA = {
   type: 'object',
   required: ['dest', 'weather', 'visaNote', 'appeal'],
   properties: { dest: { type: 'string' }, weather: { type: 'string' }, visaNote: { type: 'string' }, appeal: { type: 'string' } },
+};
+const TRANSIT_SCHEMA = {
+  type: 'object',
+  required: ['airport', 'risk', 'transitNote'],
+  properties: { airport: { type: 'string' }, risk: { enum: ['none', 'possible', 'required'] }, transitNote: { type: 'string' } },
 };
 const ONWARD_SCHEMA = {
   type: 'object',
@@ -181,6 +188,22 @@ if (hybrid !== undefined) {
   maxHybrids = Math.min(maxHybrids, 4);
 }
 
+// All-empty documents preserve the shipped US-centric phrasing and skip the Transit pass.
+const documents = a.documents === undefined ? { passports: [], residency: [], visas: [] } : a.documents;
+if (typeof documents !== 'object' || documents === null || Array.isArray(documents)) throw new Error('plan-trip: documents must be an object');
+const passports = documents.passports === undefined ? [] : documents.passports;
+const residency = documents.residency === undefined ? [] : documents.residency;
+const visas = documents.visas === undefined ? [] : documents.visas;
+for (const [key, list] of [['passports', passports], ['residency', residency], ['visas', visas]]) {
+  if (!Array.isArray(list) || !list.every(x => typeof x === 'string' && DOC.test(x))) throw new Error(`plan-trip: documents.${key} must be an array of safe strings`);
+}
+const travelerParts = [];
+if (passports.length) travelerParts.push(`passport(s): ${passports.join(', ')}`);
+if (residency.length) travelerParts.push(`residency: ${residency.join(', ')}`);
+if (visas.length) travelerParts.push(`standing visa(s): ${visas.join(', ')}`);
+const hasDocuments = travelerParts.length > 0;
+const traveler = hasDocuments ? `a traveler holding ${travelerParts.join('; ')}` : 'a US passport holder';
+
 const { script, scratchpad, startDate, endDate, origins } = a;
 const slug = s => s.toLowerCase().replace(/ /g, '-');
 // Long-haul awards land the next calendar day; string YYYY-MM-DD arithmetic, no wall clock.
@@ -239,7 +262,7 @@ if (quotaLow) {
   expandTrimmedTo = expandCap;
   log(`quota low (${minQuota} < floor ${quotaFloor}): trimming Expand to ${expandCap} finalists and skipping Enrich and hybrids`);
 }
-const skipped = { enrich: !enrichRan, expandTrimmedTo, hybrids: hybrid !== undefined && quotaLow };
+const skipped = { enrich: !enrichRan, transit: true, expandTrimmedTo, hybrids: hybrid !== undefined && quotaLow };
 
 if (sweepFiles.length === 0) {
   log('no sweep files produced; returning empty finalists');
@@ -554,6 +577,51 @@ const finalHybrids = composed
 const hybridsDied = composed.length - finalHybrids.length;
 if (hybridsDied > 0) log(`${hybridsDied} hybrid(s) dropped: an award leg did not expand to a seatable trip`);
 
+// Transit phase: flag, never filter. Same-ticket connections (origins of segments[1:]) and hybrid
+// gateways (a separate booking self-transfers landside, so an entry check); zero quota, documents-gated.
+const segmentConnections = (t) => {
+  if (!Array.isArray(t.segments) || t.segments.length === 0) throw new Error('plan-trip: expanded trip lacks segments');
+  return [...new Set(t.segments.slice(1).map(s => s.split(' ')[1].split('-')[0]))];
+};
+const transitByPoint = {};
+let transitRan = false;
+if (hasDocuments) {
+  const transitPoints = [];
+  const seenPoint = new Set();
+  const addPoint = (airport, kind) => {
+    if (!IATA.test(airport)) throw new Error(`plan-trip: transit check-point airport failed the injection guard: ${airport}`);
+    const key = `${airport}|${kind}`;
+    if (seenPoint.has(key)) return;
+    seenPoint.add(key);
+    transitPoints.push({ airport, kind });
+  };
+  for (const { trip } of kept) for (const apt of segmentConnections(trip)) addPoint(apt, 'transit');
+  for (const h of finalHybrids) {
+    for (const apt of segmentConnections(h.award.trip)) addPoint(apt, 'transit');
+    if (h.onward.mode === 'award') for (const apt of segmentConnections(h.onward.trip)) addPoint(apt, 'transit');
+    addPoint(h.gateway, 'entry');
+  }
+  transitRan = transitPoints.length > 0;
+  if (transitRan) {
+    phase('Transit');
+    const flags = await pipeline(transitPoints, pt => agent(
+      (pt.kind === 'transit'
+        ? `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to determine whether ${traveler} needs a transit (airside) visa to connect through airport ${pt.airport} on a single ticket. Prefer official government and airport sources. Note the hinges: sterile airside transit versus clearing immigration, terminal changes, and minimum layover length.\n\n`
+        : `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to determine whether ${traveler} meets entry requirements for a landside self-transfer at airport ${pt.airport}: a separate booking forces leaving the sterile area and re-entering, so this is an entry, not airside transit. Prefer official government sources. Note the hinges: visa-on-arrival versus a pre-arranged visa, immigration and terminal layout, and layover length.\n\n`) +
+      `Return:\n- airport: "${pt.airport}"\n` +
+      `- risk: one of none, possible, required — none when nothing extra is needed, possible when it hinges on terminal, route, layover, or documents, required when a visa is clearly needed\n` +
+      `- transitNote: one or two sentences on what the traveler must verify.`,
+      { label: `transit:${pt.airport}`, phase: 'Transit', schema: TRANSIT_SCHEMA },
+    ));
+    // transitPoints[i] aligns with flags[i]; key by our validated code, never the agent-echoed one.
+    transitPoints.forEach((pt, i) => {
+      const f = flags[i];
+      if (f && f.risk !== 'none') transitByPoint[`${pt.airport}|${pt.kind}`] = { airport: pt.airport, risk: f.risk, transitNote: f.transitNote };
+    });
+  }
+}
+skipped.transit = !transitRan;
+
 const enrichByDest = {};
 if (enrichRan) {
   phase('Enrich');
@@ -561,7 +629,7 @@ if (enrichRan) {
   const enriched = await pipeline(dests, dest => agent(
     `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to research airport ${dest} for travel in ${startDate.slice(0, 7)}. Return:\n` +
     `- dest: "${dest}"\n- weather: the typical weather and season for that window\n` +
-    `- visaNote: a short entry/visa note for a US passport holder\n- appeal: one or two sentences on how it fits a "${vibe}" trip.`,
+    `- visaNote: a short entry/visa note for ${traveler}\n- appeal: one or two sentences on how it fits a "${vibe}" trip.`,
     { label: `enrich:${dest}`, phase: 'Enrich', schema: ENRICH_SCHEMA },
   ));
   for (const e of enriched.filter(Boolean)) enrichByDest[e.dest] = e;
@@ -569,11 +637,19 @@ if (enrichRan) {
 
 const finalists = kept.map(({ row, trip }) => {
   const enrich = enrichByDest[row.dest];
-  return enrich ? { ...row, trip, enrich } : { ...row, trip };
+  const transit = segmentConnections(trip).map(apt => transitByPoint[`${apt}|transit`]).filter(Boolean);
+  return { ...row, trip, ...(transit.length ? { transit } : {}), ...(enrich ? { enrich } : {}) };
 });
 const hybrids = finalHybrids.map(h => {
   const enrich = enrichByDest[h.dest];
-  return enrich ? { ...h, enrich } : h;
+  const conns = [...new Set([
+    ...segmentConnections(h.award.trip),
+    ...(h.onward.mode === 'award' ? segmentConnections(h.onward.trip) : []),
+  ])];
+  const transit = [transitByPoint[`${h.gateway}|entry`], ...conns.map(apt => transitByPoint[`${apt}|transit`])].filter(Boolean);
+  // Cash onward legs (Bridge retains only `stops`, no connection airports); flag a stopped hop generically.
+  if (h.onward.mode === 'cash' && h.onward.stops >= 1) transit.push({ airport: 'unknown', risk: 'possible', transitNote: 'One-stop cash leg — connection airport not identified by the quote; verify transit rules for the routing when booking.' });
+  return { ...h, ...(transit.length ? { transit } : {}), ...(enrich ? { enrich } : {}) };
 });
 
 const allQuotas = [...quotas, ...expandResults.filter(Boolean).map(t => t.quota).filter(q => q >= 0)];

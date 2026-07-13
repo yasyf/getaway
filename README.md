@@ -101,9 +101,9 @@ exactly where you don't want to land. Hand it over as-is:
 I want to go somewhere warm for a week on points, skipping the usual suspects.
 ```
 
-The skill reads your travel profile — home airport, program balances —
-pins the brief into per-trip memory, sweeps whole regions, and pitches
-concrete options. One
+The skill reads your travel profile — home airport, program balances,
+travel documents — pins the brief into per-trip memory, sweeps whole
+regions, and pitches concrete options. One
 Aeroplan bulk scan surfaces island space most people never think to search:
 
 ```text
@@ -162,14 +162,16 @@ NRT  TPE  cash economy       $96                       3h45m hop
 Two stores back planning. Your global profile lives at
 `~/.getaway/preferences.json` — the always-true facts: home airport, origin
 airports, airlines to avoid, airports you never connect through, elite
-statuses, per-program points balances, and the `op_ref` pointer for the API
+statuses, per-program points balances, travel documents — passports,
+residency, standing visas — and the `op_ref` pointer for the API
 key. Each trip gets its own memory at `~/.getaway/plans/<slug>.json`, filled
 in as planning pins down the dates, cabin, party, regions, and destinations
 to skip. A destination skipped there is ruled out only as the trip's final
 stop; it stays valid as a connection or positioning stop.
 First use offers `/getaway:onboard`, an interactive onboarding form
 (cc-present) that collects the profile up front: home airport, avoid
-lists, points balances, and the 1Password key reference. Skip the form
+lists, points balances, travel documents, and the 1Password key
+reference. Skip the form
 to accept the defaults.
 The form arrives pre-filled: [gogcli](https://gogcli.sh) scans Gmail
 read-only for airline and bank statement emails, and the

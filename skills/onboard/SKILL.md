@@ -1,13 +1,14 @@
 ---
 name: onboard
-description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
+description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, points balances, elite statuses, travel documents (passports, residency, standing visas), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
 allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Agent
 ---
 
 # onboard
 
-Onboarding collects the user's airports, balances, elite statuses, and
-avoid lists and writes them in one pass. It is optional: the user may
+Onboarding collects the user's airports, balances, elite statuses,
+travel documents — passports, residency, standing visas — and avoid
+lists and writes them in one pass. It is optional: the user may
 skip it and plan on the shipped defaults.
 
 When the user accepts onboarding, run auto-fill immediately — announce
@@ -18,7 +19,7 @@ any spawn. Prime the cookie grant at the main level per gather.md's
 [browser read](../refresh/gather.md#browser-read) — Touch ID denied
 means the spawn goes Gmail-only, no browser gatherers. Then run the
 gatherers below as parallel subagents in one spawn message — the
-Gmail gatherer (reads 2–4, the calendar read among them, and body
+Gmail gatherer (reads 2–5, the calendar read among them, and body
 fetches) beside one browser gatherer per host. The gatherers degrade
 independently: skipping one costs nothing but its answers, and none of
 them writes a byte. The form's Submit is the sole write gate, and the
@@ -29,7 +30,7 @@ form is never delegated.
 This section is the Gmail subagent's brief. Spawn it with the chosen
 account and the tally-narrowed `from:` list; it returns
 `{programs, statuses, balances, home_airport, origin_candidates,
-notes}` as JSON. Query 1 runs at the main level first, so the tally can seed both
+document_signals, notes}` as JSON. Query 1 runs at the main level first, so the tally can seed both
 gatherers.
 
 Invocation mechanics — gog detection, the lockdown flags, and the
@@ -43,7 +44,7 @@ Resolve the account per gather.md's account rule (`gog auth list
 onboarding the mailbox pick happens at the main level before the
 gatherers spawn — the lone pre-spawn question in this flow.
 
-Run the four reads below — three headers-first Gmail queries and one
+Run the five reads below — four headers-first Gmail queries and one
 calendar read — fetching at most 10 message bodies total across the
 Gmail queries per gather.md's body-fetch rule (the flight-history
 fallback carries its own 25-body budget):
@@ -55,7 +56,7 @@ fallback carries its own 25-body budget):
    Tally sender domains with `jq`: the heavy hitters are the frequent
    airlines and the candidate programs, and bank senders with hits join
    the browser host list. This query is the main-level pre-spawn step;
-   the remaining three run inside the subagent.
+   the remaining four run inside the subagent.
 2. **Status and balances** — the tally-narrowed `from:` list plus
    `subject:(status OR elite OR tier OR statement OR balance OR "miles
    summary") newer_than:1y`, `--max 25`. Take tier strings verbatim;
@@ -80,6 +81,16 @@ fallback carries its own 25-body budget):
 4. **Bank points** — the query and its parse rules live in gather.md's
    [Gmail read](../refresh/gather.md#gmail-read-gog-lockdown); senders
    map to `balances.transferable` keys through its bank table.
+5. **Travel-document signals** — headers only, zero body fetches:
+   `from:(uscis.dhs.gov OR ttp.cbp.dhs.gov OR travel.state.gov OR
+   cbp.dhs.gov OR canada.ca OR cic.gc.ca) subject:(passport OR visa OR
+   "green card" OR "permanent resident" OR naturalization OR "Global
+   Entry" OR NEXUS) newer_than:5y`, `--max 50`. Tally with `jq` into
+   `document_signals` as `[{domain, hits, hint}]` — sender domain,
+   message count, and the strongest subject keyword as the hint. These
+   are suggestion material only: they reach the form's document fields
+   as label suffixes ("— Gmail: 6 uscis.dhs.gov mails, 'green card'
+   subjects"), never as adopted values.
 
 The flight-history fallback: `from:(<the 26 program domains from
 gather.md's
@@ -148,6 +159,10 @@ This document passes `cc-present push --dry-run`:
     { "id": "balances-programs", "type": "input", "label": "Airline programs (program:points, comma-separated)", "placeholder": "aeroplan:88000, alaska:90000", "multiline": true },
     { "id": "balances-transferable", "type": "input", "label": "Transferable points (bank:points, comma-separated)", "placeholder": "amex:150000, chase:80000", "multiline": true },
     { "id": "statuses", "type": "input", "label": "Elite status (program:tier, comma-separated)", "placeholder": "united:1K, alaska:MVP Gold 75K", "multiline": true },
+    { "id": "sec-documents", "type": "section", "title": "Travel documents" },
+    { "id": "documents-passports", "type": "input", "label": "Passports held (countries, comma-separated)", "placeholder": "none" },
+    { "id": "documents-residency", "type": "input", "label": "Residency and long-stay permits (comma-separated — US green card, UK ILR…)", "placeholder": "none" },
+    { "id": "documents-visas", "type": "input", "label": "Standing visas (comma-separated — US B1/B2 to 2030…)", "placeholder": "none" },
     { "id": "sec-auth", "type": "section", "title": "seats.aero API key" },
     { "id": "op-ref", "type": "input", "label": "1Password reference for the seats.aero API key", "placeholder": "op://Vault/item/field" }
   ]
@@ -199,6 +214,12 @@ the preference schema differ:
   `MVP Gold 75K`). The merge warning applies here too: the patch
   replaces the whole `statuses` map, so always send it merged with the
   current values.
+- Document answers are comma-separated free text kept verbatim
+  (`Canada`, `US green card`, `US B1/B2 to 2030`) — one array per
+  field. A blank field keeps the current array; a literal `none` clears
+  it to `[]`. The merge warning bites hardest here: the patch replaces
+  the whole `documents` object and `prefs-set` rejects a partial one,
+  so always send all three arrays, merged with the current values.
 
 Write the patch with `prefs-set`. The merge is top-level: each key in the
 patch replaces that whole key, and every omitted key keeps its current
@@ -212,6 +233,7 @@ write:
  "statuses": {"united": "1K"},
  "balances": {"programs": {"aeroplan": 88000, "alaska": 90000},
               "transferable": {"amex": 150000, "chase": 80000}},
+ "documents": {"passports": ["Canada"], "residency": ["US green card"], "visas": []},
  "op_ref": "op://Vault/item/field"}
 JSON
 ```
