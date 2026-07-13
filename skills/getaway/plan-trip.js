@@ -10,6 +10,7 @@ export const meta = {
     { title: 'Onward', detail: 'Hybrid only: one search from the top gateways to the onward destinations, jq-projected to per-(origin, dest, cabin) award minimums — the two-award-stitch sweep across every program in one call.' },
     { title: 'Bridge', detail: 'Hybrid only: one fli agent per gateway-to-onward pair prices the cash hop — economy first, business when it runs past the cash-cabin cutoff — spending zero seats.aero quota.' },
     { title: 'Expand', detail: 'One agent per direct finalist and per hybrid award leg expands its trip ID into bookable truth at that leg\'s cabin: integer miles, exact taxes, segments, booking link — and on a business leg, classifies the longest business segment against the seat-quality table.' },
+    { title: 'Verify', detail: 'Business only: one WebSearch agent per Verify-marked or table-absent business leg — direct finalist or hybrid award leg — pins the hard product against the live seat map before the re-rank truncates.' },
     { title: 'Enrich', detail: 'When a vibe is set, one WebSearch agent per direct and onward destination adds weather, visa, and appeal color — no quota spent.' },
   ],
 };
@@ -95,7 +96,7 @@ const ONWARD_SCHEMA = {
 };
 const BRIDGE_SCHEMA = {
   type: 'object',
-  required: ['gateway', 'dest', 'date', 'cabin', 'price', 'currency'],
+  required: ['gateway', 'dest', 'date', 'durationMinutes', 'cabin', 'price', 'currency', 'airline', 'flightNumber', 'stops'],
   properties: {
     gateway: { type: 'string' }, dest: { type: 'string' }, date: { type: 'string' },
     durationMinutes: { type: 'number' }, cabin: { enum: ['economy', 'business'] },
@@ -182,6 +183,8 @@ if (hybrid !== undefined) {
 
 const { script, scratchpad, startDate, endDate, origins } = a;
 const slug = s => s.toLowerCase().replace(/ /g, '-');
+// Long-haul awards land the next calendar day; string YYYY-MM-DD arithmetic, no wall clock.
+const nextDay = d => new Date(new Date(d).getTime() + 86400000).toISOString().slice(0, 10);
 
 const sweepSpecs = [
   ...buckets.map(b => ({
@@ -289,8 +292,17 @@ const shortlist = await agent(
   { label: 'shortlist', phase: 'Shortlist', schema: SHORTLIST_SCHEMA },
 );
 if (!shortlist || shortlist.rows.length === 0) {
-  log('shortlist produced 0 rows; no finalists');
-  return { finalists: [], hybrids: [], sweepFiles, considered: shortlist?.considered ?? 0, quota: minQuota, skipped };
+  log('shortlist produced 0 rows; no direct finalists');
+  // Hybrids can outlive an empty direct shortlist only with explicit onwardDests; the default
+  // onward set derives from the direct finalists, so it too is empty and there's nothing to stitch.
+  const canHybrid = Boolean(shortlist) && hybridOn && gatewaySweepFiles.length > 0 && hybrid.onwardDests !== undefined;
+  if (!canHybrid) {
+    if (hybridOn && gatewaySweepFiles.length > 0 && hybrid.onwardDests === undefined) {
+      log('skipping hybrids: onward destinations default from the direct shortlist, which is empty');
+      skipped.hybrids = true;
+    }
+    return { finalists: [], hybrids: [], sweepFiles, considered: shortlist?.considered ?? 0, quota: minQuota, skipped };
+  }
 }
 
 // Gateway shortlist: each gateway's best award, deduped to one row per hub, at most 3 distinct gateways.
@@ -335,18 +347,27 @@ for (const d of onwardDests) if (!IATA.test(d)) throw new Error(`plan-trip: onwa
 
 let composed = [];
 if (hybridOn && topGateways.length && onwardDests.length) {
+  // Onward award rows carry the same restrictions as the direct shortlist: the trip's sources (when
+  // set) and hard-avoided airlines. Soft avoids stay ranking-only and never touch hybrids.
   const onwardBlocks = ['economy', 'business'].map(cab => {
     const p = CABIN_PREFIX[cab];
-    return `[ .[] | select(.${p}Available == true and (.${p}RemainingSeats|tonumber) >= ${travelers})\n` +
+    const onwardSel = [
+      `.${p}Available == true`,
+      `(.${p}RemainingSeats|tonumber) >= ${travelers}`,
+      ...(sources.length ? [`(.Source as $s | (${JSON.stringify(sources)} | index($s)) != null)`] : []),
+      `(.${p}Airlines | split(", ") | all(. as $c | ${hard} | index($c) == null))`,
+    ].join(' and ');
+    return `[ .[] | select(${onwardSel})\n` +
       `        | { origin: .Route.OriginAirport, dest: .Route.DestinationAirport, cabin: "${cab}",\n` +
       `            id: .ID, date: .Date, source: .Source, mileage: (.${p}MileageCost|tonumber),\n` +
       `            seats: (.${p}RemainingSeats|tonumber), airlines: .${p}Airlines, direct: .${p}Direct } ]`;
   }).join('\n      + ');
   const onwardFile = `${scratchpad}/onward.jsonl`;
   const onwardSearchCmd = `"${script}" search --origin ${topGateways.join(',')} --dest ${onwardDests.join(',')} --start ${startDate} --end ${endDate} --take 1000 --order lowest_mileage`;
+  // Per-(origin, dest, cabin, date) minima so a cheap-but-too-early award can't mask a feasible later one.
   const onwardJq =
     `jq -s '{ rows: ( ${onwardBlocks}\n` +
-    `      | group_by([.origin, .dest, .cabin]) | map(min_by(.mileage)) ) }' "${onwardFile}"`;
+    `      | group_by([.origin, .dest, .cabin, .date]) | map(min_by(.mileage)) ) }' "${onwardFile}"`;
 
   phase('Onward');
   const onward = await agent(
@@ -361,60 +382,87 @@ if (hybridOn && topGateways.length && onwardDests.length) {
   for (const r of onwardRows) if (!TRIP_ID.test(r.id)) throw new Error(`plan-trip: onward row id failed the injection guard: ${r.id}`);
   if (onward && onward.quota >= 0) quotas.push(onward.quota);
 
-  const bridgePairs = [];
-  for (const g of topGateways) for (const d of onwardDests) if (d !== g) bridgePairs.push({ gateway: g, dest: d, date: gatewayRowByDest[g].date });
-  const cappedBridgePairs = bridgePairs.slice(0, 8);
-
-  phase('Bridge');
-  const bridgeQuotes = await pipeline(cappedBridgePairs, pair => agent(
-    `Price the ${pair.gateway}-${pair.dest} cash hop on ${pair.date} with fli via uvx — zero seats.aero quota, run no getaway.sh command. Economy first:\n\n` +
-    `uvx --from "flights[mcp]" fli flights ${pair.gateway} ${pair.dest} ${pair.date} --class ECONOMY --format json | jq '{cheapest: (.flights | min_by(.price) | {price, currency, stops, duration, airline: .legs[0].airline.code, flight: .legs[0].flight_number})}'\n\n` +
-    `If cheapest.duration exceeds ${cashCutoffMinutes} minutes, re-quote business — the same command with \`--class BUSINESS\` — and report that quote instead; otherwise report the economy quote. Return:\n` +
-    `- gateway: "${pair.gateway}"\n- dest: "${pair.dest}"\n- date: "${pair.date}"\n` +
-    `- durationMinutes: the reported cheapest.duration (a number)\n` +
-    `- cabin: "economy" when you kept the economy quote, "business" when you re-quoted\n` +
-    `- price: cheapest.price (a number)\n- currency: cheapest.currency\n- stops: cheapest.stops (a number)\n` +
-    `- airline: cheapest.airline\n- flightNumber: cheapest.flight`,
-    { label: `bridge:${pair.gateway}-${pair.dest}`, phase: 'Bridge', schema: BRIDGE_SCHEMA },
-  ));
-  const bridgeByPair = {};
-  for (const q of bridgeQuotes.filter(Boolean)) bridgeByPair[`${q.gateway}|${q.dest}`] = q;
-  const onwardByKey = {};
-  for (const r of onwardRows) onwardByKey[`${r.origin}|${r.dest}|${r.cabin}`] = r;
-
-  for (const pair of cappedBridgePairs) {
-    const bridge = bridgeByPair[`${pair.gateway}|${pair.dest}`];
-    if (!bridge) continue;
-    const award = gatewayRowByDest[pair.gateway];
-    composed.push({
-      kind: 'gateway-cash', gateway: pair.gateway, dest: pair.dest, award,
-      onward: { mode: 'cash', cabin: bridge.cabin, price: bridge.price, currency: bridge.currency,
-                durationMinutes: bridge.durationMinutes, stops: bridge.stops,
-                airline: bridge.airline, flightNumber: bridge.flightNumber, date: bridge.date },
-    });
-    // Two-award stitch: the onward award at the cutoff-picked cabin, departing on/after the gateway award.
-    const onwardRow = onwardByKey[`${pair.gateway}|${pair.dest}|${bridge.cabin}`];
-    if (onwardRow && onwardRow.date >= award.date) {
-      composed.push({
-        kind: 'two-award', gateway: pair.gateway, dest: pair.dest, award,
-        onward: { mode: 'award', cabin: bridge.cabin, id: onwardRow.id, date: onwardRow.date,
-                  source: onwardRow.source, mileage: onwardRow.mileage, seats: onwardRow.seats,
-                  airlines: onwardRow.airlines, direct: onwardRow.direct },
-      });
+  // Onward spent a seats.aero call; re-check quota before the Bridge fan-out and the hybrid
+  // expansions it feeds, mirroring the pre-Shortlist quotaLow gate.
+  const postOnwardQuota = quotas.length ? Math.min(...quotas) : -1;
+  if (postOnwardQuota >= 0 && postOnwardQuota < quotaFloor) {
+    log(`quota low after Onward (${postOnwardQuota} < floor ${quotaFloor}): skipping Bridge and hybrid expansions`);
+    skipped.hybrids = true;
+  } else {
+    // Each cash hop and stitched onward award departs on/after minOnwardDate — the day after the
+    // gateway award lands.
+    const bridgePairs = [];
+    for (const g of topGateways) {
+      const minOnwardDate = nextDay(gatewayRowByDest[g].date);
+      for (const d of onwardDests) if (d !== g) bridgePairs.push({ gateway: g, dest: d, date: minOnwardDate });
     }
+    const cappedBridgePairs = bridgePairs.slice(0, 8);
+    if (bridgePairs.length > cappedBridgePairs.length) log(`${bridgePairs.length - cappedBridgePairs.length} gateway×onward pair(s) dropped by the 8-pair cap`);
+
+    phase('Bridge');
+    const bridgeQuotes = await pipeline(cappedBridgePairs, pair => agent(
+      `Price the ${pair.gateway}-${pair.dest} cash hop on ${pair.date} with fli via uvx — zero seats.aero quota, run no getaway.sh command. Economy first:\n\n` +
+      `uvx --from "flights[mcp]" fli flights ${pair.gateway} ${pair.dest} ${pair.date} --class ECONOMY --format json | jq '{cheapest: (.flights | map(select(.price != null)) | min_by(.price) | {price, currency, stops, duration, airline: .legs[0].airline.code, flight: .legs[0].flight_number})}'\n\n` +
+      `If cheapest.duration exceeds ${cashCutoffMinutes} minutes, re-quote business — the same command with \`--class BUSINESS\` — and report that quote instead; otherwise report the economy quote. Return:\n` +
+      `- gateway: "${pair.gateway}"\n- dest: "${pair.dest}"\n- date: "${pair.date}"\n` +
+      `- durationMinutes: the reported cheapest.duration (a number)\n` +
+      `- cabin: "economy" when you kept the economy quote, "business" when you re-quoted\n` +
+      `- price: cheapest.price (a number)\n- currency: cheapest.currency\n- stops: cheapest.stops (a number)\n` +
+      `- airline: cheapest.airline\n- flightNumber: cheapest.flight`,
+      { label: `bridge:${pair.gateway}-${pair.dest}`, phase: 'Bridge', schema: BRIDGE_SCHEMA },
+    ));
+    // Drop cash hops flown by a hard-avoided airline; soft avoids stay ranking-only for hybrids.
+    const hardCodes = avoidAirlines.filter(x => x.strength === 'hard').map(x => x.code);
+    const bridgeByPair = {};
+    for (const q of bridgeQuotes.filter(Boolean)) {
+      if (hardCodes.includes(q.airline)) continue;
+      bridgeByPair[`${q.gateway}|${q.dest}`] = q;
+    }
+    // Onward rows are per-(origin, dest, cabin, date); bucket by key, filter to feasible dates below.
+    const onwardByKey = {};
+    for (const r of onwardRows) {
+      const k = `${r.origin}|${r.dest}|${r.cabin}`;
+      if (!onwardByKey[k]) onwardByKey[k] = [];
+      onwardByKey[k].push(r);
+    }
+
+    for (const pair of cappedBridgePairs) {
+      const bridge = bridgeByPair[`${pair.gateway}|${pair.dest}`];
+      if (!bridge) continue;
+      const award = gatewayRowByDest[pair.gateway];
+      composed.push({
+        kind: 'gateway-cash', gateway: pair.gateway, dest: pair.dest, award,
+        onward: { mode: 'cash', cabin: bridge.cabin, price: bridge.price, currency: bridge.currency,
+                  durationMinutes: bridge.durationMinutes, stops: bridge.stops,
+                  airline: bridge.airline, flightNumber: bridge.flightNumber, date: bridge.date },
+      });
+      // Two-award stitch: the cheapest onward award at the cutoff-picked cabin departing on/after
+      // minOnwardDate (pair.date) — a cheap-but-too-early award never wins over a feasible later one.
+      const eligible = (onwardByKey[`${pair.gateway}|${pair.dest}|${bridge.cabin}`] ?? []).filter(r => r.date >= pair.date);
+      const onwardRow = eligible.length ? eligible.reduce((a, b) => (b.mileage < a.mileage ? b : a)) : null;
+      if (onwardRow) {
+        composed.push({
+          kind: 'two-award', gateway: pair.gateway, dest: pair.dest, award,
+          onward: { mode: 'award', cabin: bridge.cabin, id: onwardRow.id, date: onwardRow.date,
+                    source: onwardRow.source, mileage: onwardRow.mileage, seats: onwardRow.seats,
+                    airlines: onwardRow.airlines, direct: onwardRow.direct },
+        });
+      }
+    }
+    // Rank by total miles then cash; the cash leg carries no miles. Keep the cheapest maxHybrids.
+    const totalMiles = h => h.award.mileage + (h.onward.mode === 'award' ? h.onward.mileage : 0);
+    const cashMinor = h => (h.onward.mode === 'cash' ? Math.round(h.onward.price * 100) : 0);
+    composed.sort((a, b) => (totalMiles(a) - totalMiles(b)) || (cashMinor(a) - cashMinor(b)));
+    composed = composed.slice(0, maxHybrids);
   }
-  // Rank by total miles then cash; the cash leg carries no miles. Keep the cheapest maxHybrids.
-  const totalMiles = h => h.award.mileage + (h.onward.mode === 'award' ? h.onward.mileage : 0);
-  const cashMinor = h => (h.onward.mode === 'cash' ? Math.round(h.onward.price * 100) : 0);
-  composed.sort((a, b) => (totalMiles(a) - totalMiles(b)) || (cashMinor(a) - cashMinor(b)));
-  composed = composed.slice(0, maxHybrids);
 }
 
 // Every award leg expands at its own cabin: directs and gateway legs at the trip cabin,
-// stitched onward legs at the cabin the cutoff picked.
+// stitched onward legs at the cabin the cutoff picked. Dedup hybrid legs by id+cabin against the
+// direct finalists and each other so a shared trip expands once; results join back via tripByKey.
 const directItems = rows.map(r => ({ id: r.id, cabin, label: r.dest }));
 const hybridItems = [];
-const seenItem = new Set();
+const seenItem = new Set(directItems.map(it => `${it.id}|${it.cabin}`));
 for (const h of composed) {
   const gKey = `${h.award.id}|${cabin}`;
   if (!seenItem.has(gKey)) { seenItem.add(gKey); hybridItems.push({ id: h.award.id, cabin, label: h.gateway }); }
@@ -453,29 +501,39 @@ expandItems.forEach((it, i) => { if (expandResults[i]) tripByKey[`${it.id}|${it.
 
 // Business only, zero quota: resolve Verify-marked and table-absent products against the
 // live seat map before the re-rank truncates, so a resolved `barely` never displaces a true flat.
-const verdictById = {};
+// Every business award leg flows through — direct finalists and hybrid legs alike — deduped by
+// id+cabin; the verdict mutates the shared expanded trip, so both the finalist and any hybrid see it.
 if (isBiz) {
-  const toVerify = rows.map((row, i) => ({ row, trip: trips[i] }))
-    .filter(c => c.trip && (c.trip.product === 'verify' || (c.trip.product === 'unknown' && c.trip.longhaul)));
-  if (toVerify.length) {
+  const verifyTargets = [];
+  const seenVerify = new Set();
+  const addVerify = (id, verifyCabin, date, label, trip) => {
+    if (!trip || !(trip.product === 'verify' || (trip.product === 'unknown' && trip.longhaul))) return;
+    const key = `${id}|${verifyCabin}`;
+    if (seenVerify.has(key)) return;
+    seenVerify.add(key);
+    verifyTargets.push({ id, date, label, trip });
+  };
+  rows.forEach((row, i) => addVerify(row.id, cabin, row.date, row.dest, trips[i]));
+  for (const h of composed) {
+    addVerify(h.award.id, cabin, h.award.date, h.gateway, tripByKey[`${h.award.id}|${cabin}`]);
+    if (h.onward.mode === 'award' && h.onward.cabin === 'business')
+      addVerify(h.onward.id, h.onward.cabin, h.onward.date, h.dest, tripByKey[`${h.onward.id}|${h.onward.cabin}`]);
+  }
+  if (verifyTargets.length) {
     phase('Verify');
-    const verified = await pipeline(toVerify, ({ row, trip }) => agent(
-      `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to pin down the business hard product on ${trip.longhaul} departing ${row.date}: the carrier's seat map for that flight number and date, recent cabin reviews, retrofit trackers. Return:\n` +
-      `- id: "${row.id}"\n` +
+    const verified = await pipeline(verifyTargets, ({ id, date, label, trip }) => agent(
+      `Use WebSearch only — zero API/quota calls, run no getaway.sh command — to pin down the business hard product on ${trip.longhaul} departing ${date}: the carrier's seat map for that flight number and date, recent cabin reviews, retrofit trackers. Return:\n` +
+      `- id: "${id}"\n` +
       `- product: the resolved verdict — one of suite, solid, dated, barely, unknown; return \`unknown\` when sources disagree\n` +
       `- productNote: the product name plus one clause describing the hard product.`,
-      { label: `verify:${row.dest}`, phase: 'Verify', schema: VERIFY_SCHEMA },
+      { label: `verify:${label}`, phase: 'Verify', schema: VERIFY_SCHEMA },
     ));
-    // Merge by row.id, never index — verify runs over a subset of the finalists.
-    for (let i = 0; i < toVerify.length; i++) if (verified[i]) verdictById[toVerify[i].row.id] = verified[i];
+    // verifyTargets[i] aligns with verified[i]; mutate the shared trip so directs and hybrids both update.
+    verifyTargets.forEach((t, i) => { if (verified[i]) { t.trip.product = verified[i].product; t.trip.productNote = verified[i].productNote; } });
   }
 }
 
 const candidates = rows.map((row, i) => ({ row, trip: trips[i] })).filter(c => c.trip && typeof c.trip.mileageCost === 'number');
-for (const c of candidates) {
-  const v = verdictById[c.row.id];
-  if (v) { c.trip.product = v.product; c.trip.productNote = v.productNote; }
-}
 // Soft-avoided airlines sink harder than bad seats; only literal `barely` demotes.
 const demoted = c => (c.trip.product === 'barely' ? 1 : 0);
 candidates.sort((a, b) =>

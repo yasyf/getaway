@@ -317,14 +317,14 @@ cmd_search() {
   local origin="" dest="" start="" end="" cabin="" sources="" carriers="" order="" direct="" take=500 pages=1
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --origin) origin="$2"; shift 2 ;;
-      --dest) dest="$2"; shift 2 ;;
-      --start) start="$2"; shift 2 ;;
-      --end) end="$2"; shift 2 ;;
-      --cabin) cabin="$2"; shift 2 ;;
-      --sources) sources="$2"; shift 2 ;;
-      --carriers) carriers="$2"; shift 2 ;;
-      --order) order="$2"; shift 2 ;;
+      --origin) [[ $# -ge 2 ]] || usage "search: --origin needs a value"; origin="$2"; shift 2 ;;
+      --dest) [[ $# -ge 2 ]] || usage "search: --dest needs a value"; dest="$2"; shift 2 ;;
+      --start) [[ $# -ge 2 ]] || usage "search: --start needs a value"; start="$2"; shift 2 ;;
+      --end) [[ $# -ge 2 ]] || usage "search: --end needs a value"; end="$2"; shift 2 ;;
+      --cabin) [[ $# -ge 2 ]] || usage "search: --cabin needs a value"; cabin="$2"; shift 2 ;;
+      --sources) [[ $# -ge 2 ]] || usage "search: --sources needs a value"; sources="$2"; shift 2 ;;
+      --carriers) [[ $# -ge 2 ]] || usage "search: --carriers needs a value"; carriers="$2"; shift 2 ;;
+      --order) [[ $# -ge 2 ]] || usage "search: --order needs a value"; order="$2"; shift 2 ;;
       --take) [[ $# -ge 2 ]] || usage "search: --take needs a value"; take="$2"; shift 2 ;;
       --pages) [[ $# -ge 2 ]] || usage "search: --pages needs a value"; pages="$2"; shift 2 ;;
       --direct) direct=1; shift ;;
@@ -356,12 +356,12 @@ cmd_availability() {
   local source="" cabin="" start="" end="" origin_region="" dest_region="" take=500 pages=1
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --source) source="$2"; shift 2 ;;
-      --cabin) cabin="$2"; shift 2 ;;
-      --start) start="$2"; shift 2 ;;
-      --end) end="$2"; shift 2 ;;
-      --origin-region) origin_region="$2"; shift 2 ;;
-      --dest-region) dest_region="$2"; shift 2 ;;
+      --source) [[ $# -ge 2 ]] || usage "availability: --source needs a value"; source="$2"; shift 2 ;;
+      --cabin) [[ $# -ge 2 ]] || usage "availability: --cabin needs a value"; cabin="$2"; shift 2 ;;
+      --start) [[ $# -ge 2 ]] || usage "availability: --start needs a value"; start="$2"; shift 2 ;;
+      --end) [[ $# -ge 2 ]] || usage "availability: --end needs a value"; end="$2"; shift 2 ;;
+      --origin-region) [[ $# -ge 2 ]] || usage "availability: --origin-region needs a value"; origin_region="$2"; shift 2 ;;
+      --dest-region) [[ $# -ge 2 ]] || usage "availability: --dest-region needs a value"; dest_region="$2"; shift 2 ;;
       --take) [[ $# -ge 2 ]] || usage "availability: --take needs a value"; take="$2"; shift 2 ;;
       --pages) [[ $# -ge 2 ]] || usage "availability: --pages needs a value"; pages="$2"; shift 2 ;;
       *) usage "availability: unknown flag: $1" ;;
@@ -388,9 +388,9 @@ cmd_routes() {
   local source="" origin_region="" dest_region=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --source) source="$2"; shift 2 ;;
-      --origin-region) origin_region="$2"; shift 2 ;;
-      --dest-region) dest_region="$2"; shift 2 ;;
+      --source) [[ $# -ge 2 ]] || usage "routes: --source needs a value"; source="$2"; shift 2 ;;
+      --origin-region) [[ $# -ge 2 ]] || usage "routes: --origin-region needs a value"; origin_region="$2"; shift 2 ;;
+      --dest-region) [[ $# -ge 2 ]] || usage "routes: --dest-region needs a value"; dest_region="$2"; shift 2 ;;
       *) usage "routes: unknown flag: $1" ;;
     esac
   done
