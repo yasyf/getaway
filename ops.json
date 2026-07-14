@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"verify_note","witness":[{"anchor":{"kind":"commit","value":"9a5fc1f6b1f2edd2058d4e008abf87aabdb71eca"},"oid":"9a5fc1f6b1f2edd2058d4e008abf87aabdb71eca"},{"anchor":{"kind":"dir","value":"skills/getaway"},"oid":"454e5c80b4d56ced20b45125ca771d3f4e713683"}],"verified_commit":"9a5fc1f6b1f2edd2058d4e008abf87aabdb71eca"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"add_superseded_by","id":"fdd212c0eda13bcfe51d69909ab24e40d26ef309"}]}
