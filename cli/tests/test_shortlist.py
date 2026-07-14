@@ -53,9 +53,15 @@ def seed_leg(
     kind: str = "search",
     expanded_origins: list[str] | None = None,
     states: dict | None = None,
+    superseded_rows: dict | None = None,
 ) -> None:
     seed(slug, key, kind, rows, clock())
-    env = sweep_envelope(rows, expanded_origins=expanded_origins, search_states=states or {})
+    env = sweep_envelope(
+        rows,
+        expanded_origins=expanded_origins,
+        search_states=states or {},
+        superseded_rows=superseded_rows,
+    )
     trips.artifact_write(slug, _artifact_name(key), json.dumps(env))
 
 
@@ -163,6 +169,118 @@ def test_budget_is_per_endpoint_not_global(base: str) -> None:
     assert kept == {"NRT": 12, "BKK": 12}  # one hot endpoint cannot starve the other
 
 
+def test_home_origin_floor_survives_endpoint_budget(base: str) -> None:
+    prefs.set_patch({"home_airport": "SFO"})
+    set_plan(base, origins=["WST"])
+    rows = [
+        api_row(f"LAX{i}", "LAX", "NRT", f"2026-09-{5 + i:02d}", "united", biz(str(80000 + i)))
+        for i in range(12)
+    ]
+    rows.append(api_row("HOME", "SFO", "NRT", "2026-09-30", "united", biz("200000")))
+
+    doc = run(base, rows)
+
+    assert ids(doc) == [*[f"LAX{i}" for i in range(11)], "HOME"]
+    assert doc["truncation"]["NRT"] == {
+        "considered": 13,
+        "kept": 12,
+        "displaced": 1,
+    }
+
+
+def test_no_floor_candidates_preserves_cohort_selection(base: str) -> None:
+    set_plan(base, origins=["QAF"])
+    observed_origins = [f"O{i:02d}" for i in range(12)]
+    rows = [
+        api_row(f"CMN{i:02d}", origin, "NRT", "2026-09-05", "united", biz("80000"))
+        for i, origin in enumerate(observed_origins)
+    ]
+    rows.append(api_row("PSEUDO", "QAF", "NRT", "2026-09-06", "united", biz("80000")))
+    seed_leg(base, "outbound:asia", rows, expanded_origins=observed_origins)
+
+    doc = shortlist.shortlist(base, now=clock())
+
+    assert ids(doc) == ["CMN00", "PSEUDO", *[f"CMN{i:02d}" for i in range(1, 11)]]
+    assert doc["truncation"] == {"NRT": {"considered": 13, "kept": 12}}
+
+
+@pytest.mark.parametrize(
+    ("region_origin", "expanded_origin", "same_cohort_origin"),
+    [("MEX", "CUN", "GDL"), ("SEA", "SIN", "KUL")],
+    ids=["mex-region-code", "sea-region-code"],
+)
+def test_declared_region_origin_is_not_floored_without_home_airport(
+    base: str, region_origin: str, expanded_origin: str, same_cohort_origin: str
+) -> None:
+    set_plan(base, origins=[region_origin])
+    rows = [
+        api_row(
+            f"COHORT-{i:02d}",
+            expanded_origin,
+            "NRT",
+            f"2026-09-{5 + i:02d}",
+            "united",
+            biz("80000"),
+        )
+        for i in range(12)
+    ]
+    rows.extend(
+        [
+            api_row(
+                "SAME-COHORT",
+                same_cohort_origin,
+                "NRT",
+                "2026-09-05",
+                "united",
+                biz("80000"),
+            ),
+            api_row(
+                "DECLARED",
+                region_origin,
+                "NRT",
+                "2026-09-30",
+                "united",
+                biz("80000"),
+            ),
+        ]
+    )
+
+    doc = run(base, rows)
+
+    assert ids(doc) == [f"COHORT-{i:02d}" for i in range(12)]
+    assert doc["truncation"] == {"NRT": {"considered": 14, "kept": 12}}
+
+
+def test_floor_pick_already_in_round_robin_dedupes_without_spending_twice(base: str) -> None:
+    prefs.set_patch({"home_airport": "SFO"})
+    rows = [
+        api_row(f"R{i}", "SFO", "NRT", f"2026-09-{5 + i:02d}", "united", biz(str(80000 + i)))
+        for i in range(13)
+    ]
+
+    doc = run(base, rows)
+
+    assert ids(doc) == [f"R{i}" for i in range(12)]
+    assert doc["truncation"] == {"NRT": {"considered": 13, "kept": 12}}
+
+
+def test_floor_origin_displacement_is_disclosed(base: str) -> None:
+    prefs.set_patch({"home_airport": "LAX"})
+    set_plan(base, origins=["SFO", "LAX"])
+    rows = [
+        api_row(f"SFO{i}", "SFO", "NRT", f"2026-09-{5 + i:02d}", "united", biz(str(80000 + i)))
+        for i in range(12)
+    ]
+    rows.append(api_row("LAX-FLOOR", "LAX", "NRT", "2026-09-30", "united", biz("200000")))
+
+    doc = run(base, rows)
+
+    assert ids(doc) == [*[f"SFO{i}" for i in range(11)], "LAX-FLOOR"]
+    assert doc["truncation"] == {
+        "NRT": {"considered": 13, "kept": 12, "displaced": 1}
+    }
+
+
 # --- veto, avoid airlines, search-state passthrough ---
 
 
@@ -226,6 +344,23 @@ def test_search_states_pass_through_from_sweep(base: str) -> None:
     doc = shortlist.shortlist(base, now=clock())
     assert doc["search_states"] == states
     assert doc["leg"] == "outbound"
+    assert "provenance" not in doc
+
+
+def test_superseded_rows_sum_across_constituent_sweeps(base: str) -> None:
+    set_plan(base, program_sweeps=[{"source": "united", "dest_region": "Asia"}])
+    seed_leg(base, "outbound:asia", [], superseded_rows={"count": 2, "ids": ["A", "B"]})
+    seed_leg(
+        base,
+        "outbound:united-asia",
+        [],
+        kind="availability",
+        superseded_rows={"count": 3, "ids": ["C", "D", "E"]},
+    )
+
+    doc = shortlist.shortlist(base, now=clock())
+
+    assert doc["provenance"] == {"superseded_rows": {"count": 5}}
 
 
 # --- return leg ---

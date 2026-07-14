@@ -610,11 +610,20 @@ def phase_done(
 
 def _validate_sweep_artifact(doc: object, name: str) -> None:
     doc = require_keys(doc, {"provenance", "search_states", "rows"}, name)
-    require_keys(
+    provenance = require_keys(
         doc["provenance"],
         {"source", "fetched_at", "searched", "completeness", "expanded_origins"},
         f"{name}.provenance",
+        optional=frozenset({"superseded_rows"}),
     )
+    if "superseded_rows" in provenance:
+        label = f"{name}.provenance.superseded_rows"
+        superseded = require_keys(provenance["superseded_rows"], {"count", "ids"}, label)
+        if require_int(superseded["count"], f"{label}.count") <= 0:
+            raise UsageError(f"{label}.count must be at least 1")
+        require_str_list(superseded["ids"], f"{label}.ids")
+        if len(superseded["ids"]) > 50:
+            raise UsageError(f"{label}.ids must contain at most 50 entries")
     if not isinstance(doc["search_states"], dict):
         raise UsageError(f"{name}.search_states must be an object")
     if not isinstance(doc["rows"], list):
@@ -623,7 +632,13 @@ def _validate_sweep_artifact(doc: object, name: str) -> None:
 
 def _validate_shortlist_artifact(doc: object, name: str) -> None:
     keys = {"candidates", "considered", "search_states", "leg", "truncation"}
-    doc = require_keys(doc, keys, name)
+    doc = require_keys(doc, keys, name, optional=frozenset({"provenance"}))
+    if "provenance" in doc:
+        provenance = require_keys(doc["provenance"], {"superseded_rows"}, f"{name}.provenance")
+        label = f"{name}.provenance.superseded_rows"
+        superseded = require_keys(provenance["superseded_rows"], {"count"}, label)
+        if require_int(superseded["count"], f"{label}.count") <= 0:
+            raise UsageError(f"{label}.count must be at least 1")
     if not isinstance(doc["candidates"], list):
         raise UsageError(f"{name}.candidates must be a list")
     if not isinstance(doc["search_states"], dict):

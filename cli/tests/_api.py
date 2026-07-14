@@ -75,20 +75,24 @@ def sweep_envelope(
     search_states: dict | None = None,
     completeness: str = "complete",
     searched: list[dict] | None = None,
+    superseded_rows: dict | None = None,
 ) -> dict:
     """A leg sweep artifact envelope (provenance + search states + rows)."""
     rows = rows or []
     origins = expanded_origins
     if origins is None:
         origins = sorted({row["Route"]["OriginAirport"] for row in rows})
+    provenance = {
+        "source": source,
+        "fetched_at": "2026-07-13T12:00:00+00:00",
+        "searched": searched or [{"start": "2026-09-01", "end": "2026-09-14"}],
+        "completeness": completeness,
+        "expanded_origins": origins,
+    }
+    if superseded_rows is not None:
+        provenance["superseded_rows"] = superseded_rows
     return {
-        "provenance": {
-            "source": source,
-            "fetched_at": "2026-07-13T12:00:00+00:00",
-            "searched": searched or [{"start": "2026-09-01", "end": "2026-09-14"}],
-            "completeness": completeness,
-            "expanded_origins": origins,
-        },
+        "provenance": provenance,
         "search_states": search_states or {},
         "rows": rows,
     }

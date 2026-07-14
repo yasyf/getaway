@@ -132,12 +132,16 @@ def shortlist(
 
     search_states: dict = {}
     observed: set[str] = set()
+    superseded_rows = 0
     for name in spec["sweeps"]:
         swept = _read_sweep(slug, name)
         if swept is not None:
             search_states.update(swept["search_states"])
+            provenance = swept["provenance"]
+            if "superseded_rows" in provenance:
+                superseded_rows += provenance["superseded_rows"]["count"]
             if name in spec["search_sweeps"]:
-                observed.update(swept["provenance"]["expanded_origins"])
+                observed.update(provenance["expanded_origins"])
 
     store = connect(cache_db(), now=now)
     rows = store.query_availability(trip_slug=slug, labels=spec["labels"])
@@ -181,6 +185,13 @@ def shortlist(
         )
 
     field = spec["endpoint_field"]
+    if field == "origin":
+        floor_origins: set[str] = set()  # Return endpoints are already partitioned by origin.
+    else:
+        floor_origins = (
+            {prefs_doc["home_airport"]} if prefs_doc["home_airport"] is not None else set()
+        ) & feasible_origins
+
     by_endpoint: dict[str, list[Row]] = {}
     for cand in _group_best(candidates):
         by_endpoint.setdefault(cand[field], []).append(cand)
@@ -188,10 +199,21 @@ def shortlist(
     kept: list[Row] = []
     truncation: dict = {}
     for endpoint, cands in by_endpoint.items():
-        selected = _cohort_select(cands, spec["budget"])
+        floor_picks: dict[str, Row] = {}
+        for cand in sorted(cands, key=lambda c: c["mileage"]):
+            if cand["origin"] in floor_origins:
+                floor_picks.setdefault(cand["origin"], cand)
+
+        round_robin = _cohort_select(cands, spec["budget"])
+        selection_pool = list(floor_picks.values())
+        selection_pool.extend(cand for cand in round_robin if cand not in selection_pool)
+        selected = selection_pool[: spec["budget"]]
+        displaced = sum(cand not in selected for cand in round_robin)
         kept.extend(selected)
         if len(cands) > len(selected):
             truncation[endpoint] = {"considered": len(cands), "kept": len(selected)}
+            if displaced:
+                truncation[endpoint]["displaced"] = displaced
     kept.sort(key=lambda c: (int(c["soft"]), c["mileage"], 0 if c["departure_day_match"] else 1))
 
     doc = {
@@ -201,6 +223,8 @@ def shortlist(
         "leg": spec["label"],
         "truncation": truncation,
     }
+    if superseded_rows:
+        doc["provenance"] = {"superseded_rows": {"count": superseded_rows}}
     trips.artifact_write(slug, spec["name"], json.dumps(doc, separators=(",", ":")))
     trips.phase_done(slug, node_id, inputs_fp=inputs_fp, now=now)
     return doc

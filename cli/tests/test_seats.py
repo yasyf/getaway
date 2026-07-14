@@ -48,6 +48,7 @@ def test_search_walks_cursor_dedupes_and_stops(client: SeatsClient) -> None:
         ]
     )
     rows = client.search(["SFO"], ["NRT", "HND"], pages=5)
+    assert type(rows) is list
     assert [row["ID"] for row in rows] == ["AAA", "BBB", "CCC"]
     assert respx.get(SEARCH_URL).call_count == 2
 
@@ -74,6 +75,116 @@ def test_search_respects_page_budget(client: SeatsClient) -> None:
     rows = client.search(["SFO"], ["NRT"], pages=1)
     assert [row["ID"] for row in rows] == ["AAA", "BBB"]
     assert respx.get(SEARCH_URL).call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("page_keys", "page_budget", "expected_ids", "expected_has_more", "expected_calls"),
+    [
+        pytest.param(
+            ("page1",),
+            1,
+            ["AAA", "BBB"],
+            True,
+            1,
+            id="single-page-budget-truncated",
+        ),
+        pytest.param(
+            ("page1", "page2"),
+            2,
+            ["AAA", "BBB", "CCC"],
+            False,
+            2,
+            id="multi-page-api-exhausted",
+        ),
+    ],
+)
+@respx.mock
+def test_paginate_reports_trailing_has_more(
+    client: SeatsClient,
+    page_keys: tuple[str, ...],
+    page_budget: int,
+    expected_ids: list[str],
+    expected_has_more: bool,
+    expected_calls: int,
+) -> None:
+    pages = load("search_page.json")
+    route = respx.get(SEARCH_URL).mock(
+        side_effect=[httpx.Response(200, json=pages[key]) for key in page_keys]
+    )
+    result = client._paginate(
+        "/search",
+        {"origin_airport": "SFO", "destination_airport": "NRT"},
+        take=500,
+        pages=page_budget,
+    )
+    assert [row["ID"] for row in result.rows] == expected_ids
+    assert result.has_more is expected_has_more
+    assert result.calls == expected_calls
+    assert route.call_count == expected_calls
+
+
+@respx.mock
+def test_paginate_preserves_progress_on_quota_floor(
+    tmp_store: store.Store,
+) -> None:
+    pages = load("search_page.json")
+    client = SeatsClient(tmp_store, api_key="test-key", floor=100)
+    route = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=pages["page1"],
+            headers={seats.RATE_LIMIT_HEADER: "100"},
+        )
+    )
+    with pytest.raises(seats.PaginationError) as excinfo:
+        client._paginate(
+            "/search",
+            {"origin_airport": "SFO", "destination_airport": "NRT"},
+            take=500,
+            pages=2,
+        )
+    assert [row["ID"] for row in excinfo.value.rows] == ["AAA", "BBB"]
+    assert excinfo.value.calls == 1
+    assert isinstance(excinfo.value.cause, QuotaFloorError)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_paginate_preserves_progress_on_http_error(client: SeatsClient) -> None:
+    pages = load("search_page.json")
+    route = respx.get(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=pages["page1"]),
+            httpx.ConnectError("boom"),
+        ]
+    )
+    with pytest.raises(seats.PaginationError) as excinfo:
+        client._paginate(
+            "/search",
+            {"origin_airport": "SFO", "destination_airport": "NRT"},
+            take=500,
+            pages=2,
+        )
+    assert [row["ID"] for row in excinfo.value.rows] == ["AAA", "BBB"]
+    assert excinfo.value.calls == 1
+    assert isinstance(excinfo.value.cause, httpx.HTTPError)
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_search_unwraps_pagination_quota_error(tmp_store: store.Store) -> None:
+    pages = load("search_page.json")
+    client = SeatsClient(tmp_store, api_key="test-key", floor=100)
+    route = respx.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=pages["page1"],
+            headers={seats.RATE_LIMIT_HEADER: "100"},
+        )
+    )
+    with pytest.raises(QuotaFloorError):
+        client.search(["SFO"], ["NRT"], pages=2)
+    assert route.call_count == 1
 
 
 def test_cabin_rows_normalizes_mileage_string_to_int() -> None:
@@ -140,8 +251,35 @@ def test_trip_detail_selects_lowest_mileage_in_cabin(client: SeatsClient) -> Non
 
 
 @respx.mock
+def test_trip_detail_prefers_pure_cabin_over_cheaper_mixed(client: SeatsClient) -> None:
+    payload = _trip_payload(
+        _trip(44000, "business", "economy"),
+        _trip(90000, "business", "business"),
+    )
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(return_value=httpx.Response(200, json=payload))
+    detail = client.trip_detail("AAA", "J")
+    assert detail["mileage"] == 90000
+
+
+@respx.mock
+def test_trip_detail_selects_lowest_mileage_mixed_cabin(client: SeatsClient) -> None:
+    payload = _trip_payload(
+        _trip(60000, "business", "economy"),
+        _trip(44000, "economy", "business"),
+        _trip(30000, "economy", "premium"),
+    )
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(return_value=httpx.Response(200, json=payload))
+    detail = client.trip_detail("AAA", "J")
+    assert detail["mileage"] == 44000
+    assert [segment["cabin"] for segment in detail["segments"]] == ["Y", "J"]
+
+
+@respx.mock
 def test_trip_detail_no_matching_cabin_raises_no_data(client: SeatsClient) -> None:
-    payload = _trip_payload(_trip(20000, "economy"), _trip(30000, "economy"))
+    payload = _trip_payload(
+        _trip(20000, "economy", "first"),
+        _trip(30000, "economy", "premium"),
+    )
     respx.get(f"{seats.BASE_URL}/trips/AAA").mock(return_value=httpx.Response(200, json=payload))
     with pytest.raises(NoData):
         client.trip_detail("AAA", "J")
@@ -211,6 +349,7 @@ def test_availability_projects_cabins_and_records_quota(
         )
     )
     rows = client.availability("aeroplan")
+    assert type(rows) is list
     assert [row["ID"] for row in rows] == ["DDD", "EEE"]
     assert tmp_store.latest_quota() == {
         "endpoint": "/availability",
@@ -404,7 +543,7 @@ def test_search_command_ingests_and_reports(
     result = CliRunner().invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
     assert result.exit_code == EXIT_OK
     payload = json.loads(result.output)
-    assert payload == {"rows": 2, "new": 2, "quota_remaining": 900}
+    assert payload == {"rows": 2, "new": 2, "superseded": [], "quota_remaining": 900}
     assert store.connect(paths.cache_db()).stats()["availability"] == 2
 
 

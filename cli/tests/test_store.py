@@ -179,7 +179,7 @@ def test_concurrent_first_connect_serializes_bootstrap(db_path: Path) -> None:
 def test_ingest_counts_new_rows(db_path: Path) -> None:
     st = store.connect(db_path, now=_clock(FROZEN))
     result = st.ingest(ROWS)
-    assert result == {"rows": 3, "new": 3}
+    assert result == {"rows": 3, "new": 3, "superseded": []}
 
 
 def test_reingest_updates_fetched_at_without_duplicating(db_path: Path) -> None:
@@ -188,7 +188,7 @@ def test_reingest_updates_fetched_at_without_duplicating(db_path: Path) -> None:
     first.ingest([ROWS[0]])
     second = store.connect(db_path, now=_clock(later))
     result = second.ingest([ROWS[0]])
-    assert result == {"rows": 1, "new": 0}
+    assert result == {"rows": 1, "new": 0, "superseded": []}
     assert second.stats()["availability"] == 1
     assert second.stats()["availability_cabin"] == 4
     conn = sqlite3.connect(str(db_path))
@@ -319,6 +319,33 @@ def _sweep(label: str, started: dt.datetime, slug: str = "trip") -> dict:
         "params": {},
         "started_at": started.isoformat(),
     }
+
+
+@pytest.mark.parametrize(
+    ("refresh_rows", "expected"),
+    [
+        pytest.param(
+            [ROWS[0]],
+            [
+                {"id": "R2", "date": "2026-09-05"},
+                {"id": "R3", "date": "2026-09-10"},
+            ],
+            id="rows-disappeared-from-latest-sweep",
+        ),
+        pytest.param(ROWS, [], id="identical-latest-sweep"),
+    ],
+)
+def test_ingest_reports_rows_superseded_by_latest_sweep(
+    db_path: Path, refresh_rows: list[dict], expected: list[dict]
+) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    first = st.ingest(ROWS, sweep=_sweep("asia", FROZEN))
+    second = st.ingest(
+        refresh_rows,
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)),
+    )
+    assert first["superseded"] == []
+    assert second["superseded"] == expected
 
 
 def test_query_trip_scoped_uses_latest_sweep_per_label(db_path: Path) -> None:
@@ -573,6 +600,15 @@ def test_reserve_floor_policy(db_path: Path, remaining: int, floor: int, allowed
         with pytest.raises(QuotaFloorError):
             st.reserve_quota(floor)
         assert _reservations(db_path) == 0
+
+
+def test_reserve_refusal_rolls_back_before_ingest(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.record_quota("/search", 100)
+    with pytest.raises(QuotaFloorError):
+        st.reserve_quota(100)
+    result = st.ingest([], sweep=_sweep("asia", FROZEN))
+    assert result == {"rows": 0, "new": 0, "superseded": []}
 
 
 def test_reconcile_releases_reservation_and_records_header(db_path: Path) -> None:

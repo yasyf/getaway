@@ -13,9 +13,10 @@ from getaway.constants import (
     DEFAULT_QUOTA_FLOOR,
     SEARCH_PAGE_SIZE,
     SOFT_DATE_SEARCH_PADDING_DAYS,
+    SWEEP_PAGE_BUDGET,
 )
 from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
-from getaway.seats import AuthError, SeatsClient
+from getaway.seats import AuthError, PaginationError, SeatsClient
 from getaway.store import NoData, QuotaFloorError, connect
 
 Spec = dict[str, Any]
@@ -209,10 +210,11 @@ def _is_region(code: str) -> bool:
 def _search_states(leg: Leg, rows: list[dict], has_more: bool, stop: tuple | None) -> dict:
     endpoints = leg["endpoints"]
     if stop is not None:
-        if stop[0] == "not_run":
-            return {e: {"state": "not_run", "reason": stop[1]} for e in endpoints}
+        if len(stop) == 2:
+            return {e: {"state": stop[0], "reason": stop[1]} for e in endpoints}
         return {
-            e: {"state": "failed", "reason": stop[1], "retryability": stop[2]} for e in endpoints
+            e: {"state": stop[0], "reason": stop[1], "retryability": stop[2]}
+            for e in endpoints
         }
     if has_more:  # a truncated page: an absent endpoint is unknown, not empty
         return {
@@ -245,9 +247,40 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
     has_more = False
     stop: tuple | None = None
     widen = 0
+    calls = 0
     while True:
         try:
-            payload = client._get(leg["path"], _api_params(leg, start, end, plan))
+            params = _api_params(leg, start, end, plan)
+            if leg["kind"] == "search":
+                params["order_by"] = "lowest_mileage"
+                page = client._paginate(
+                    leg["path"], params, SEARCH_PAGE_SIZE, SWEEP_PAGE_BUDGET
+                )
+                page_rows = page.rows
+                has_more = page.has_more
+                calls += page.calls
+            else:
+                payload = client._get(leg["path"], params)
+                page_rows = payload["data"]
+                has_more = bool(payload.get("hasMore"))
+                calls += 1
+        except PaginationError as err:
+            calls += err.calls
+            for row in err.rows:
+                if row["ID"] not in seen_ids:
+                    seen_ids.add(row["ID"])
+                    rows.append(row)
+            if rows:
+                searched.append({"start": start, "end": end})
+                if isinstance(err.cause, QuotaFloorError):
+                    stop = ("partial", "quota_budget")
+                else:
+                    stop = ("partial", str(err.cause), "retryable")
+            elif isinstance(err.cause, QuotaFloorError):
+                stop = ("not_run", "quota_budget")
+            else:
+                stop = ("failed", str(err.cause), "retryable")
+            break
         except QuotaFloorError:
             stop = ("not_run", "quota_budget")
             break
@@ -255,11 +288,10 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
             stop = ("failed", str(err), "retryable")
             break
         searched.append({"start": start, "end": end})
-        for row in payload["data"]:
+        for row in page_rows:
             if row["ID"] not in seen_ids:
                 seen_ids.add(row["ID"])
                 rows.append(row)
-        has_more = bool(payload.get("hasMore"))
         if rows or widen >= AUTO_WIDEN_CALL_BUDGET_PER_LEG:
             break
         widen += 1
@@ -272,7 +304,7 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
         "searched": searched,
         "expanded_origins": sorted({row["Route"]["OriginAirport"] for row in rows}),
         "completeness": _completeness(states),
-        "calls": len(searched),
+        "calls": calls,
     }
 
 
@@ -313,14 +345,24 @@ def run(
     }
     result = store.ingest(swept["rows"], sweep=sweep)
     sources = trip["plan"].get("sources", [])
+    start, end = leg["window"]
+    superseded_ids = sorted(
+        row["id"] for row in result["superseded"] if start <= row["date"] <= end
+    )
+    provenance = {
+        "source": leg.get("source") or ",".join(sources) or "all",
+        "fetched_at": now().isoformat(),
+        "searched": swept["searched"],
+        "completeness": swept["completeness"],
+        "expanded_origins": swept["expanded_origins"],
+    }
+    if superseded_ids:
+        provenance["superseded_rows"] = {
+            "count": len(superseded_ids),
+            "ids": superseded_ids[:50],
+        }
     envelope = {
-        "provenance": {
-            "source": leg.get("source") or ",".join(sources) or "all",
-            "fetched_at": now().isoformat(),
-            "searched": swept["searched"],
-            "completeness": swept["completeness"],
-            "expanded_origins": swept["expanded_origins"],
-        },
+        "provenance": provenance,
         "search_states": swept["search_states"],
         "rows": swept["rows"],
     }

@@ -13,6 +13,30 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Added
+- Retrieval honesty (the missed-booking postmortem fixes): region sweeps
+  order by lowest mileage and page through the cursor under
+  `SWEEP_PAGE_BUDGET`, so a hot region no longer truncates at one
+  arbitrary 1000-row page — a budget-exhausted endpoint with more rows
+  reads `partial`/`page_budget`, and a mid-pagination quota stop or HTTP
+  failure keeps its fetched rows and true call count (`PaginationError`
+  carries partial progress) instead of vanishing into `not_run`.
+- Sweep refreshes disclose what they supersede: the store diffs the
+  prior latest sweep per label inside the ingest transaction, in-window
+  disappearances land in the sweep artifact's provenance
+  (`superseded_rows`: exact count, up to 50 ids), and shortlist
+  provenance carries the count downstream — supersede semantics stand,
+  silence doesn't.
+- Home-origin floor in shortlist selection: the cheapest in-window
+  home-airport candidate per endpoint is guaranteed a slot ahead of the
+  `(date, source)` round-robin, displacement disclosed in the
+  truncation record — the exact crowd-out that buried a bookable
+  home-origin itinerary.
+- Mixed-cabin awards stopped reading as phantoms: `/trips` normalization
+  prefers a pure-cabin itinerary but accepts the minimum-mileage
+  itinerary with at least one requested-cabin segment, per-segment
+  cabins preserved and one shared predicate across the live and cached
+  paths — `below_cabin_minutes` fit facts and the cabin gate judge what
+  retrieval used to silently discard.
 - Confirmed constraints now gate in rank: `constraints.cabin` drops any
   journey whose award segments book below the constrained cabin
   (compared per segment; cash legs exempt — bridge quotes are economy

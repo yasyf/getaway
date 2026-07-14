@@ -350,6 +350,54 @@ def test_no_itinerary_in_cabin_marks_leg_failed(
     }
 
 
+def test_mixed_cabin_cached_detail_expands(home: Path) -> None:
+    slug = make_trip(ONE_WAY)
+    segments = [
+        seg("SFO", "ORD", "2026-09-05T10:00", "2026-09-05T16:00", cabin="J"),
+        seg("ORD", "NRT", "2026-09-05T18:00", "2026-09-06T14:00", cabin="Y"),
+    ]
+    seed("OB", detail("OB", segments))
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    assert len(doc["journeys"]) == 1
+    assert doc["leg_states"]["outbound:OB:J"] == {"state": "expanded"}
+    expanded_segments = doc["journeys"][0]["legs"][0]["detail"]["segments"]
+    assert [segment["cabin"] for segment in expanded_segments] == ["J", "Y"]
+
+
+def test_cached_detail_without_requested_cabin_marks_leg_failed(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from getaway.store import NoData
+
+    class _NoItinerary:
+        def __init__(self, store: object, floor: int) -> None:
+            pass
+
+        def trip_detail(self, cid: str, cabin: str) -> dict:
+            raise NoData(f"no {cabin} itinerary for {cid}")
+
+    monkeypatch.setattr(journeys, "SeatsClient", _NoItinerary)
+    slug = make_trip(ONE_WAY)
+    seed(
+        "OB",
+        detail(
+            "OB",
+            [
+                seg("SFO", "ORD", "2026-09-05T10:00", "2026-09-05T16:00", cabin="Y"),
+                seg("ORD", "NRT", "2026-09-05T18:00", "2026-09-06T14:00", cabin="F"),
+            ],
+        ),
+    )
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    assert doc["journeys"] == []
+    assert doc["leg_states"]["outbound:OB:J"] == {
+        "state": "failed",
+        "reason": "no_itinerary_in_cabin",
+    }
+
+
 @pytest.mark.parametrize(
     ("cached", "journeys_count", "leg_state"),
     [
@@ -370,7 +418,7 @@ def test_no_itinerary_in_cabin_marks_leg_failed(
 def test_empty_segment_cached_detail_reads_as_no_itinerary(
     home: Path, cached: dict, journeys_count: int, leg_state: dict
 ) -> None:
-    # An empty-segment cache must skip, not pass _detail_matches_cabin (all([]) is True) and crash.
+    # An empty-segment cache must skip without falling through to a live fetch.
     slug = make_trip(ONE_WAY)
     seed("OB", cached)
     write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])

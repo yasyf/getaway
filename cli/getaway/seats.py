@@ -4,6 +4,7 @@ import datetime as dt
 import functools
 import json
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import click
@@ -33,6 +34,23 @@ HTTP_TIMEOUT = httpx.Timeout(30.0)
 _MILEAGE_FIELDS = tuple(f"{cabin}MileageCost" for cabin in CABIN_PREFIX.values())
 
 Row = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaginationResult:
+    rows: list[Row]
+    has_more: bool
+    calls: int
+
+
+class PaginationError(Exception):
+    """_paginate failed mid-pagination; carries progress made before the error."""
+
+    def __init__(self, rows: list[Row], calls: int, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.rows = rows
+        self.calls = calls
+        self.cause = cause
 
 
 def cabin_rows(row: Row) -> list[Row]:
@@ -92,14 +110,26 @@ def _layovers(segments: Sequence[Row]) -> list[int]:
     return layovers
 
 
+def itinerary_has_cabin(segment_cabins: Sequence[str], cabin: str) -> bool:
+    return any(segment_cabin == cabin for segment_cabin in segment_cabins)
+
+
+def _trip_cabins(trip: Row) -> list[str]:
+    return [CABIN_PREFIX[seg["Cabin"]] for seg in trip["AvailabilitySegments"]]
+
+
 def _trip_in_cabin(trip: Row, cabin: str) -> bool:
-    return all(CABIN_PREFIX[seg["Cabin"]] == cabin for seg in trip["AvailabilitySegments"])
+    return all(segment_cabin == cabin for segment_cabin in _trip_cabins(trip))
 
 
 def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
     # data is null when a program reports no trip data for the availability (documented);
     # read it as no itinerary, exactly like an empty list or a cabin miss.
-    matching = [trip for trip in (payload["data"] or []) if _trip_in_cabin(trip, cabin)]
+    trips = payload["data"] or []
+    pure = [trip for trip in trips if _trip_in_cabin(trip, cabin)]
+    matching = pure or [
+        trip for trip in trips if itinerary_has_cabin(_trip_cabins(trip), cabin)
+    ]
     if not matching:
         raise NoData(f"no {cabin} itinerary for {availability_id}")
     trip = min(matching, key=lambda t: t["MileageCost"])
@@ -164,7 +194,10 @@ class SeatsClient:
             params["only_direct_flights"] = "true"
         if order_by:
             params["order_by"] = order_by
-        return self._paginate("/search", params, take, pages)
+        try:
+            return self._paginate("/search", params, take, pages).rows
+        except PaginationError as err:
+            raise err.cause from err
 
     def availability(
         self,
@@ -188,7 +221,10 @@ class SeatsClient:
             params["origin_region"] = origin_region
         if dest_region:
             params["destination_region"] = dest_region
-        return self._paginate("/availability", params, take, pages)
+        try:
+            return self._paginate("/availability", params, take, pages).rows
+        except PaginationError as err:
+            raise err.cause from err
 
     def routes(self, source: str) -> list[Row]:
         return self._get("/routes", {"source": source})
@@ -217,28 +253,35 @@ class SeatsClient:
             raise
         return response.json()
 
-    def _paginate(self, path: str, params: Row, take: int, pages: int) -> list[Row]:
+    def _paginate(self, path: str, params: Row, take: int, pages: int) -> PaginationResult:
         rows: list[Row] = []
         seen: set[str] = set()
         cursor: Any = None
         skip = 0
+        has_more = False
+        calls = 0
         for _ in range(pages):
             page_params = dict(params)
             page_params["take"] = take
             if cursor is not None:
                 page_params["cursor"] = cursor
                 page_params["skip"] = skip
-            payload = self._get(path, page_params)
+            try:
+                payload = self._get(path, page_params)
+            except (QuotaFloorError, httpx.HTTPError) as err:
+                raise PaginationError(rows=rows, calls=calls, cause=err) from err
+            calls += 1
             page_rows = payload["data"]
             for row in page_rows:
                 if row["ID"] not in seen:
                     seen.add(row["ID"])
                     rows.append(_normalize_availability_row(row))
             skip += len(page_rows)
-            if not payload.get("hasMore"):
+            has_more = bool(payload.get("hasMore"))
+            if not has_more:
                 break
             cursor = payload["cursor"]
-        return rows
+        return PaginationResult(rows=rows, has_more=has_more, calls=calls)
 
 
 def _open_store() -> Store:
@@ -407,8 +450,9 @@ def expand_cmd(
     """Emit the lowest-mileage bookable itinerary in --cabin for an availability id.
 
     Selects among the /trips itineraries the cheapest one flown entirely in the
-    requested cabin (Y/W/J/F) and prints the normalized JSON. Exits EXIT_NO_DATA
-    (4) when the availability has no itinerary in that cabin.
+    requested cabin (Y/W/J/F), or the cheapest mixed-cabin itinerary containing it,
+    and prints the normalized JSON. Exits EXIT_NO_DATA (4) when the availability has
+    no itinerary in that cabin.
     """
     store = _open_store()
     if not refresh:

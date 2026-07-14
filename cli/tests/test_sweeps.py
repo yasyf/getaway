@@ -36,10 +36,23 @@ def biz(rid: str, dest: str = "NRT", origin: str = "SFO", date: str = "2026-09-0
     return api_row(rid, origin, dest, date, "united", {"J": {"mileage": "80000", "seats": 2}})
 
 
-def ok(rows: list[dict], has_more: bool = False, remaining: str = "900") -> httpx.Response:
+def ok(
+    rows: list[dict],
+    has_more: bool = False,
+    remaining: str = "900",
+    cursor: str = "cursor",
+) -> httpx.Response:
+    payload = {"data": rows, "hasMore": has_more}
+    if has_more:
+        payload["cursor"] = cursor
     return httpx.Response(
-        200, json={"data": rows, "hasMore": has_more}, headers={"X-RateLimit-Remaining": remaining}
+        200, json=payload, headers={"X-RateLimit-Remaining": remaining}
     )
+
+
+def _provenance(slug: str) -> dict:
+    envelope = json.loads(trips.artifact_read(slug, "legs/outbound/sweep-asia.json"))
+    return envelope["provenance"]
 
 
 @pytest.fixture
@@ -106,6 +119,7 @@ def test_soft_window_pads_all_cabins_include_filtered(search_trip: str) -> None:
     assert params["include_filtered"] == "true"
     assert "cabins" not in params  # all cabins ride one call
     assert params["take"] == "1000"
+    assert params["order_by"] == "lowest_mileage"
 
 
 @respx.mock
@@ -151,17 +165,77 @@ def test_run_writes_envelope_with_provenance_and_states(search_trip: str) -> Non
 
 
 @respx.mock
-def test_partial_when_page_budget_hit(search_trip: str) -> None:
-    respx.get(SEARCH_URL).mock(return_value=ok([biz("R1", dest="NRT")], has_more=True))
-    sweeps.run(search_trip, "outbound:asia", now=clock())
+def test_search_sweep_merges_multi_page_rows(search_trip: str) -> None:
+    route = respx.get(SEARCH_URL).mock(
+        side_effect=[
+            ok([biz("R1", dest="NRT")], has_more=True, cursor="page-2"),
+            ok([biz("R2", dest="BKK")]),
+        ]
+    )
+    result = sweeps.run(search_trip, "outbound:asia", now=clock())
     envelope = json.loads(trips.artifact_read(search_trip, "legs/outbound/sweep-asia.json"))
-    # an endpoint absent from a truncated page is unknown, not searched_empty
-    assert envelope["search_states"]["BKK"] == {
-        "state": "partial",
-        "reason": "page_budget",
-        "has_more": True,
+    assert result["calls"] == 2
+    assert result["completeness"] == "complete"
+    assert [row["ID"] for row in envelope["rows"]] == ["R1", "R2"]
+    assert envelope["search_states"] == {
+        "NRT": {"state": "complete"},
+        "BKK": {"state": "complete"},
     }
-    assert envelope["search_states"]["NRT"]["state"] == "partial"
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("final_has_more", "expected_states", "expected_completeness"),
+    [
+        pytest.param(
+            True,
+            {
+                "NRT": {"state": "partial", "reason": "page_budget", "has_more": True},
+                "BKK": {"state": "partial", "reason": "page_budget", "has_more": True},
+            },
+            "partial",
+            id="budget-exhausted-api-has-more",
+        ),
+        pytest.param(
+            False,
+            {"NRT": {"state": "complete"}, "BKK": {"state": "searched_empty"}},
+            "complete",
+            id="budget-exhausted-api-complete",
+        ),
+    ],
+)
+@respx.mock
+def test_search_sweep_uses_trailing_has_more_at_page_budget(
+    search_trip: str,
+    final_has_more: bool,
+    expected_states: dict,
+    expected_completeness: str,
+) -> None:
+    route = respx.get(SEARCH_URL).mock(
+        side_effect=[
+            ok([biz("R1")], has_more=True, cursor="page-2"),
+            ok([biz("R2")], has_more=True, cursor="page-3"),
+            ok([biz("R3")], has_more=final_has_more, cursor="page-4"),
+        ]
+    )
+    result = sweeps.run(search_trip, "outbound:asia", now=clock())
+    envelope = json.loads(trips.artifact_read(search_trip, "legs/outbound/sweep-asia.json"))
+    assert result["calls"] == 3
+    assert result["completeness"] == expected_completeness
+    assert [row["ID"] for row in envelope["rows"]] == ["R1", "R2", "R3"]
+    assert envelope["search_states"] == expected_states
+    assert route.call_count == 3
+    assert [call.request.url.params["order_by"] for call in route.calls] == [
+        "lowest_mileage",
+        "lowest_mileage",
+        "lowest_mileage",
+    ]
+
+
+def test_sweep_node_quota_cost_covers_each_page_of_each_widen(search_trip: str) -> None:
+    graph = trips.compile_graph(search_trip)
+    node = next(node for node in graph["nodes"] if node["id"] == "sweep:outbound:asia")
+    assert node["quota_cost"] == 9
 
 
 @respx.mock
@@ -175,11 +249,57 @@ def test_failed_carries_retryability(search_trip: str) -> None:
 
 
 @respx.mock
+def test_mid_pagination_quota_floor_preserves_partial_progress(search_trip: str) -> None:
+    connect(cache_db(), now=clock()).record_quota("/search", 901)
+    route = respx.get(SEARCH_URL).mock(
+        return_value=ok([biz("R1")], has_more=True, remaining="900")
+    )
+    result = sweeps.run(search_trip, "outbound:asia", quota_floor=900, now=clock())
+    envelope = json.loads(trips.artifact_read(search_trip, "legs/outbound/sweep-asia.json"))
+    assert result["rows"] == 1
+    assert result["calls"] == 1
+    assert result["completeness"] == "partial"
+    assert [row["ID"] for row in envelope["rows"]] == ["R1"]
+    assert envelope["search_states"]["NRT"] == {
+        "state": "partial",
+        "reason": "quota_budget",
+    }
+    assert envelope["provenance"]["searched"] == [
+        {"start": "2026-08-25", "end": "2026-09-21"}
+    ]
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_mid_pagination_http_error_preserves_partial_progress(search_trip: str) -> None:
+    error = httpx.ConnectError("boom")
+    route = respx.get(SEARCH_URL).mock(
+        side_effect=[
+            ok([biz("R1")], has_more=True),
+            error,
+        ]
+    )
+    result = sweeps.run(search_trip, "outbound:asia", now=clock())
+    envelope = json.loads(trips.artifact_read(search_trip, "legs/outbound/sweep-asia.json"))
+    assert result["rows"] == 1
+    assert result["calls"] == 1
+    assert result["completeness"] == "partial"
+    assert [row["ID"] for row in envelope["rows"]] == ["R1"]
+    assert envelope["search_states"]["NRT"] == {
+        "state": "partial",
+        "reason": str(error),
+        "retryability": "retryable",
+    }
+    assert route.call_count == 2
+
+
+@respx.mock
 def test_not_run_when_quota_floor_reached(search_trip: str) -> None:
     connect(cache_db(), now=clock()).record_quota("/search", 900)
     route = respx.get(SEARCH_URL).mock(return_value=ok([biz("R1")]))
     result = sweeps.run(search_trip, "outbound:asia", quota_floor=900, now=clock())
     assert result["completeness"] == "not_run"
+    assert result["calls"] == 0
     assert route.call_count == 0  # reservation refused before the HTTP call
     envelope = json.loads(trips.artifact_read(search_trip, "legs/outbound/sweep-asia.json"))
     assert envelope["search_states"]["NRT"] == {"state": "not_run", "reason": "quota_budget"}
@@ -221,6 +341,72 @@ def test_refresh_forces_http(search_trip: str) -> None:
     sweeps.run(search_trip, "outbound:asia", now=clock())
     sweeps.run(search_trip, "outbound:asia", refresh=True, now=clock())
     assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("disappeared", "expected_ids"),
+    [
+        pytest.param(2, ["GONE-00", "GONE-01"], id="two-disappearances"),
+        pytest.param(
+            51,
+            [f"GONE-{index:02d}" for index in range(50)],
+            id="fifty-one-disappearances-capped-at-fifty-ids",
+        ),
+    ],
+)
+@respx.mock
+def test_refresh_records_in_window_superseded_rows(
+    search_trip: str, disappeared: int, expected_ids: list[str]
+) -> None:
+    gone = [biz(f"GONE-{index:02d}") for index in range(disappeared)]
+    keep = biz("KEEP")
+    respx.get(SEARCH_URL).mock(side_effect=[ok([*gone, keep]), ok([keep])])
+
+    sweeps.run(search_trip, "outbound:asia", now=clock())
+    sweeps.run(search_trip, "outbound:asia", refresh=True, now=clock())
+
+    assert _provenance(search_trip)["superseded_rows"] == {
+        "count": disappeared,
+        "ids": expected_ids,
+    }
+
+
+@respx.mock
+def test_identical_refresh_omits_superseded_rows(search_trip: str) -> None:
+    row = biz("SAME")
+    respx.get(SEARCH_URL).mock(side_effect=[ok([row]), ok([row])])
+
+    sweeps.run(search_trip, "outbound:asia", now=clock())
+    sweeps.run(search_trip, "outbound:asia", refresh=True, now=clock())
+
+    assert "superseded_rows" not in _provenance(search_trip)
+
+
+@respx.mock
+def test_refresh_excludes_out_of_window_superseded_rows(search_trip: str) -> None:
+    in_window = biz("GONE-IN", date="2026-09-05")
+    out_of_window = biz("GONE-OUT", date="2026-09-22")
+    keep = biz("KEEP")
+    respx.get(SEARCH_URL).mock(
+        side_effect=[ok([in_window, out_of_window, keep]), ok([keep])]
+    )
+
+    sweeps.run(search_trip, "outbound:asia", now=clock())
+    sweeps.run(search_trip, "outbound:asia", refresh=True, now=clock())
+
+    assert _provenance(search_trip)["superseded_rows"] == {
+        "count": 1,
+        "ids": ["GONE-IN"],
+    }
+
+
+@respx.mock
+def test_first_sweep_omits_superseded_rows(search_trip: str) -> None:
+    respx.get(SEARCH_URL).mock(return_value=ok([biz("FIRST")]))
+
+    sweeps.run(search_trip, "outbound:asia", now=clock())
+
+    assert "superseded_rows" not in _provenance(search_trip)
 
 
 @respx.mock

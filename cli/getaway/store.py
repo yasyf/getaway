@@ -165,14 +165,30 @@ class Store:
         self._path = path
         self._now = now
 
-    def ingest(self, rows: Sequence[Row], sweep: Sweep | None = None) -> dict[str, int]:
+    def ingest(self, rows: Sequence[Row], sweep: Sweep | None = None) -> dict[str, Any]:
         # function-level import: seats owns cabin normalization at the client boundary
         # and imports connect() from this module, so the reference is cycled lazily.
         from getaway.seats import cabin_rows
 
         fetched_at = self._now().isoformat()
         sweep_id: int | None = None
+        superseded: list[Row] = []
         if sweep is not None:
+            self._conn.execute("BEGIN IMMEDIATE")
+            prior_rows = self._conn.execute(
+                "SELECT a.id, a.date FROM availability a "
+                "JOIN sweep_rows sr ON sr.availability_id = a.id "
+                "WHERE sr.sweep_id = ("
+                "SELECT MAX(s.id) FROM sweeps s WHERE s.trip_slug = ? AND s.label = ?) "
+                "ORDER BY a.id",
+                (sweep["trip_slug"], sweep["label"]),
+            ).fetchall()
+            row_ids = {row["ID"] for row in rows}
+            superseded = [
+                {"id": row["id"], "date": row["date"]}
+                for row in prior_rows
+                if row["id"] not in row_ids
+            ]
             cursor = self._conn.execute(
                 "INSERT INTO sweeps (trip_slug, label, kind, params, started_at) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -242,7 +258,7 @@ class Store:
                     (sweep_id, row_id),
                 )
         self._conn.commit()
-        return {"rows": len(rows), "new": new}
+        return {"rows": len(rows), "new": new, "superseded": superseded}
 
     def query_availability(
         self,
@@ -369,7 +385,7 @@ class Store:
         ``QuotaFloorError`` otherwise.
         """
         token = uuid.uuid4().hex
-        with paths.locked(self._path):
+        with paths.locked(self._path), self._conn:
             self._prune_stale_reservations()
             remaining = self._today_remaining()
             in_flight = self._conn.execute(
@@ -389,7 +405,6 @@ class Store:
                 "INSERT INTO quota_reservations (token, reserved_at) VALUES (?, ?)",
                 (token, self._now().isoformat()),
             )
-            self._conn.commit()
         return token
 
     def reconcile_quota(self, token: str, endpoint: str, remaining: int | None) -> None:

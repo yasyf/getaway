@@ -34,7 +34,7 @@ from getaway.constants import (
     NODE_TTL_HOURS,
 )
 from getaway.paths import cache_db, emit, map_errors, utcnow
-from getaway.seats import AuthError, SeatsClient
+from getaway.seats import AuthError, SeatsClient, itinerary_has_cabin
 from getaway.store import NoData, QuotaFloorError, connect
 
 Row = dict[str, Any]
@@ -58,7 +58,7 @@ def _sweep_provenance(slug: str, name: str) -> dict | None:
 
 
 def _detail_matches_cabin(detail: Detail, letter: str) -> bool:
-    return all(seg["cabin"] == letter for seg in detail["segments"])
+    return itinerary_has_cabin([seg["cabin"] for seg in detail["segments"]], letter)
 
 
 def _cache_age_hours(fetched_at: str | None, now: dt.datetime) -> float | None:
