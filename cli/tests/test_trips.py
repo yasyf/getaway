@@ -64,6 +64,25 @@ def test_new_cli_exits_state_conflict_on_duplicate(ready: Path, runner: CliRunne
     assert result.exit_code == 3
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda: trips.show(SLUG), id="show"),
+        pytest.param(lambda: trips.set_patch(SLUG, {"cabin": "business"}), id="set-patch"),
+        pytest.param(lambda: trips.done(SLUG), id="done"),
+        pytest.param(lambda: trips.log(SLUG, "note"), id="log"),
+    ],
+)
+def test_missing_trip_names_trips_dir(
+    getaway_home: Path, operation: Callable[[], object]
+) -> None:
+    with pytest.raises(StateConflictError) as exc:
+        operation()
+    message = str(exc.value)
+    assert SLUG in message
+    assert str(trips.trips_dir()) in message
+
+
 @pytest.mark.parametrize("reserved", ["slug", "created"])
 def test_set_patch_rejects_reserved_keys(ready: Path, reserved: str) -> None:
     trips.new(SLUG)

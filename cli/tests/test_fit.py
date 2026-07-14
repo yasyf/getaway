@@ -106,15 +106,6 @@ def test_cross_timezone_elapsed_uses_total_duration() -> None:
     assert ob["arrives_local"].startswith("2026-09-06")
 
 
-def test_window_overshoot_per_leg() -> None:
-    legs = [_outbound(), _return(arr="2026-09-16T09:00:00")]
-    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
-    by_role = {leg_fact["role"]: leg_fact for leg_fact in facts["legs"]}
-    assert by_role["outbound"]["window_overshoot"] == {"days_before_start": 0, "days_after_end": 0}
-    # arrives 09-16, window ends 09-14
-    assert by_role["return"]["window_overshoot"]["days_after_end"] == 2
-
-
 def test_trip_length_and_away_nights_are_calendar_spans() -> None:
     legs = [_outbound(), _return(dep="2026-09-14T18:00:00", arr="2026-09-15T09:00:00")]
     facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
@@ -304,3 +295,59 @@ def test_departure_day_miss_uses_trip_preference() -> None:
     result = fit.journey_fit(trip(prefs_pref), PREFS, [_outbound()], clock())
     misses = {m["code"]: m for m in result["preference_misses"]}
     assert "departure_days" in misses  # 2026-09-05 is a Saturday, not Monday
+
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        pytest.param(
+            {"start": "2026-09-06", "end": "2026-09-10"},
+            [
+                {
+                    "code": "outbound_departure_window",
+                    "delta": -1,
+                    "annotation": "departs 1 day(s) before your window start",
+                }
+            ],
+            id="before-start",
+        ),
+        pytest.param({"start": "2026-09-05", "end": "2026-09-10"}, [], id="at-start"),
+        pytest.param({"start": "2026-09-01", "end": "2026-09-10"}, [], id="inside"),
+        pytest.param({"start": "2026-09-01", "end": "2026-09-05"}, [], id="at-end"),
+        pytest.param(
+            {"start": "2026-09-01", "end": "2026-09-04"},
+            [
+                {
+                    "code": "outbound_departure_window",
+                    "delta": 1,
+                    "annotation": "departs 1 day(s) past your window end",
+                }
+            ],
+            id="past-end-1",
+        ),
+        pytest.param(
+            {"start": "2026-08-30", "end": "2026-09-02"},
+            [
+                {
+                    "code": "outbound_departure_window",
+                    "delta": 3,
+                    "annotation": "departs 3 day(s) past your window end",
+                }
+            ],
+            id="past-end-3",
+        ),
+    ],
+)
+def test_outbound_window_miss_is_preference_relative_both_sides(
+    window: dict, expected: list[dict]
+) -> None:
+    # The preference window, not trip["window"], drives the miss — and both the early and late
+    # sides read against the preference's own start/end. Outbound departs 2026-09-05.
+    prefs_pref = {"outbound_departure_window": {"value": window, "priority": "primary"}}
+    result = fit.journey_fit(trip(prefs_pref), PREFS, [_outbound()], clock())
+    assert result["preference_misses"] == expected
+
+
+def test_no_outbound_window_miss_without_preference() -> None:
+    result = fit.journey_fit(trip({}), PREFS, [_outbound()], clock())
+    assert result["preference_misses"] == []

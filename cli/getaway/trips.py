@@ -415,7 +415,7 @@ def set_patch(slug: str, patch: dict) -> dict:
 
     def _mut(current: dict) -> dict:
         if not current:
-            raise StateConflictError(f"no trip {slug!r}")
+            raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
         merged = {**current, **patch}
         _validate_trip(merged)
         return merged
@@ -427,7 +427,7 @@ def show(slug: str) -> dict:
     _valid_slug(slug)
     path = _trip_json(slug)
     if not path.exists():
-        raise StateConflictError(f"no trip {slug!r}")
+        raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
     doc = json.loads(path.read_text())
     plan = doc["plan"]
     if plan and "origins" not in plan:
@@ -450,7 +450,7 @@ def done(slug: str) -> dict:
 
     def _mut(current: dict) -> dict:
         if not current:
-            raise StateConflictError(f"no trip {slug!r}")
+            raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
         return {**current, "status": "done"}
 
     doc = atomic_update(_trip_json(slug), _mut)
@@ -477,7 +477,7 @@ def log(slug: str, text: str, now: Callable[[], datetime] = utcnow) -> dict:
 
     def _mut(current: dict) -> dict:
         if not current:
-            raise StateConflictError(f"no trip {slug!r}")
+            raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
         current["decisions"].append(entry)
         return current
 
@@ -592,10 +592,8 @@ def phase_done(
     node = _node_index(slug).get(key)
     if node is None:
         raise UsageError(f"unknown node id: {key!r}")
-    trip = show(slug)
-    prefs_doc = prefs.show()
     if inputs_fp is None:
-        inputs_fp = capture_inputs_fp(trip, prefs_doc, key)
+        inputs_fp = capture_inputs_fp(show(slug), prefs.show(), key)
     if upstream_fp is None:
         upstream_fp = _upstream_fp(slug, node)
     record = {

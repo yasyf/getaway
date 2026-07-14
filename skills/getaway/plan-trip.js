@@ -80,7 +80,7 @@ const PREFLIGHT_SCHEMA = {
   required: ['loggedIn', 'pro'],
   properties: { loggedIn: { type: 'boolean' }, pro: { type: 'boolean' } },
 };
-const RUN_SCHEMA = { type: 'object', required: ['exit_code'], properties: { exit_code: { type: 'number' } } };
+const RUN_SCHEMA = { type: 'object', required: ['exit_code'], properties: { exit_code: { type: 'number' }, stderr_tail: { type: 'string' } } };
 const FINALIZE_SCHEMA = {
   type: 'object',
   required: ['exit_code', 'journeys', 'unpaired_leads', 'notable_stretches'],
@@ -89,6 +89,7 @@ const FINALIZE_SCHEMA = {
     journeys: { type: 'number' },
     unpaired_leads: { type: 'number' },
     notable_stretches: { type: 'number' },
+    stderr_tail: { type: 'string' },
   },
 };
 const EVIDENCE_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, count: { type: 'number' } } };
@@ -117,6 +118,11 @@ const quotaFloor = args.quotaFloor === undefined ? 100 : args.quotaFloor;
 if (!Number.isInteger(quotaFloor)) throw new Error('plan-trip: quotaFloor must be an integer');
 const researchLane = args.researchLane === undefined ? 'opus' : args.researchLane;
 if (researchLane !== 'opus' && researchLane !== 'terra') throw new Error('plan-trip: researchLane must be "opus" or "terra"');
+const exit3BackoffMs = args.exit3BackoffMs === undefined ? 60000 : args.exit3BackoffMs;
+if (!Number.isInteger(exit3BackoffMs) || exit3BackoffMs < 0) throw new Error('plan-trip: exit3BackoffMs must be a non-negative integer');
+// Clock boundary is injectable so tests observe the exit-3 backoff without real waiting.
+const sleep = args.sleep === undefined ? (ms) => new Promise((resolve) => setTimeout(resolve, ms)) : args.sleep;
+if (typeof sleep !== 'function') throw new Error('plan-trip: sleep must be a function');
 
 const project = args.project;
 const slug = args.slug;
@@ -346,7 +352,8 @@ const runNode = (node, title, prefix) => {
     `${commandFor(node)}\n` +
     (finalize
       ? `It writes finalists.json and prints it. Return {"exit_code": <the command's exit code, a number>, "journeys": <length of the printed journeys>, "unpaired_leads": <length of the printed unpaired_leads>, "notable_stretches": <length of the printed notable_stretches>}.`
-      : `On success the CLI writes this node's artifacts and stamps its own checkpoint; your only job is the verbatim command and an honest exit report. Return {"exit_code": <the command's exit code, a number>}.`),
+      : `On success the CLI writes this node's artifacts and stamps its own checkpoint; your only job is the verbatim command and an honest exit report. Return {"exit_code": <the command's exit code, a number>}.`) +
+    `\nIf the command exits nonzero, also include "stderr_tail": <the last ~20 lines of its stderr, verbatim as one newline-joined string> so the failure self-diagnoses.`,
     { label: `${prefix}${node.id}`, phase: title, schema: finalize ? FINALIZE_SCHEMA : RUN_SCHEMA, ...routed(node) },
   );
 };
@@ -473,9 +480,12 @@ const dispatchNode = (node, title, prefix) => {
   return runStays(node, title, prefix);
 };
 
+const exitedWith = (result, code) => result !== null && typeof result === 'object' && result.exit_code === code;
+const stderrTail = (result) => (result !== null && typeof result === 'object' && typeof result.stderr_tail === 'string' ? result.stderr_tail : null);
+
 // Exit 1 on a quota-costed node is a quota stop, distinct from data failure: a partial artifact
 // exists and the node is deliberately unstamped for a cache-first resume. Never retried.
-const isQuotaStop = (node, result) => node.quota_cost > 0 && result !== null && typeof result === 'object' && result.exit_code === 1;
+const isQuotaStop = (node, result) => node.quota_cost > 0 && exitedWith(result, 1);
 
 for (let li = 0; li < levels.length; li++) {
   const toRun = [];
@@ -514,6 +524,11 @@ for (let li = 0; li < levels.length; li++) {
   if (!retryable.length) continue;
 
   const retryRunnables = retryable.filter((n) => Array.isArray(n.command));
+  // Snapshot attempt-1 outcomes before the retry overwrite below discards them: a retry that
+  // returns null or prose must not erase the first attempt's stderr diagnostic.
+  const firstAttempt = new Map(retryable.map((n) => [n.id, outcomes.get(n.id)]));
+  // Exit 3 is a transient CLI state-conflict; back off once so the sole retry clears the window.
+  if (retryRunnables.some((n) => exitedWith(outcomes.get(n.id), 3))) await sleep(exit3BackoffMs);
   const retryResults = retryRunnables.length ? await pipeline(retryRunnables, (n) => dispatchNode(n, title, 'retry:')) : [];
   retryRunnables.forEach((n, i) => outcomes.set(n.id, retryResults[i] === undefined ? null : retryResults[i]));
   for (const n of retryable.filter((x) => !Array.isArray(x.command))) outcomes.set(n.id, await dispatchNode(n, title, 'retry:'));
@@ -522,7 +537,12 @@ for (let li = 0; li < levels.length; li++) {
   for (const n of retryable) {
     if (isQuotaStop(n, outcomes.get(n.id))) states[n.id] = { state: 'not_run', reason: 'quota_floor' };
     else if (phaseMap[n.id] === 'fresh') states[n.id] = { state: 'done' };
-    else states[n.id] = { state: 'failed', reason: 'node unstamped after one retry' };
+    else {
+      const failed = { state: 'failed', reason: 'node unstamped after one retry' };
+      const tail = stderrTail(outcomes.get(n.id)) ?? stderrTail(firstAttempt.get(n.id));
+      if (tail !== null) failed.stderr_tail = tail;
+      states[n.id] = failed;
+    }
   }
 }
 

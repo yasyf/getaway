@@ -468,6 +468,112 @@ test('null result: a thrown agent resolves to null through the harness fan-out a
   assert.strictEqual(withPrefix('retry:').length, 1);
 });
 
+// ── Failure diagnostics & exit-3 backoff ───────────────────────────────────
+
+test('failure report: a runner is asked for its stderr tail, and a failed node surfaces it verbatim', async () => {
+  const state = mkState();
+  const boom = { exit_code: 2, stderr_tail: 'Traceback (most recent call last):\nRuntimeError: rank.json is missing' };
+  const { result, withPrefix, calls } = await runWorkflow(
+    ARGS,
+    baseScript(oneWayGraph(), state, { rank: boom, 'retry:rank': boom }),
+  );
+
+  assert.deepStrictEqual(result.nodes.rank, {
+    state: 'failed',
+    reason: 'node unstamped after one retry',
+    stderr_tail: 'Traceback (most recent call last):\nRuntimeError: rank.json is missing',
+  });
+  assert.strictEqual(withPrefix('retry:').length, 1);
+  assert.match(findCall(calls, 'rank').prompt, /"stderr_tail": <the last ~20 lines/);
+  assert.match(findCall(calls, 'finalize').prompt, /"stderr_tail": <the last ~20 lines/);
+  assert.strictEqual(result.status, 'complete');
+});
+
+test('failure report: attempt-1 stderr survives a retry that returns null', async () => {
+  const state = mkState();
+  const boom = { exit_code: 2, stderr_tail: 'Traceback (most recent call last):\nRuntimeError: rank.json is missing' };
+  const { result, withPrefix } = await runWorkflow(
+    ARGS,
+    baseScript(oneWayGraph(), state, { rank: boom, 'retry:rank': null }),
+  );
+
+  assert.deepStrictEqual(result.nodes.rank, {
+    state: 'failed',
+    reason: 'node unstamped after one retry',
+    stderr_tail: 'Traceback (most recent call last):\nRuntimeError: rank.json is missing',
+  });
+  assert.strictEqual(withPrefix('retry:').length, 1);
+  assert.strictEqual(result.status, 'complete');
+});
+
+test('failure report: an unstamped node with no reported stderr stays a bare failure', async () => {
+  const state = mkState();
+  const prose = 'Sure! I ran the command and everything went great.';
+  const { result } = await runWorkflow(
+    ARGS,
+    baseScript(oneWayGraph(), state, { rank: prose, 'retry:rank': prose }),
+  );
+
+  assert.deepStrictEqual(result.nodes.rank, { state: 'failed', reason: 'node unstamped after one retry' });
+});
+
+test('exit-3 backoff: the wait lands via the injected seam before the sole retry dispatches', async () => {
+  const state = mkState();
+  const events = [];
+  const sleep = (ms) => {
+    events.push(`sleep:${ms}`);
+    return Promise.resolve();
+  };
+  const { result, withPrefix } = await runWorkflow(
+    { ...ARGS, sleep },
+    baseScript(oneWayGraph(), state, {
+      rank: { exit_code: 3, stderr_tail: 'state conflict: rank checkpoint locked' },
+      'retry:rank': (opts) => {
+        events.push('retry:rank');
+        return runStub(state)(opts);
+      },
+    }),
+  );
+
+  assert.deepStrictEqual(events, ['sleep:60000', 'retry:rank']);
+  assert.deepStrictEqual(result.nodes.rank, { state: 'done' });
+  assert.strictEqual(withPrefix('retry:').length, 1);
+  assert.strictEqual(result.status, 'complete');
+});
+
+for (const { id, first, backoffArg, expectSleeps } of [
+  { id: 'exit 3 waits the default 60s once', first: { exit_code: 3, stderr_tail: 'lock' }, expectSleeps: [60000] },
+  { id: 'exit 3 honors an overridden backoff', first: { exit_code: 3 }, backoffArg: 1500, expectSleeps: [1500] },
+  { id: 'exit 2 retries immediately, never waiting', first: { exit_code: 2 }, expectSleeps: [] },
+  { id: 'a fan-out null retries immediately, never waiting', first: null, expectSleeps: [] },
+]) {
+  test(`exit-3 backoff: ${id}`, async () => {
+    const state = mkState();
+    const sleeps = [];
+    const args = { ...ARGS, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); } };
+    if (backoffArg !== undefined) args.exit3BackoffMs = backoffArg;
+    const { result, withPrefix } = await runWorkflow(
+      args,
+      baseScript(oneWayGraph(), state, { rank: first, 'retry:rank': runStub(state) }),
+    );
+
+    assert.deepStrictEqual(sleeps, expectSleeps);
+    assert.deepStrictEqual(result.nodes.rank, { state: 'done' });
+    assert.strictEqual(withPrefix('retry:').length, 1);
+    assert.strictEqual(result.status, 'complete');
+  });
+}
+
+for (const { id, overrides, pattern } of [
+  { id: 'a non-integer backoff override fails loud at startup', overrides: { exit3BackoffMs: 1.5 }, pattern: /exit3BackoffMs must be a non-negative integer/ },
+  { id: 'a negative backoff override fails loud at startup', overrides: { exit3BackoffMs: -1 }, pattern: /exit3BackoffMs must be a non-negative integer/ },
+  { id: 'a non-function sleep override fails loud at startup', overrides: { sleep: 500 }, pattern: /sleep must be a function/ },
+]) {
+  test(`exit-3 backoff: ${id}`, async () => {
+    await runRejects({ ...ARGS, ...overrides }, baseScript(oneWayGraph(), mkState()), pattern);
+  });
+}
+
 // ── Routing enforcement (C2) ───────────────────────────────────────────────
 
 test('routing: emitted routing lands on every agent — sonnet runners, opus research, sonnet bookkeeping', async () => {

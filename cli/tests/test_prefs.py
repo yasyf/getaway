@@ -50,8 +50,9 @@ def test_init_writes_neutral_template(getaway_home: Path) -> None:
 
 
 def test_init_refuses_when_already_initialized(ready: Path) -> None:
-    with pytest.raises(StateConflictError):
+    with pytest.raises(StateConflictError) as exc:
         prefs.init()
+    assert str(prefs.prefs_path()) in str(exc.value)
 
 
 def test_init_cli_exits_state_conflict_on_reinit(ready: Path, runner: CliRunner) -> None:
@@ -60,8 +61,9 @@ def test_init_cli_exits_state_conflict_on_reinit(ready: Path, runner: CliRunner)
 
 
 def test_show_raises_when_uninitialized(getaway_home: Path) -> None:
-    with pytest.raises(StateConflictError):
+    with pytest.raises(StateConflictError) as exc:
         prefs.show()
+    assert str(prefs.prefs_path()) in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -186,8 +188,9 @@ def test_set_patch_top_level_merge_accumulates(ready: Path) -> None:
 
 
 def test_set_patch_requires_initialized(getaway_home: Path) -> None:
-    with pytest.raises(StateConflictError):
+    with pytest.raises(StateConflictError) as exc:
         prefs.set_patch({"home_airport": "SFO"})
+    assert str(prefs.prefs_path()) in str(exc.value)
 
 
 @pytest.mark.parametrize(

@@ -82,7 +82,7 @@ def _card_products() -> dict:
 def _load() -> dict:
     path = prefs_path()
     if not path.exists():
-        raise StateConflictError("preferences not initialized; run prefs init")
+        raise StateConflictError(f"preferences not initialized; run prefs init: {path}")
     return json.loads(path.read_text())
 
 
@@ -94,7 +94,7 @@ def load_or_empty() -> dict:
 
 def _require_initialized(current: dict) -> None:
     if not current:
-        raise StateConflictError("preferences not initialized; run prefs init")
+        raise StateConflictError(f"preferences not initialized; run prefs init: {prefs_path()}")
 
 
 def _check_iso_date(value: object, label: str) -> None:
@@ -254,7 +254,7 @@ def _validate(doc: dict) -> None:
 def init() -> dict:
     def _mut(current: dict) -> dict:
         if current:
-            raise StateConflictError("preferences already initialized")
+            raise StateConflictError(f"preferences already initialized: {prefs_path()}")
         return _template()
 
     return atomic_update(prefs_path(), _mut)

@@ -238,3 +238,40 @@ def test_captured_upstream_fp_marks_rank_stale_after_a_later_merge(trip: str) ->
     fresh, record = trips.phase_check(trip, "rank", now=at(1))
     assert record is not None
     assert fresh is False
+
+
+def test_rank_captures_inputs_fp_before_a_mid_run_prefs_edit(
+    trip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A prefs edit between rank's input read and its checkpoint stamp must leave rank stale, not
+    # stamp the post-edit fingerprint over rows derived from the pre-edit balances.
+    real = factors._order
+
+    def racing(
+        entries: list[dict], tiers: dict, active: set[str], primary_codes: frozenset[str]
+    ) -> list[dict]:
+        prefs.set_balance("aeroplan", 999999)  # lands between read and stamp
+        return real(entries, tiers, active, primary_codes)
+
+    monkeypatch.setattr(factors, "_order", racing)
+    factors.rank(trip, now=at(0))
+    fresh, record = trips.phase_check(trip, "rank", now=at(1))
+    assert record is not None
+    assert fresh is False
+
+
+def test_finalize_captures_inputs_fp_before_a_mid_run_prefs_edit(
+    trip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    factors.rank(trip, now=at(0))  # finalize reads rank.json
+    real = factors._thread_verification
+
+    def racing(doc: dict, slug: str) -> None:
+        prefs.set_balance("aeroplan", 999999)  # lands between read and stamp
+        real(doc, slug)
+
+    monkeypatch.setattr(factors, "_thread_verification", racing)
+    factors.finalize(trip, now=at(0))
+    fresh, record = trips.phase_check(trip, "finalize", now=at(1))
+    assert record is not None
+    assert fresh is False

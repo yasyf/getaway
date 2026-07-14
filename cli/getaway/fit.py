@@ -44,14 +44,6 @@ def _leg_endpoints(detail: Detail) -> tuple[str, str, str, str]:
     return (first["origin"], last["dest"], first["departs_local"], last["arrives_local"])
 
 
-def _window_overshoot(dep_local: str, arr_local: str, window: dict) -> dict:
-    start, end = dt.date.fromisoformat(window["start"]), dt.date.fromisoformat(window["end"])
-    return {
-        "days_before_start": max(0, (start - _date(dep_local)).days),
-        "days_after_end": max(0, (_date(arr_local) - end).days),
-    }
-
-
 def _cabin_fit(detail: Detail, preferred_letter: str) -> dict:
     segments = detail["segments"]
     preferred_rank = cabin_rank(preferred_letter)
@@ -114,7 +106,6 @@ def _cash_leg_facts(leg: Leg) -> dict:
 
 def _leg_facts(
     leg: Leg,
-    window: dict,
     preferred_letter: str,
     departure_days: list[str],
     party: int,
@@ -133,7 +124,6 @@ def _leg_facts(
         "departs_local": dep_local,
         "arrives_local": arr_local,
         "elapsed_minutes": detail["total_duration"],
-        "window_overshoot": _window_overshoot(dep_local, arr_local, window),
         "departure_day": {"token": token, "match": token in departure_days},
         "cabin": _cabin_fit(detail, preferred_letter),
         "connections": _connections(detail),
@@ -172,7 +162,6 @@ def journey_fit(
     its detail-dependent facts stay absent (unknown = neutral). The outbound leg is required; a
     non-return onward leg makes this a hybrid journey and a return leg makes it round-trip.
     """
-    window = trip["window"]
     party = trip["party"]
     preferred_letter = CABIN_PREFIX[preferred_cabin(trip)]
     departure_days = _resolved_departure_days(trip, prefs_doc)
@@ -181,7 +170,7 @@ def journey_fit(
     outbound_side = [leg for leg in legs if leg["role"] != "return"]
     return_leg = next((leg for leg in legs if leg["role"] == "return"), None)
     leg_facts = [
-        _leg_facts(leg, window, preferred_letter, departure_days, party, now_dt) for leg in legs
+        _leg_facts(leg, preferred_letter, departure_days, party, now_dt) for leg in legs
     ]
 
     trip_length_days = None
@@ -221,10 +210,18 @@ def _preference_misses(fit_facts: dict, plan: dict) -> list[dict]:
     misses: list[dict] = []
 
     if "outbound_departure_window" in preferences:
-        early = outbound["window_overshoot"]["days_before_start"]
-        if early:
-            note = f"departs {early} day(s) before your window"
+        window = preferences["outbound_departure_window"]["value"]
+        start = dt.date.fromisoformat(window["start"])
+        end = dt.date.fromisoformat(window["end"])
+        dep_date = _date(outbound["departs_local"])
+        early = (start - dep_date).days
+        late = (dep_date - end).days
+        if early > 0:
+            note = f"departs {early} day(s) before your window start"
             misses.append(_miss("outbound_departure_window", -early, note))
+        if late > 0:
+            note = f"departs {late} day(s) past your window end"
+            misses.append(_miss("outbound_departure_window", late, note))
 
     if "return_arrival_by" in preferences and return_leg is not None:
         value = preferences["return_arrival_by"]["value"]["latest_local_date"]

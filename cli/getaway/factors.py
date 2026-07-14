@@ -472,6 +472,7 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     upstream_fp = trips.capture_upstream_fp(slug, "rank")  # before any input artifact is read
     trip = trips.show(slug)
     prefs_doc = prefs.show()
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "rank")  # before any long-running work
     plan = trip["plan"]
     profile = derive_profile(trip, prefs_doc, slug=slug)
     active = {fid for fid, spec in profile.items() if spec["active"]}
@@ -579,7 +580,7 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
 
     doc = {"ranked": ranked, "notable_stretches": notable, "dropped": dropped}
     trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "rank", now=now, upstream_fp=upstream_fp)
+    trips.phase_done(slug, "rank", now=now, inputs_fp=inputs_fp, upstream_fp=upstream_fp)
     return ranked
 
 
@@ -618,6 +619,8 @@ def _thread_verification(doc: dict, slug: str) -> None:
 def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     upstream_fp = trips.capture_upstream_fp(slug, "finalize")  # before any input artifact is read
     trip = trips.show(slug)
+    prefs_doc = prefs.show()
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "finalize")  # before any long-running work
     plan = trip["plan"]
     rank_doc = json.loads(trips.artifact_read(slug, "rank.json"))
     expand = _optional_artifact(slug, "expand.json") or {}
@@ -634,7 +637,7 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
         _thread_lodging(doc, plan, slug, now)
     _thread_verification(doc, slug)
     trips.artifact_write(slug, "finalists.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "finalize", now=now, upstream_fp=upstream_fp)
+    trips.phase_done(slug, "finalize", now=now, inputs_fp=inputs_fp, upstream_fp=upstream_fp)
     return doc
 
 
