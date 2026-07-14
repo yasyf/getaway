@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"verify_note","witness":[{"anchor":{"kind":"dir","value":"skills/getaway"},"oid":"95cc0f426ad4ef53af8ccae5281ae04290bd0930"}],"verified_commit":"ed1d02a72c156cc4acd3cada55d2e9b5983946a1"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"add_superseded_by","id":"3f445d24004b34563d341aba7b5644c0155552c2"}]}
