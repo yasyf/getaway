@@ -14,26 +14,22 @@
 ```
 
 Add the `yasyf/captain-hook` marketplace first: getaway's hooks ride the
-`captain-hook` plugin, and Claude Code installs that dependency
-automatically only when its marketplace is already added. On an existing
-install, `claude plugin update` doesn't resolve the new dependency — add
-the marketplace, then re-run `claude plugin install` (or
-`/reload-plugins` in-session).
+`captain-hook` plugin, and Claude Code auto-installs that dependency only
+when its marketplace is already added. Upgrading an existing install needs
+the same order — marketplace, then `claude plugin install` again, since
+`claude plugin update` resolves only plugins it already knows.
 
-getaway needs a seats.aero Pro API key, generated on the seats.aero
-Settings page under the API tab:
+You need [uv](https://docs.astral.sh/uv/) on PATH — the planning engine is
+a bundled Python CLI — and a seats.aero Pro API key, generated on the
+seats.aero Settings page under the API tab:
 
 ```bash
 export SEATS_AERO_API_KEY=pro_YOUR_KEY
 ```
 
-Prefer 1Password? Set `op_ref` in `~/.getaway/preferences.json` to the
-key's secret reference (`op://Vault/item/field`); the CLI reads it with
-`op read` whenever the env var is unset.
-
 Run `/getaway:onboard` once. The form arrives pre-filled from Gmail and
 the airline and bank sites you're already logged into, and nothing is
-written until you hit Submit. Skipping it is fine — planning runs on a
+written until you hit Submit. Skipping it is fine: planning runs on a
 neutral profile, and balances bias ranking, never gate it. Then hand
 over the trip in one sentence, as messy as you like:
 
@@ -45,19 +41,10 @@ Claude pins the ask into a trip, derives a judgment profile from every
 clause — business class puts seat quality and affordability first,
 "warm, beachy" activates destination context, "always go" writes Seoul
 and Tokyo to your durable avoid list — and dispatches the planning
-pipeline. One bulk scan from the sweep phase:
+pipeline. Finalists land on a live board, one evidence line per active
+factor:
 
-```text
-2026-07-11  CMB  MLE  aeroplan  12500  9  FZ, GF
-2026-07-11  TNR  MRU  aeroplan  12500  9  MK
-2026-07-11  BRU  ACE  aeroplan  22500  8  2L, AZ, BT, LX, SN, WK
-2026-07-11  ZRH  FUE  aeroplan  22500  9  WK
-```
-
-Finalists come back as a board: an option picker, an itinerary card per
-expanded option — taxes, remaining seats, booking link, freshness
-stamp — and one evidence line per active factor: the funding position,
-the seat product, the layover verdict, the cash-fare note.
+<img src="docs/assets/board.webp" alt="getaway finalist board from the ask above: an option picker over ranked journeys, itinerary cards with taxes, remaining seats, booking links, and freshness stamps, and per-factor evidence lines" width="760">
 
 Driving with an agent? Paste this:
 
@@ -80,7 +67,7 @@ seat, is an evening gone. Ask once instead:
 Any business award space from SFO to NRT or HND, September 1–14?
 ```
 
-One sweep covers all 26 programs, and every row carries per-cabin
+One sweep covers all 28 programs, and every row carries per-cabin
 mileage, remaining seats, and a freshness stamp. Rows land in a local
 cache, so follow-ups — other dates, other cabins — answer without
 spending another API call.
@@ -143,17 +130,14 @@ change something.
 
 ## How it plans
 
-Every real ask becomes a trip: the verbatim ask, the pinned constraints,
-and a judgment profile — twelve factors (affordability, seat quality,
-layovers, cash-fare anomalies, status earning, expiring credits among
-them) tiered per trip from the ask and your profile at
-`~/.getaway/preferences.json`. A bundled Python CLI and a shipped
-workflow run the pipeline — sweep, shortlist, expand, evidence, assess,
-rank, present — with mileage dominant and judgment reordering only
-within a mileage band, and each finalist lands with one evidence line
-per active factor. Every phase checkpoints its inputs to disk, which is
-the resume guarantee above. The full doctrine — parsing the ask, region
-sweeps, season awareness, routing shapes, presentation — lives in
+Every real ask becomes a trip: the verbatim ask, pinned constraints and
+preference lanes, and a judgment profile derived from both. The bundled
+CLI compiles each trip into an execution graph — sweeps, shortlists,
+journey composition, evidence, assess, rank — and the shipped workflow
+walks it. Preferences order and annotate but never gate, mileage stays
+dominant with judgment reordering only inside a band, and a trip with
+lodging in scope picks up hotel award nights from rooms.aero along the
+way. The full doctrine lives in
 [skills/getaway/references/](skills/getaway/references/).
 
 ## The skills
@@ -174,7 +158,10 @@ The plugin ships three skills, each triggered by its own asks:
 - [uv](https://docs.astral.sh/uv/) — the planning engine is a bundled
   Python CLI run through `uv run`; the first call builds its
   environment.
-- The 1Password `op` CLI, only when the key comes from `op_ref`.
+- The 1Password `op` CLI, when the key comes from an `op_ref` in
+  `~/.getaway/preferences.json` instead of the environment — a secret
+  reference like `op://Vault/item/field` that the CLI resolves with
+  `op read` whenever the env var is unset.
 - The cc-present plugin, for the interactive boards — getaway ships its
   block pack at `.claude/components`.
 
