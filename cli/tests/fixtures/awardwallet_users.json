@@ -1,0 +1,25 @@
+[
+  {
+    "userId": 45,
+    "fullName": "Yasyf Mohamedali",
+    "email": "yasyf@example.com",
+    "connectionType": "Connected",
+    "accountsAccessLevel": "regular",
+    "accountsIndex": [
+      { "accountId": 7001, "code": "aeroplan" },
+      { "accountId": 7002, "code": "united" },
+      { "accountId": 7003, "code": "membershiprewards" },
+      { "accountId": 7004, "code": "starbucks" }
+    ]
+  },
+  {
+    "userId": 46,
+    "fullName": "Priya Mohamedali",
+    "email": "priya@example.com",
+    "connectionType": "Connected",
+    "accountsAccessLevel": "regular",
+    "accountsIndex": [
+      { "accountId": 8001, "code": "delta" }
+    ]
+  }
+]

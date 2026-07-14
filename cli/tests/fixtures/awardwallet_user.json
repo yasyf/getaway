@@ -1,0 +1,33 @@
+{
+  "userId": 45,
+  "fullName": "Yasyf Mohamedali",
+  "email": "yasyf@example.com",
+  "connectionType": "Connected",
+  "accountsAccessLevel": "regular",
+  "accounts": [
+    {
+      "accountId": 7001,
+      "code": "aeroplan",
+      "displayName": "Air Canada Aeroplan",
+      "kind": "Airlines"
+    },
+    {
+      "accountId": 7002,
+      "code": "united",
+      "displayName": "United MileagePlus",
+      "kind": "Airlines"
+    },
+    {
+      "accountId": 7003,
+      "code": "membershiprewards",
+      "displayName": "American Express Membership Rewards",
+      "kind": "Credit Cards"
+    },
+    {
+      "accountId": 7004,
+      "code": "starbucks",
+      "displayName": "Starbucks Rewards",
+      "kind": "Dining"
+    }
+  ]
+}

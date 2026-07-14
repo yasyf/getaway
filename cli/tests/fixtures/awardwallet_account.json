@@ -1,0 +1,75 @@
+{
+  "healthy": {
+    "account": {
+      "accountId": 7001,
+      "code": "aeroplan",
+      "displayName": "Air Canada Aeroplan",
+      "kind": "Airlines",
+      "owner": "Yasyf Mohamedali",
+      "login": "yasyf",
+      "balance": "88,450",
+      "balanceRaw": 88450,
+      "errorCode": 0,
+      "expirationDate": "2027-12-31T00:00:00+00:00",
+      "lastChangeDate": "2026-07-10T09:15:00+00:00",
+      "lastRetrieveDate": "2026-07-11T12:00:00+00:00",
+      "properties": [
+        { "name": "Name", "value": "Yasyf Mohamedali", "kind": 0 },
+        { "name": "Elite level", "value": "50K", "kind": 3, "rank": 3 },
+        { "name": "Status level expiration", "value": "2027-01-31", "kind": 15 }
+      ],
+      "subAccounts": [
+        { "displayName": "eUpgrade credits", "balance": "12", "balanceRaw": 12 }
+      ],
+      "history": [
+        { "field": "Balance", "value": "88,450", "date": "2026-07-11T12:00:00+00:00" }
+      ]
+    }
+  },
+  "errored": {
+    "account": {
+      "accountId": 7002,
+      "code": "united",
+      "displayName": "United MileagePlus",
+      "kind": "Airlines",
+      "owner": "Yasyf Mohamedali",
+      "login": "yasyf",
+      "errorCode": 2,
+      "errorMessage": "The login credentials appear to be invalid.",
+      "properties": []
+    }
+  },
+  "bank": {
+    "account": {
+      "accountId": 7003,
+      "code": "membershiprewards",
+      "displayName": "American Express Membership Rewards",
+      "kind": "Credit Cards",
+      "owner": "Yasyf Mohamedali",
+      "login": "yasyf",
+      "balance": "250,000",
+      "balanceRaw": 250000,
+      "errorCode": 0,
+      "lastChangeDate": "2026-07-01T04:20:00+00:00",
+      "lastRetrieveDate": "2026-07-12T08:00:00+00:00",
+      "properties": []
+    }
+  },
+  "unmapped": {
+    "account": {
+      "accountId": 7004,
+      "code": "starbucks",
+      "displayName": "Starbucks Rewards",
+      "kind": "Dining",
+      "owner": "Yasyf Mohamedali",
+      "login": "yasyf",
+      "balance": "120",
+      "balanceRaw": 120,
+      "errorCode": 0,
+      "lastRetrieveDate": "2026-07-12T20:30:00+00:00",
+      "properties": [
+        { "name": "Stars", "value": "120", "kind": 0 }
+      ]
+    }
+  }
+}

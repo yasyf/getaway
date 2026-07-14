@@ -3,6 +3,7 @@ import sys
 import click
 
 from getaway.afford import afford_cmd
+from getaway.awardwallet import awardwallet_group
 from getaway.bridge import bridge_cmd
 from getaway.constants import EXIT_USAGE
 from getaway.factors import rank_cmd
@@ -39,6 +40,7 @@ for group in (
     shortlist_group,
     expand_group,
     stays_group,
+    awardwallet_group,
 ):
     cli.add_command(group)
 
