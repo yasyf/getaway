@@ -1,6 +1,6 @@
 # getaway Development Guide
 
-Plan award flights from Claude Code, backed by seats.aero availability across 26 mileage programs.
+Plan award flights from Claude Code, backed by seats.aero availability across 28 mileage programs.
 
 ## Repository Structure
 

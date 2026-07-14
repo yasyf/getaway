@@ -167,6 +167,8 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   window-keyed board resolution), so fresh installs pull the boards
   plugin automatically once its marketplace is added — the README
   install steps and requirements now say so.
+- The program count reads 28 on every surface; the AGENTS fragment
+  and `cli/pyproject.toml` lagged at 26.
 - Region pseudo-code origins now expand against both the packaged airport floor and origins observed in search sweeps, preventing valid shortlist rows from being dropped.
 - Cached `/search` teaser seat counts no longer masquerade as bookable: sufficiency reads the live-expanded row, and stale cached empties render "unverified" instead of "no space".
 - `/trips/{id}` normalization tolerates programs that omit
