@@ -259,8 +259,6 @@ def test_auth_status_raises_auth_error_without_key(client: SeatsClient, status: 
 
 
 def _write_prefs_op_ref(op_ref: str) -> None:
-    # A real v2 prefs doc, not a bare {"op_ref": ...} stub: the op_ref read now
-    # routes through the loader, which rejects any pre-v2 (legacy) shape.
     prefs.init()
     prefs.set_patch({"op_ref": op_ref})
 
@@ -333,24 +331,6 @@ def test_missing_credentials_raise_auth_error(
 ) -> None:
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
     with pytest.raises(AuthError):
-        seats.resolve_api_key()
-
-
-def test_legacy_prefs_doc_rejected_when_reading_op_ref(
-    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
-    paths.prefs_path().parent.mkdir(parents=True, exist_ok=True)
-    # Pre-v2 shape: carries the removed `credits` key, lacks travel_instruments.
-    paths.prefs_path().write_text(
-        json.dumps({"op_ref": "op://Vault/seats/credential", "credits": []})
-    )
-
-    def _forbidden(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("op must not run for a legacy prefs doc")
-
-    monkeypatch.setattr(keys.subprocess, "run", _forbidden)
-    with pytest.raises(paths.StateConflictError):
         seats.resolve_api_key()
 
 

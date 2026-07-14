@@ -33,6 +33,8 @@ RETURN_EXPANSION_BUDGET_PER_ENDPOINT = 12
 DISJOINT_DURABLE_PREF_KEYS = frozenset(
     {
         "op_ref",
+        "awardwallet_op_ref",
+        "serpapi_op_ref",
         "home_airport",
         "origin_airports",
         "avoid_transit",

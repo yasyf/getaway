@@ -5,7 +5,6 @@ import pytest
 from click.testing import CliRunner
 
 from getaway import afford, prefs
-from getaway.paths import StateConflictError
 
 
 def _prefs(
@@ -220,19 +219,6 @@ def test_cli_afford_reports_card_access(getaway_home: Path) -> None:
 def test_cli_afford_unknown_program_exits_no_data(getaway_home: Path) -> None:
     result = CliRunner().invoke(afford.afford_cmd, ["--program", "nope", "--miles", "1000"])
     assert result.exit_code == 4
-
-
-def test_cli_afford_rejects_legacy_prefs_shape(getaway_home: Path) -> None:
-    # The read path routes through prefs.load_or_empty(), so a pre-v2 (credits)
-    # doc is rejected loudly (map_errors maps StateConflictError to exit 3) not read raw.
-    prefs.init()
-    doc = prefs._template()
-    doc["credits"] = doc.pop("travel_instruments")
-    prefs.prefs_path().write_text(json.dumps(doc))
-    result = CliRunner().invoke(afford.afford_cmd, ["--program", "united", "--miles", "90000"])
-    assert isinstance(result.exception, SystemExit)
-    assert result.exit_code == StateConflictError.exit_code
-    assert "re-run getaway onboarding" in result.stderr
 
 
 def test_cli_afford_missing_prefs_uses_neutral_profile(getaway_home: Path) -> None:

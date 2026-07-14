@@ -35,19 +35,14 @@ HOTEL_CERT_REQUIRED = frozenset({"id", "type", "program", "nights", "cap", "expi
 COMPANION_FARE_REQUIRED = frozenset({"id", "type", "issuer", "expires"})
 INSTRUMENT_OPTIONAL = frozenset({"note"})
 
-# Prefs docs written before the v2 loyalty cutover carry this removed key; a clean
-# cutover rejects them loudly rather than migrating (STYLEGUIDE: no compat layers).
-LEGACY_KEYS = frozenset({"credits"})
-
-# Missing cutover keys identify preference docs written against older schemas.
-CUTOVER_KEYS = frozenset({"travel_instruments", "cards"})
-
 _EXPIRING_RE = re.compile(r"^(\d+)d$")
 
 
 def _template() -> dict:
     return {
         "op_ref": None,
+        "awardwallet_op_ref": None,
+        "serpapi_op_ref": None,
         "home_airport": None,
         "origin_airports": [],
         "avoid_transit": [],
@@ -84,37 +79,22 @@ def _card_products() -> dict:
     return _load_data("card_products.json")
 
 
-def _reject_legacy(doc: dict) -> None:
-    if not doc:
-        return
-    if LEGACY_KEYS & set(doc) or CUTOVER_KEYS - set(doc):
-        raise StateConflictError(
-            f"preferences predate the current schema; delete {prefs_path()} "
-            "and re-run getaway onboarding"
-        )
-
-
 def _load() -> dict:
     path = prefs_path()
     if not path.exists():
         raise StateConflictError("preferences not initialized; run prefs init")
-    doc = json.loads(path.read_text())
-    _reject_legacy(doc)
-    return doc
+    return json.loads(path.read_text())
 
 
 def load_or_empty() -> dict:
-    """Preferences doc, or an empty dict when onboarding is skipped; a pre-v2 shape raises."""
+    """Preferences doc, or an empty dict when onboarding is skipped."""
     path = prefs_path()
-    doc = json.loads(path.read_text()) if path.exists() else {}
-    _reject_legacy(doc)
-    return doc
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def _require_initialized(current: dict) -> None:
     if not current:
         raise StateConflictError("preferences not initialized; run prefs init")
-    _reject_legacy(current)
 
 
 def _check_iso_date(value: object, label: str) -> None:
@@ -208,6 +188,8 @@ def _validate_instrument(row: object, label: str) -> None:
 def _validate(doc: dict) -> None:
     require_keys(doc, set(TEMPLATE_KEYS), "preferences")
     require_str_or_none(doc["op_ref"], "op_ref")
+    require_str_or_none(doc["awardwallet_op_ref"], "awardwallet_op_ref")
+    require_str_or_none(doc["serpapi_op_ref"], "serpapi_op_ref")
     require_str_or_none(doc["home_airport"], "home_airport")
     require_str_list(doc["origin_airports"], "origin_airports")
     require_str_list(doc["avoid_transit"], "avoid_transit")
@@ -271,7 +253,6 @@ def _validate(doc: dict) -> None:
 
 def init() -> dict:
     def _mut(current: dict) -> dict:
-        _reject_legacy(current)
         if current:
             raise StateConflictError("preferences already initialized")
         return _template()
@@ -288,7 +269,6 @@ def configured() -> bool:
     if not path.exists():
         return False
     doc = json.loads(path.read_text())
-    _reject_legacy(doc)
     balances = doc["balances"]
     return bool(balances["programs"] or balances["transferable"])
 

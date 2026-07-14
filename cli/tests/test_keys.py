@@ -20,7 +20,7 @@ def _resolve() -> str:
 
 def _write_prefs_ref(ref: str) -> None:
     # example_op_ref is not a template key, so set_patch would reject it; write it
-    # into an initialized v2 doc directly — load_or_empty only rejects pre-v2 shapes.
+    # into an initialized doc directly instead.
     prefs.init()
     doc = json.loads(paths.prefs_path().read_text())
     doc[PREFS_KEY] = ref

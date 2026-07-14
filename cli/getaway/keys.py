@@ -33,8 +33,7 @@ def resolve(env_var: str, prefs_key: str, service: str) -> str:
     key = os.environ.get(env_var)
     if key:
         return validate(key, service)
-    # load_or_empty tolerates a missing file / absent ref (both -> None, env
-    # fallback) and rejects a pre-v2 shape loudly.
+    # load_or_empty tolerates a missing file / absent ref (both -> None, env fallback).
     ref = prefs.load_or_empty().get(prefs_key)
     if not ref:
         raise AuthError(f"no {service} API key: set {env_var} or a preferences {prefs_key}")

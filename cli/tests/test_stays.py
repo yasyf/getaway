@@ -232,19 +232,6 @@ def test_hybrid_stay_uses_the_onward_leg_not_the_gateway(getaway_home: Path) -> 
     assert result["interval"]["check_out"] == "2026-09-14"
 
 
-def test_cash_onward_without_observed_arrival_defers_unknown_arrival(getaway_home: Path) -> None:
-    # A cash hop whose fit fact carries no arrival clock: check-in is unknowable, so lodging defers
-    # (never a guessed check-in) rather than crashing on the missing key.
-    j = hybrid_journey("H", gateway="NRT", onward="OKA")
-    del j["fit_facts"]["legs"][1]["arrives_local"]  # the onward cash leg loses its arrival clock
-    result = stays.derive_interval(j, {"lodging": {}}, TODAY)
-    assert result == {
-        "disposition": "deferred",
-        "reason": "unknown_arrival",
-        "destination_airport": "OKA",
-    }
-
-
 def test_open_jaw_without_checkout_defers_no_checkout(getaway_home: Path) -> None:
     # Outbound lands CUN, return departs a different city — no surface itinerary, no checkout.
     open_jaw = journey("J", dest="CUN", ret_origin="MEX")
@@ -444,16 +431,6 @@ def test_finalize_walks_a_cash_hybrid_with_observed_arrival(getaway_home: Path) 
     )
     (entry,) = factors.finalize(slug, now=clock())["journeys"]
     assert entry["stays"]["rooms"][0]["program"] == "hyatt"
-
-
-def test_finalize_defers_a_cash_hybrid_without_observed_arrival(getaway_home: Path) -> None:
-    # A cash hop with no arrival clock on the board: finalize threads a deferred lodging_search.
-    slug = _trip(ROUND_TRIP_LODGING)
-    j = hybrid_journey("H-OKA", gateway="NRT", onward="OKA")
-    del j["fit_facts"]["legs"][1]["arrives_local"]
-    _write_finalize_inputs(slug, ranked=[j])
-    (entry,) = factors.finalize(slug, now=clock())["journeys"]
-    assert entry["lodging_search"] == {"state": "deferred", "reason": "unknown_arrival"}
 
 
 def test_finalize_without_lodging_threads_no_lodging_fields(getaway_home: Path) -> None:

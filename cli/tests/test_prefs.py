@@ -25,6 +25,8 @@ def test_init_writes_neutral_template(getaway_home: Path) -> None:
     doc = prefs.init()
     assert doc == {
         "op_ref": None,
+        "awardwallet_op_ref": None,
+        "serpapi_op_ref": None,
         "home_airport": None,
         "origin_airports": [],
         "avoid_transit": [],
@@ -89,6 +91,15 @@ def test_status_cli_exit_codes(ready: Path, runner: CliRunner) -> None:
     ("patch", "key", "value"),
     [
         pytest.param({"op_ref": "op://vault/item"}, "op_ref", "op://vault/item", id="op-ref"),
+        pytest.param(
+            {"awardwallet_op_ref": "op://v/i"},
+            "awardwallet_op_ref",
+            "op://v/i",
+            id="awardwallet-op-ref",
+        ),
+        pytest.param(
+            {"serpapi_op_ref": "op://v/i"}, "serpapi_op_ref", "op://v/i", id="serpapi-op-ref"
+        ),
         pytest.param({"home_airport": "SFO"}, "home_airport", "SFO", id="home-airport"),
         pytest.param(
             {"origin_airports": ["SFO", "OAK"]}, "origin_airports", ["SFO", "OAK"], id="origins"
@@ -184,6 +195,8 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
     [
         pytest.param({"nope": 1}, id="unknown-top-level-key"),
         pytest.param({"op_ref": 5}, id="op-ref-not-string"),
+        pytest.param({"awardwallet_op_ref": 5}, id="awardwallet-op-ref-not-string"),
+        pytest.param({"serpapi_op_ref": 5}, id="serpapi-op-ref-not-string"),
         pytest.param({"home_airport": 5}, id="home-airport-not-string"),
         pytest.param({"origin_airports": "SFO"}, id="origins-not-list"),
         pytest.param({"origin_airports": [5]}, id="origins-non-string-element"),
@@ -508,42 +521,3 @@ def test_instrument_add_cli_roundtrips_stdin_json(ready: Path, runner: CliRunner
     assert row["type"] == "companion_fare" and len(row["id"]) == 8
 
 
-def _legacy_doc() -> dict:
-    doc = prefs._template()
-    doc["credits"] = doc.pop("travel_instruments")
-    return doc
-
-
-def test_legacy_credits_shape_rejected_on_read(ready: Path) -> None:
-    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
-    with pytest.raises(StateConflictError, match="re-run getaway onboarding"):
-        prefs.show()
-
-
-def test_stale_shape_without_cards_rejected_on_read(ready: Path) -> None:
-    doc = prefs._template()
-    del doc["cards"]
-    prefs.prefs_path().write_text(json.dumps(doc))
-    with pytest.raises(StateConflictError, match="re-run getaway onboarding"):
-        prefs.show()
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        pytest.param(lambda: prefs.set_balance("hyatt", 1), id="set-balance"),
-        pytest.param(lambda: prefs.set_status("united", "1K"), id="set-status"),
-        pytest.param(lambda: prefs.instrument_add(MONETARY), id="instrument-add"),
-        pytest.param(prefs.configured, id="configured"),
-    ],
-)
-def test_legacy_credits_shape_rejects_every_path(ready: Path, mutate: Callable[[], object]) -> None:
-    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
-    with pytest.raises(StateConflictError):
-        mutate()
-
-
-def test_legacy_shape_status_cli_exits_state_conflict(ready: Path, runner: CliRunner) -> None:
-    prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
-    result = runner.invoke(prefs.prefs_group, ["status"])
-    assert result.exit_code == 3

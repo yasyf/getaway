@@ -73,11 +73,8 @@ def _mock_pull_routes() -> dict[str, respx.Route]:
 
 
 def _write_prefs_awardwallet_op_ref(ref: str) -> None:
-    # set_patch rejects the not-yet-templated key; graft it onto a valid v2 doc.
     prefs.init()
-    doc = json.loads(paths.prefs_path().read_text())
-    doc["awardwallet_op_ref"] = ref
-    paths.prefs_path().write_text(json.dumps(doc))
+    prefs.set_patch({"awardwallet_op_ref": ref})
 
 
 def test_env_key_wins_without_a_prefs_file(

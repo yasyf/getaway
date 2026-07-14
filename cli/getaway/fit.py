@@ -94,7 +94,7 @@ def _cache_age_hours(fetched_at: str | None, now: dt.datetime) -> float | None:
 def _cash_leg_facts(leg: Leg) -> dict:
     # No seats.aero detail — detail-dependent facts stay absent (unknown = neutral).
     cash = leg["cash"]
-    facts = {
+    return {
         "role": leg["role"],
         "mode": "cash",
         "origin": leg["origin"],
@@ -102,13 +102,9 @@ def _cash_leg_facts(leg: Leg) -> dict:
         "elapsed_minutes": cash["duration_minutes"],
         "stops": cash["stops"],
         "airline": cash["airline"],
+        "departs_local": cash["departs_local"],
+        "arrives_local": cash["arrives_local"],
     }
-    # A real observed Google Flights clock (never a fabricated one) surfaces the arrival/departure
-    # a downstream stay needs; absent, it stays absent.
-    for key in ("departs_local", "arrives_local"):
-        if key in cash:
-            facts[key] = cash[key]
-    return facts
 
 
 def _leg_facts(

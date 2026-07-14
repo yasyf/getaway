@@ -133,11 +133,8 @@ def _cash_leg(role: str, quote: dict, date: str) -> dict:
         "flight_number": quote["flight_number"],
         "depart_date": date,
     }
-    # A bridge that observed the hop's real clock threads it; a legacy quote without it degrades
-    # to a deferred stay (never a guessed check-in), not a crash.
-    for key in ("departs_local", "arrives_local"):
-        if key in quote:
-            cash[key] = quote[key]
+    cash["departs_local"] = quote["departs_local"]
+    cash["arrives_local"] = quote["arrives_local"]
     return {
         "role": role,
         "id": f"cash:{quote['gateway']}:{quote['onward_dest']}:{date}",

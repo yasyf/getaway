@@ -105,9 +105,6 @@ def derive_interval(journey: Journey, plan: dict, today: dt.date) -> dict:
     outbound, return_leg = _outbound_and_return(journey)
     effective = outbound[-1]  # last pre-return leg — the stay's real destination
     dest = effective["dest"]
-    # A cash hop with no observed arrival — never guess a check-in.
-    if "arrives_local" not in effective:
-        return _deferred("unknown_arrival", dest)
     check_in = effective["arrives_local"][:10]
     explicit = plan.get("lodging", {}).get("checkout")
 
