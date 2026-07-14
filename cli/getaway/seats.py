@@ -3,16 +3,13 @@ from __future__ import annotations
 import datetime as dt
 import functools
 import json
-import os
-import re
-import subprocess
 from collections.abc import Callable, Sequence
 from typing import Any
 
 import click
 import httpx
 
-from getaway import paths, prefs
+from getaway import keys, paths
 from getaway.constants import (
     CABIN_PREFIX,
     DEFAULT_QUOTA_FLOOR,
@@ -20,6 +17,7 @@ from getaway.constants import (
     EXIT_NEGATIVE,
     EXIT_NO_DATA,
 )
+from getaway.keys import AuthError
 from getaway.store import NoData, QuotaFloorError, Store, connect, parse_duration
 
 BASE_URL = "https://seats.aero/partnerapi"
@@ -30,17 +28,11 @@ DEFAULT_TAKE = 500
 # Bound each request well under the 5-min quota-reservation TTL; a hung socket must
 # free its reservation before the stale-prune cutoff or two callers could double-spend.
 HTTP_TIMEOUT = httpx.Timeout(30.0)
-_OP_PREFIX = "op://"
-_KEY_RE = re.compile(r"[!-~]+")
 # /search and /availability return MileageCost as a string; /trips as an int.
 # Normalize at the client boundary so integers flow everywhere downstream.
 _MILEAGE_FIELDS = tuple(f"{cabin}MileageCost" for cabin in CABIN_PREFIX.values())
 
 Row = dict[str, Any]
-
-
-class AuthError(Exception):
-    """No usable seats.aero credential could be resolved."""
 
 
 def cabin_rows(row: Row) -> list[Row]:
@@ -125,35 +117,8 @@ def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
     }
 
 
-def _prefs_op_ref() -> str | None:
-    # load_or_empty tolerates a missing file / absent op_ref (both -> None, env
-    # fallback) and rejects a pre-v2 shape loudly.
-    return prefs.load_or_empty().get("op_ref")
-
-
-def _op_read(ref: str) -> str:
-    result = subprocess.run(["op", "read", ref], capture_output=True, text=True)
-    if result.returncode != 0:
-        raise AuthError("failed to resolve the API key from the configured 1Password reference")
-    return result.stdout.strip()
-
-
-def _validate_key(key: str) -> str:
-    if not _KEY_RE.fullmatch(key):
-        raise AuthError("resolved seats.aero API key must be printable ASCII without whitespace")
-    return key
-
-
 def resolve_api_key() -> str:
-    key = os.environ.get(API_KEY_ENV)
-    if key:
-        return _validate_key(key)
-    ref = _prefs_op_ref()
-    if not ref:
-        raise AuthError("no seats.aero API key: set SEATS_AERO_API_KEY or a preferences op_ref")
-    if not ref.startswith(_OP_PREFIX):
-        raise AuthError("preferences op_ref must be a 1Password op:// reference")
-    return _validate_key(_op_read(ref))
+    return keys.resolve(API_KEY_ENV, "op_ref", "seats.aero")
 
 
 class SeatsClient:

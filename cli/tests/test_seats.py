@@ -11,7 +11,7 @@ import pytest
 import respx
 from click.testing import CliRunner
 
-from getaway import paths, prefs, seats, store
+from getaway import keys, paths, prefs, seats, store
 from getaway.constants import EXIT_AUTH, EXIT_NEGATIVE, EXIT_NO_DATA, EXIT_OK
 from getaway.seats import AuthError, SeatsClient
 from getaway.store import NoData, QuotaFloorError
@@ -274,7 +274,7 @@ def test_env_key_takes_precedence_over_op_ref(
     def _forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("op should not run when the env key is present")
 
-    monkeypatch.setattr(seats.subprocess, "run", _forbidden)
+    monkeypatch.setattr(keys.subprocess, "run", _forbidden)
     assert seats.resolve_api_key() == "env-secret-key"
 
 
@@ -309,7 +309,7 @@ def test_op_ref_resolves_via_op_read(getaway_home: Path, monkeypatch: pytest.Mon
         captured["argv"] = argv
         return types.SimpleNamespace(returncode=0, stdout="pro_resolved_secret\n", stderr="")
 
-    monkeypatch.setattr(seats.subprocess, "run", _fake_run)
+    monkeypatch.setattr(keys.subprocess, "run", _fake_run)
     assert seats.resolve_api_key() == "pro_resolved_secret"
     assert captured["argv"] == ["op", "read", "op://Vault/seats/credential"]
 
@@ -321,7 +321,7 @@ def test_op_ref_prefix_is_enforced(getaway_home: Path, monkeypatch: pytest.Monke
     def _forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("op must not run for a non-op:// reference")
 
-    monkeypatch.setattr(seats.subprocess, "run", _forbidden)
+    monkeypatch.setattr(keys.subprocess, "run", _forbidden)
     with pytest.raises(AuthError) as excinfo:
         seats.resolve_api_key()
     assert "Vault/seats/credential" not in str(excinfo.value)
@@ -348,7 +348,7 @@ def test_legacy_prefs_doc_rejected_when_reading_op_ref(
     def _forbidden(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("op must not run for a legacy prefs doc")
 
-    monkeypatch.setattr(seats.subprocess, "run", _forbidden)
+    monkeypatch.setattr(keys.subprocess, "run", _forbidden)
     with pytest.raises(paths.StateConflictError):
         seats.resolve_api_key()
 
@@ -364,7 +364,7 @@ def test_op_failure_does_not_leak_reference(
             returncode=1, stdout="", stderr="op://Vault/seats/credential not found"
         )
 
-    monkeypatch.setattr(seats.subprocess, "run", _fail)
+    monkeypatch.setattr(keys.subprocess, "run", _fail)
     with pytest.raises(AuthError) as excinfo:
         seats.resolve_api_key()
     assert "op://Vault/seats/credential" not in str(excinfo.value)
@@ -381,7 +381,7 @@ def test_malformed_key_rejected_without_leaking(
         monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
         _write_prefs_op_ref("op://Vault/seats/credential")
         monkeypatch.setattr(
-            seats.subprocess,
+            keys.subprocess,
             "run",
             lambda *_a, **_k: types.SimpleNamespace(returncode=0, stdout=bad_key + "\n", stderr=""),
         )
