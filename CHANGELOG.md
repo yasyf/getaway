@@ -110,6 +110,24 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   paths — the Chase/Citi card gates now structured as
   `transfer_partners.json` `card_gate` data annotate confidence,
   never remove a path.
+- The AwardWallet Account Access API as the primary balance,
+  elite-status, and points-expiration source, with per-program browser
+  reads as the fallback lane: the `awardwallet` CLI group (`pull`,
+  `providers`, `account`), an `awardwallet` provider-code field on every
+  `programs.json`/`banks.json` row surfaced through
+  `registry.awardwallet_map()` (24 of 38 entries map;
+  aggregator-blocked programs stay on the browser lane), and an
+  `awardwallet_op_ref` preferences key. `docs/awardwallet-api.md`
+  records the API's observed shapes.
+- SerpApi Google Flights as `bridge`'s fallback cash-pricing backend
+  (`serp.py`): engaged per airport pair only when fli errors or prices
+  nothing and a key resolves, quotes tagged `source: fli|serpapi`,
+  keyed by a `serpapi_op_ref` preferences key.
+  `docs/serpapi-flights-api.md` records the API.
+- Shared secret resolution in `keys.py`: every client resolves its
+  credential env-var-first, else the preferences 1Password `op://`
+  reference, validated so a key never echoes into an error message or
+  rendered traceback.
 
 ### Changed
 - `skills/getaway/SKILL.md`, `references/planning.md`, and
@@ -143,6 +161,9 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
 - A preferences doc predating the `cards` preference is rejected
   loudly and regenerates through onboarding, the same clean cutover
   the v2 loyalty shape took.
+- Cash-leg clocks are required end to end: both bridge backends emit
+  departure and arrival clocks unconditionally, so stays derive from
+  observed arrivals with no unknown-arrival branch.
 
 ### Removed
 - The `return_viability` factor, its evidence collector, and the
@@ -161,6 +182,9 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   guard tables the compiled graph replaces.
 - `prefs credit-add`/`credit-list`/`credit-remove` (superseded by the
   instruments commands) and the `credits` preference shape.
+- Legacy preferences detection: `LEGACY_KEYS`, `_reject_legacy`, and
+  every pre-v2 mention — an invalid doc fails ordinary schema
+  validation, with no migration story.
 
 ### Fixed
 - The plugin manifest declares its cc-present dependency (`>=0.9.1`,
