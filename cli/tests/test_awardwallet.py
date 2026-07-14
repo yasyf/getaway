@@ -22,13 +22,13 @@ SECOND_USER_DETAIL = {
     "userId": 46,
     "fullName": "Priya Mohamedali",
     "email": "priya@example.com",
-    "accounts": [{"accountId": 8001, "code": "delta", "displayName": "Delta SkyMiles"}],
+    "accounts": [{"accountId": 8001, "code": "jetblue", "displayName": "JetBlue TrueBlue"}],
 }
-DELTA_DETAIL = {
+JETBLUE_DETAIL = {
     "account": {
         "accountId": 8001,
-        "code": "delta",
-        "displayName": "Delta SkyMiles",
+        "code": "jetblue",
+        "displayName": "JetBlue TrueBlue",
         "kind": "Airlines",
         "owner": "Priya Mohamedali",
         "balance": "61,204",
@@ -62,7 +62,7 @@ def _mock_pull_routes() -> dict[str, respx.Route]:
             return_value=httpx.Response(200, json=SECOND_USER_DETAIL)
         ),
         "8001": respx.get(f"{ACCOUNT_URL}/8001").mock(
-            return_value=httpx.Response(200, json=DELTA_DETAIL)
+            return_value=httpx.Response(200, json=JETBLUE_DETAIL)
         ),
     }
     for account_id, variant in ACCOUNT_VARIANTS:
@@ -138,7 +138,7 @@ def test_injected_malformed_key_rejected_without_leaking() -> None:
 
 @respx.mock
 def test_requests_carry_auth_header_and_exact_base_url() -> None:
-    respx.get(USERS_URL).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(USERS_URL).mock(return_value=httpx.Response(200, json={"connectedUsers": []}))
     AwardWalletClient(api_key="test-key").users()
     request = respx.calls.last.request
     assert str(request.url) == "https://business.awardwallet.com/api/export/v1/connectedUser"
@@ -239,7 +239,7 @@ def test_error_code_is_data_not_an_exception() -> None:
     row = normalize_account(account_variant("errored"), registry.awardwallet_map(), FROZEN)
     assert row["error_code"] == 2
     assert row["balance"] is None
-    assert row["slug"] == "united"
+    assert row["slug"] == "alaska"
 
 
 @pytest.mark.parametrize(
@@ -290,7 +290,7 @@ def test_pull_command_zero_users_exits_no_data(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(awardwallet.API_KEY_ENV, "aw_test")
-    respx.get(USERS_URL).mock(return_value=httpx.Response(200, json=[]))
+    respx.get(USERS_URL).mock(return_value=httpx.Response(200, json={"connectedUsers": []}))
     result = CliRunner().invoke(awardwallet.pull_cmd, [])
     assert result.exit_code == EXIT_NO_DATA
 

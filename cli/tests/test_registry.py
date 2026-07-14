@@ -100,7 +100,8 @@ def test_awardwallet_codes_are_unique_across_programs_and_banks() -> None:
 def test_awardwallet_map_resolves_known_codes() -> None:
     mapping = registry.awardwallet_map()
     assert mapping["aeroplan"] == "aeroplan"
-    assert mapping["membershiprewards"] == "amex"
+    assert mapping["alaskaair"] == "alaska"
+    assert mapping["amex"] == "amex"
 
 
 def test_sells_points_agrees_with_points_pricing() -> None:

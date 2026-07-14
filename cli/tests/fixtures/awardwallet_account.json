@@ -29,8 +29,8 @@
   "errored": {
     "account": {
       "accountId": 7002,
-      "code": "united",
-      "displayName": "United MileagePlus",
+      "code": "alaskaair",
+      "displayName": "Alaska Airlines Mileage Plan",
       "kind": "Airlines",
       "owner": "Yasyf Mohamedali",
       "login": "yasyf",
@@ -42,7 +42,7 @@
   "bank": {
     "account": {
       "accountId": 7003,
-      "code": "membershiprewards",
+      "code": "amex",
       "displayName": "American Express Membership Rewards",
       "kind": "Credit Cards",
       "owner": "Yasyf Mohamedali",

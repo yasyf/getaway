@@ -78,15 +78,14 @@ def resolve_api_key() -> str:
 class AwardWalletClient:
     def __init__(self, api_key: str | None = None) -> None:
         if api_key is not None:
-            # TODO: switch to keys.validate once the public helper lands.
-            key = keys._validate_key(api_key, "awardwallet")
+            key = keys.validate(api_key, "awardwallet")
         else:
             key = resolve_api_key()
         self._client = httpx.Client(headers={AUTH_HEADER: key}, timeout=HTTP_TIMEOUT)
 
     def users(self) -> list[Row]:
         """Connected users visible to the API credential."""
-        return self._get("/connectedUser")
+        return self._get("/connectedUser")["connectedUsers"]
 
     def user_accounts(self, user_id: int) -> Row:
         """One connected user's detail, including its accounts array."""

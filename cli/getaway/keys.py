@@ -28,10 +28,6 @@ def validate(key: str, service: str) -> str:
     return key
 
 
-# TODO: delete once awardwallet.py switches to validate().
-_validate_key = validate
-
-
 def resolve(env_var: str, prefs_key: str, service: str) -> str:
     """Resolve the API key for ``service`` from ``env_var`` or a preferences 1Password ref."""
     key = os.environ.get(env_var)

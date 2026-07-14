@@ -1,9 +1,13 @@
 {
   "userId": 45,
   "fullName": "Yasyf Mohamedali",
+  "userName": "yasyf",
   "email": "yasyf@example.com",
+  "status": "Free",
   "connectionType": "Connected",
-  "accountsAccessLevel": "regular",
+  "accessLevel": "Regular",
+  "accountsAccessLevel": "full",
+  "accountsSharedByDefault": true,
   "accounts": [
     {
       "accountId": 7001,
@@ -13,13 +17,13 @@
     },
     {
       "accountId": 7002,
-      "code": "united",
-      "displayName": "United MileagePlus",
+      "code": "alaskaair",
+      "displayName": "Alaska Airlines Mileage Plan",
       "kind": "Airlines"
     },
     {
       "accountId": 7003,
-      "code": "membershiprewards",
+      "code": "amex",
       "displayName": "American Express Membership Rewards",
       "kind": "Credit Cards"
     },

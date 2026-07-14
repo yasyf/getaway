@@ -22,7 +22,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
-    "awardwallet": "united",
+    "awardwallet": null,
     "beta": false
   },
   "american": {
@@ -35,7 +35,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
-    "awardwallet": "aa",
+    "awardwallet": null,
     "beta": false
   },
   "delta": {
@@ -48,7 +48,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
-    "awardwallet": "delta",
+    "awardwallet": null,
     "beta": false
   },
   "alaska": {
@@ -61,7 +61,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "alaska",
+    "awardwallet": "alaskaair",
     "beta": false
   },
   "flyingblue": {
@@ -75,7 +75,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "flyingblue",
+    "awardwallet": null,
     "beta": false
   },
   "lufthansa": {
@@ -101,7 +101,7 @@
     "rooms_aero": false,
     "sells_points": false,
     "gather_auth": "token",
-    "awardwallet": "krisflyer",
+    "awardwallet": "singaporeair",
     "beta": false
   },
   "qatar": {
@@ -114,7 +114,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
-    "awardwallet": "qatar",
+    "awardwallet": "qmiles",
     "beta": false
   },
   "turkish": {
@@ -140,7 +140,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "emirates",
+    "awardwallet": "skywards",
     "beta": false
   },
   "etihad": {
@@ -153,7 +153,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "etihad",
+    "awardwallet": null,
     "beta": false
   },
   "qantas": {
@@ -192,7 +192,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "virginatlantic",
+    "awardwallet": "virgin",
     "beta": false
   },
   "jetblue": {
@@ -218,7 +218,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "finnair",
+    "awardwallet": null,
     "beta": false
   },
   "eurobonus": {
@@ -231,7 +231,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "sas",
+    "awardwallet": null,
     "beta": false
   },
   "aeromexico": {
@@ -257,7 +257,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "copa",
+    "awardwallet": "copaair",
     "beta": false
   },
   "azul": {
@@ -283,7 +283,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "smiles",
+    "awardwallet": "golair",
     "beta": false
   },
   "ethiopian": {
@@ -296,7 +296,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "ethiopian",
+    "awardwallet": null,
     "beta": false
   },
   "saudia": {
@@ -309,7 +309,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "saudia",
+    "awardwallet": "saudisrabianairlin",
     "beta": false
   },
   "frontier": {
@@ -322,7 +322,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "frontier",
+    "awardwallet": null,
     "beta": false
   },
   "spirit": {
@@ -350,7 +350,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "executiveclub",
+    "awardwallet": null,
     "beta": true
   },
   "iberia": {
@@ -377,7 +377,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "hyatt",
+    "awardwallet": "goldpassport",
     "beta": false
   },
   "hilton": {
@@ -390,7 +390,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "hilton",
+    "awardwallet": "hhonors",
     "beta": false
   },
   "marriott": {
@@ -416,7 +416,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "ihg",
+    "awardwallet": "ichotelsgroup",
     "beta": false
   },
   "choice": {
@@ -429,7 +429,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "choice",
+    "awardwallet": null,
     "beta": false
   },
   "wyndham": {
@@ -442,7 +442,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
-    "awardwallet": "wyndham",
+    "awardwallet": null,
     "beta": false,
     "note": "rooms.aero source slug recorded as \"wyndham\", observed-pending-confirmation by a live rooms.aero capture."
   }
