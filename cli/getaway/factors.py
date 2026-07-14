@@ -396,8 +396,7 @@ def _assign_cost_tiers(entries: list[dict], primary_codes: frozenset[str]) -> No
                 if o is not e
             )
         ]
-        if not front:  # a domination cycle should be impossible; collapse rather than spin
-            front = remaining
+        assert front  # nonnegative costs, so dominance strictly lowers L1 cost sum — no empty front
         for entry in front:
             entry["_cost_tier"] = tier
         remaining = [e for e in remaining if e not in front]

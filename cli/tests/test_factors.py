@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import random
 from collections.abc import Callable
 from pathlib import Path
 
@@ -1079,6 +1080,55 @@ def test_guard_keeps_clearing_journey_on_the_front() -> None:
     unguarded = entries()
     factors._assign_cost_tiers(unguarded, frozenset())
     assert [e["_cost_tier"] for e in unguarded] == [0, 1]  # without the guard, CLEAR sinks
+
+
+def _random_entry(rng: random.Random, jid: str) -> dict:
+    # Mixed band/Pareto/cash/clears shapes across the band edges.
+    programs = rng.sample(["united", "delta", "aeroplan", "avianca"], rng.randint(1, 2))
+    miles = [40000, 60000, 80000, 90000, 100000, 115000, 115001, 200000]
+    by_program = {p: rng.choice(miles) for p in programs}
+    cash = _cash(rng.choice([12000, 40000])) if rng.random() < 0.4 else None
+    misses = [miss("cabin")] if rng.random() < 0.4 else []
+    return _entry(journey(jid, by_program, cash=cash, misses=misses))
+
+
+def test_assign_cost_tiers_terminates_over_random_populations() -> None:
+    # Property sweep: the empty-front tripwire never fires; every entry lands in a contiguous tier.
+    rng = random.Random(0xC057)
+    for pop in range(200):
+        codes = frozenset({"cabin"}) if rng.random() < 0.5 else frozenset()
+        entries = [_random_entry(rng, f"J{i}") for i in range(rng.randint(1, 8))]
+        factors._assign_cost_tiers(entries, codes)  # raises AssertionError if a front is ever empty
+        tiers = [e["_cost_tier"] for e in entries]
+        assert all(isinstance(t, int) for t in tiers), f"population {pop} left an entry untiered"
+        assert set(tiers) == set(range(max(tiers) + 1)), f"population {pop} skipped a tier"
+
+
+def test_assign_cost_tiers_reverts_on_mutual_domination() -> None:
+    # Equal negative totals dominate each other, emptying the front; the seeded sweep never
+    # generates negatives, so only this guards silent-collapse code that returns tiers.
+    pair = [_entry(journey(jid, {"united": -100})) for jid in ("A", "B")]
+    with pytest.raises(AssertionError):
+        factors._assign_cost_tiers(pair, frozenset())
+
+
+def test_assign_cost_tiers_dominance_strictly_lowers_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Metamorphic wrap: every True domination must strictly lower the L1 cost sum, else a future
+    # _dominates edit letting equal-cost entries dominate reintroduces cycle potential.
+    original = factors._dominates_cleared
+
+    def checked(a: dict, b: dict, a_clears: frozenset[str], b_clears: frozenset[str]) -> bool:
+        result = original(a, b, a_clears, b_clears)
+        if result:
+            assert sum(factors._cost_vector(a).values()) < sum(factors._cost_vector(b).values())
+        return result
+
+    monkeypatch.setattr(factors, "_dominates_cleared", checked)
+    rng = random.Random(0xF00D)
+    for _ in range(200):
+        codes = frozenset({"cabin"}) if rng.random() < 0.5 else frozenset()
+        entries = [_random_entry(rng, f"J{i}") for i in range(rng.randint(1, 8))]
+        factors._assign_cost_tiers(entries, codes)
 
 
 @pytest.mark.parametrize(
