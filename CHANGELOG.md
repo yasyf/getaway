@@ -163,6 +163,10 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   instruments commands) and the `credits` preference shape.
 
 ### Fixed
+- The plugin manifest declares its cc-present dependency (`>=0.9.1`,
+  window-keyed board resolution), so fresh installs pull the boards
+  plugin automatically once its marketplace is added — the README
+  install steps and requirements now say so.
 - Region pseudo-code origins now expand against both the packaged airport floor and origins observed in search sweeps, preventing valid shortlist rows from being dropped.
 - Cached `/search` teaser seat counts no longer masquerade as bookable: sufficiency reads the live-expanded row, and stale cached empties render "unverified" instead of "no space".
 - `/trips/{id}` normalization tolerates programs that omit

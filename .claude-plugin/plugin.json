@@ -13,6 +13,11 @@
       "name": "captain-hook",
       "marketplace": "captain-hook",
       "version": ">=9.9.0"
+    },
+    {
+      "name": "cc-present",
+      "marketplace": "cc-present",
+      "version": ">=0.9.1"
     }
   ]
 }

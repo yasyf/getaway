@@ -5,7 +5,8 @@
     "url": "https://github.com/yasyf"
   },
   "allowCrossMarketplaceDependenciesOn": [
-    "captain-hook"
+    "captain-hook",
+    "cc-present"
   ],
   "plugins": [
     {

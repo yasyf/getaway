@@ -9,14 +9,16 @@
 
 ```text
 /plugin marketplace add yasyf/captain-hook
+/plugin marketplace add yasyf/cc-present
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```
 
-Add the `yasyf/captain-hook` marketplace first: getaway's hooks ride the
-`captain-hook` plugin, and Claude Code auto-installs that dependency only
-when its marketplace is already added. Upgrading an existing install needs
-the same order — marketplace, then `claude plugin install` again, since
+Add the dependency marketplaces first: getaway's hooks ride the
+`captain-hook` plugin and its live boards ride `cc-present`, and Claude
+Code auto-installs those dependencies only when their marketplaces are
+already added. Upgrading an existing install needs the same order —
+marketplaces, then `claude plugin install` again, since
 `claude plugin update` resolves only plugins it already knows.
 
 You need [uv](https://docs.astral.sh/uv/) on PATH — the planning engine is
@@ -50,6 +52,7 @@ Driving with an agent? Paste this:
 
 ```text
 /plugin marketplace add yasyf/captain-hook
+/plugin marketplace add yasyf/cc-present
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```
@@ -162,8 +165,10 @@ The plugin ships three skills, each triggered by its own asks:
   `~/.getaway/preferences.json` instead of the environment — a secret
   reference like `op://Vault/item/field` that the CLI resolves with
   `op read` whenever the env var is unset.
-- The cc-present plugin, for the interactive boards — getaway ships its
-  block pack at `.claude/components`.
+- The [cc-present](https://github.com/yasyf/cc-present) plugin renders
+  the live boards — a declared dependency, auto-installed once its
+  marketplace is added; getaway ships its block pack at
+  `.claude/components`.
 
 ## Reference
 
