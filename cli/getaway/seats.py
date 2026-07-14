@@ -127,7 +127,7 @@ class SeatsClient:
     ) -> None:
         self._store = store
         self._floor = floor
-        key = api_key if api_key is not None else resolve_api_key()
+        key = keys.validate(api_key, "seats.aero") if api_key is not None else resolve_api_key()
         self._client = httpx.Client(headers={AUTH_HEADER: key}, timeout=HTTP_TIMEOUT)
 
     def search(

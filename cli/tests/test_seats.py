@@ -3,6 +3,7 @@ import fcntl
 import json
 import os
 import sqlite3
+import traceback
 import types
 from pathlib import Path
 
@@ -390,6 +391,15 @@ def test_malformed_key_rejected_without_leaking(
     message = str(excinfo.value)
     assert bad_key not in message
     assert "X-Bad" not in message
+
+
+def test_injected_key_validated_without_leaking(tmp_store: store.Store) -> None:
+    bad_key = "bad\r\nkey"
+    with pytest.raises(AuthError) as excinfo:
+        SeatsClient(tmp_store, api_key=bad_key)
+    rendered = "".join(traceback.format_exception(excinfo.value))
+    assert bad_key not in str(excinfo.value)
+    assert bad_key not in rendered
 
 
 @respx.mock
