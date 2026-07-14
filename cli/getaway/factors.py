@@ -2,10 +2,19 @@
 
 Ranking has three stages and never sums verdicts into a score. (1) Cost lane: same-program
 journeys band on scalar combined mileage, mixed-program journeys compare as per-program vectors
-on a Pareto front — there is no fungible cross-program scalar. (2) Judgment lane, consumed
-lexicographically within a cost tier: primary orders, secondary breaks ties, note annotates and
-never reorders; unknown is neutral. (3) A stable cost/id tie-break. Preferences never gate;
-confirmed constraints gate here, while seat insufficiency is gated upstream at composition.
+on a Pareto front — there is no fungible cross-program scalar; a structural primary-clears guard
+keeps a journey that clears a primary fit preference from being cost-dominated by one that
+misses it. (2) Judgment lane, consumed lexicographically within a cost tier: primary orders,
+secondary breaks ties, note annotates and never reorders; unknown is neutral. A factor's tier
+folds registry default, then declared preference priority (a fit factor lifts from its mapped
+preference keys, strongest of several), then explicit trip judgment override. Guard and trigger
+participation is per code, not per factor: a judgment override speaks for all a factor's codes,
+otherwise each code's own declared priority, otherwise the factor's registry default. (3) A
+stable cost/id tie-break. Preferences never gate; confirmed constraints gate here, while seat
+insufficiency is gated upstream at composition. Beyond the presentation cut, assess-picked
+notable stretches are joined by a deterministic trigger: each primary fit preference no
+finalist or already-surfaced stretch clears surfaces the best-ranked beyond-cut journey that
+clears it, skipping journeys availability verification marked gone or degraded.
 ``finalize`` only formats the board's result classes.
 """
 
@@ -24,6 +33,17 @@ VERDICT_RANK = {"promote": -1, "neutral": 0, "demote": 1}
 CREDIT_EXPIRY_DAYS = 90
 _BAND_NUM = 100 + round(MILEAGE_BAND * 100)
 _CASH_AXIS = "$cash"  # a hybrid's cash cost is its own Pareto dimension, never fungible with miles
+
+# Fit factor id → the deterministic preference-miss codes fit.py records for it. Non-fit
+# judgment factors have no deterministic codes and never participate in the clears guard.
+FIT_MISS_CODES: dict[str, frozenset[str]] = {
+    "cabin_fit": frozenset({"cabin"}),
+    "window_fit": frozenset({"outbound_departure_window", "return_arrival_by"}),
+    "trip_length_fit": frozenset({"trip_length"}),
+    "departure_day_fit": frozenset({"departure_days"}),
+    "mileage_fit": frozenset({"mileage_target"}),
+}
+_TIER_STRENGTH = {"primary": 0, "secondary": 1, "note": 2}
 
 
 def _optional_artifact(slug: str, name: str) -> dict | None:
@@ -105,12 +125,34 @@ def _activation(fid: str, trip: dict, prefs_doc: dict, slug: str | None) -> tupl
     raise UsageError(f"unknown factor id {fid!r}")
 
 
+def _declared_tiers(preferences: dict) -> dict[str, str]:
+    """Fit-factor tiers declared via ``plan.preferences.<key>.priority``: a factor mapped to
+    several preference keys takes the strongest declared priority."""
+    declared = {}
+    for fid, codes in FIT_MISS_CODES.items():
+        priorities = [preferences[code]["priority"] for code in codes if code in preferences]
+        if priorities:
+            declared[fid] = min(priorities, key=_TIER_STRENGTH.__getitem__)
+    return declared
+
+
+def _tiers(trip: dict) -> dict:
+    """Effective factor tiers: registry ``default_tier``, overridden by declared preference
+    priorities, overridden by explicit ``judgment.factors`` entries."""
+    tiers = {factor["id"]: factor["default_tier"] for factor in registry.factors()}
+    tiers |= _declared_tiers(trip["plan"].get("preferences", {}))
+    for fid, spec in trip.get("judgment", {}).get("factors", {}).items():
+        tiers[fid] = spec["priority"]
+    return tiers
+
+
 def derive_profile(trip: dict, prefs_doc: dict, slug: str | None = None) -> dict:
+    tiers = _tiers(trip)
     profile = {}
     for factor in registry.factors():
         fid = factor["id"]
         active, why = _activation(fid, trip, prefs_doc, slug)
-        profile[fid] = {"active": active, "priority": factor["default_tier"], "why": why}
+        profile[fid] = {"active": active, "priority": tiers[fid], "why": why}
     return profile
 
 
@@ -232,13 +274,6 @@ def _facts(
     return facts
 
 
-def _tiers(trip: dict) -> dict:
-    tiers = {factor["id"]: factor["default_tier"] for factor in registry.factors()}
-    for fid, spec in trip.get("judgment", {}).get("factors", {}).items():
-        tiers[fid] = spec["priority"]
-    return tiers
-
-
 def _afford_verdict(afford_fact: dict) -> str:
     if afford_fact["covered"]:
         return "promote"
@@ -282,11 +317,60 @@ def _cost_vector(entry: dict) -> dict[str, int]:
     return vector
 
 
-def _dominates(a: dict, b: dict) -> bool:
-    """Cost domination. Same single program: ``a`` is cheaper beyond the band. Otherwise strict
-    Pareto over the union of dimensions — per-program miles plus a hybrid's cash cents, each axis
-    compared within itself (a dimension a journey doesn't use costs it zero) — so mixed-program,
-    cross-program, and cash-bearing journeys stay incomparable and both surface on the front."""
+def _clears(entry: dict, codes: frozenset[str]) -> frozenset[str]:
+    """The subset of ``codes`` the entry's journey records no deterministic preference miss for."""
+    return codes - {miss["code"] for miss in entry["journey"]["preference_misses"]}
+
+
+def _verified_unavailable(entry: dict) -> bool:
+    """Availability verification marked a leg gone or degraded — the deterministic verify-artifact
+    signal, never an assess verdict."""
+    return any(
+        row["outcome"] in ("gone", "degraded")
+        for row in entry["facts"].get("availability_verification", [])
+    )
+
+
+def _primary_codes(trip: dict, active: set[str]) -> frozenset[str]:
+    """Active fit-preference codes whose per-code effective priority is primary. A
+    ``judgment.factors`` override speaks for all of its factor's codes; otherwise a code's own
+    declared ``preferences[code].priority`` wins over the factor's registry default — never the
+    strongest-of-several factor fold, which serves only the verdict lane."""
+    preferences = trip["plan"].get("preferences", {})
+    overrides = trip.get("judgment", {}).get("factors", {})
+    defaults = {factor["id"]: factor["default_tier"] for factor in registry.factors()}
+    codes = []
+    for fid, fit_codes in FIT_MISS_CODES.items():
+        if fid not in active:
+            continue
+        for code in fit_codes:
+            if fid in overrides:
+                priority = overrides[fid]["priority"]
+            elif code in preferences:
+                priority = preferences[code]["priority"]
+            else:
+                priority = defaults[fid]
+            if priority == "primary":
+                codes.append(code)
+    return frozenset(codes)
+
+
+def _dominates(a: dict, b: dict, primary_codes: frozenset[str]) -> bool:
+    """Cost domination, guarded by the active primary fit preferences: ``a`` may only dominate
+    ``b`` if it clears every primary preference ``b`` clears — a structural set-difference test
+    over deterministic preference misses, never a score. Same single program: ``a`` is cheaper
+    beyond the band. Otherwise strict Pareto over the union of dimensions — per-program miles
+    plus a hybrid's cash cents, each axis compared within itself (a dimension a journey doesn't
+    use costs it zero) — so mixed-program, cross-program, and cash-bearing journeys stay
+    incomparable and both surface on the front."""
+    return _dominates_cleared(a, b, _clears(a, primary_codes), _clears(b, primary_codes))
+
+
+def _dominates_cleared(
+    a: dict, b: dict, a_clears: frozenset[str], b_clears: frozenset[str]
+) -> bool:
+    if b_clears - a_clears:
+        return False
     av, bv = _cost_vector(a), _cost_vector(b)
     if len(av) == 1 and len(bv) == 1 and set(av) == set(bv):
         (a_total,) = av.values()
@@ -298,11 +382,20 @@ def _dominates(a: dict, b: dict) -> bool:
     return le_all and lt_any
 
 
-def _assign_cost_tiers(entries: list[dict]) -> None:
+def _assign_cost_tiers(entries: list[dict], primary_codes: frozenset[str]) -> None:
+    cleared = {id(e): _clears(e, primary_codes) for e in entries}
     remaining = list(entries)
     tier = 0
     while remaining:
-        front = [e for e in remaining if not any(_dominates(o, e) for o in remaining if o is not e)]
+        front = [
+            e
+            for e in remaining
+            if not any(
+                _dominates_cleared(o, e, cleared[id(o)], cleared[id(e)])
+                for o in remaining
+                if o is not e
+            )
+        ]
         if not front:  # a domination cycle should be impossible; collapse rather than spin
             front = remaining
         for entry in front:
@@ -326,8 +419,10 @@ def _tiebreak(entry: dict) -> tuple[tuple[tuple[str, int], ...], str]:
     return tuple(sorted(vector.items())), entry["journey"]["id"]
 
 
-def _order(entries: list[dict], tiers: dict, active: set[str]) -> list[dict]:
-    _assign_cost_tiers(entries)
+def _order(
+    entries: list[dict], tiers: dict, active: set[str], primary_codes: frozenset[str]
+) -> list[dict]:
+    _assign_cost_tiers(entries, primary_codes)
     primary = {fid for fid, tier in tiers.items() if tier == "primary" and fid in active}
     secondary = {fid for fid, tier in tiers.items() if tier == "secondary" and fid in active}
     p_width = max((len(_lane_ranks(e, primary)) for e in entries), default=0)
@@ -350,6 +445,12 @@ def _entry_out(entry: dict) -> dict:
         "verdicts": entry["verdicts"],
         "cost_tier": entry["_cost_tier"],
     }
+
+
+def _preference_label(code: str, preferences: dict) -> str:
+    if code == "cabin":
+        return f"{preferences['cabin']['value']} cabin"
+    return code.replace("_", " ")
 
 
 def _mileage_limit(plan: dict) -> int | None:
@@ -445,7 +546,8 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
             }
         )
 
-    ordered = _order(entries, tiers, active)
+    primary_codes = _primary_codes(trip, active)
+    ordered = _order(entries, tiers, active, primary_codes)
     ranked = [_entry_out(e) for e in ordered]
 
     within_cut = {e["journey"]["id"] for e in ordered[:PRESENTATION_LIMIT]}
@@ -455,6 +557,25 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
         entry = by_id.get(stretch["journey_id"])
         if entry is not None and stretch["journey_id"] not in within_cut:
             notable.append({**_entry_out(entry), "why": stretch.get("why", "")})
+
+    for code in sorted(primary_codes):
+        if any(code in _clears(e, primary_codes) for e in ordered[:PRESENTATION_LIMIT]):
+            continue
+        if any(code in _clears(n, primary_codes) for n in notable):
+            continue
+        stretch_entry = next(
+            (
+                e
+                for e in ordered[PRESENTATION_LIMIT:]
+                if code in _clears(e, primary_codes) and not _verified_unavailable(e)
+            ),
+            None,
+        )
+        if stretch_entry is None:
+            continue
+        label = _preference_label(code, plan.get("preferences", {}))
+        why = f"clears your {label} preference — every finalist misses it"
+        notable.append({**_entry_out(stretch_entry), "why": why})
 
     doc = {"ranked": ranked, "notable_stretches": notable, "dropped": dropped}
     trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))

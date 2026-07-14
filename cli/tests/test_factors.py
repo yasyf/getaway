@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from _api import expand_doc
 
-from getaway import factors, prefs, trips
+from getaway import factors, prefs, registry, trips
 from getaway.paths import UsageError
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -132,6 +132,155 @@ def test_activation_matrix(fid: str, trip_over: dict, prefs_over: dict, active: 
     assert profile[fid]["active"] is active
 
 
+def pref(value: object, priority: str) -> dict:
+    return {"value": value, "priority": priority}
+
+
+def tier_trip(preferences: dict | None = None, factor_overrides: dict | None = None) -> dict:
+    trip: dict = {"cabin": "business", "vibe": [], "plan": {}, "judgment": {}}
+    if preferences:
+        trip["plan"]["preferences"] = preferences
+    if factor_overrides:
+        trip["judgment"]["factors"] = factor_overrides
+    return trip
+
+
+WINDOW = {"start": "2026-09-01", "end": "2026-09-14"}
+
+
+@pytest.mark.parametrize(
+    ("preferences", "factor_overrides", "fid", "expected"),
+    [
+        pytest.param(
+            {"cabin": pref("business", "primary")},
+            None,
+            "cabin_fit",
+            "primary",
+            id="declared-primary-lifts-secondary-default",
+        ),
+        pytest.param(
+            {"cabin": pref("business", "note")},
+            None,
+            "cabin_fit",
+            "note",
+            id="declared-note-drops-secondary-default",
+        ),
+        pytest.param(
+            {"cabin": pref("business", "primary")},
+            {"cabin_fit": {"priority": "secondary"}},
+            "cabin_fit",
+            "secondary",
+            id="judgment-override-demotes-declared-primary",
+        ),
+        pytest.param(
+            {"cabin": pref("business", "note")},
+            {"cabin_fit": {"priority": "primary"}},
+            "cabin_fit",
+            "primary",
+            id="judgment-override-lifts-declared-note",
+        ),
+        pytest.param(
+            {
+                "outbound_departure_window": pref(WINDOW, "secondary"),
+                "return_arrival_by": pref("2026-09-20", "primary"),
+            },
+            None,
+            "window_fit",
+            "primary",
+            id="window-fit-strongest-of-two-keys",
+        ),
+        pytest.param(
+            {
+                "outbound_departure_window": pref(WINDOW, "note"),
+                "return_arrival_by": pref("2026-09-20", "secondary"),
+            },
+            None,
+            "window_fit",
+            "secondary",
+            id="window-fit-strongest-other-pair",
+        ),
+    ],
+)
+def test_tiers_folds_declared_preference_priorities(
+    preferences: dict, factor_overrides: dict | None, fid: str, expected: str
+) -> None:
+    assert factors._tiers(tier_trip(preferences, factor_overrides))[fid] == expected
+
+
+def test_tiers_without_declarations_are_registry_defaults() -> None:
+    defaults = {f["id"]: f["default_tier"] for f in registry.factors()}
+    assert factors._tiers(tier_trip()) == defaults
+
+
+def test_declared_preference_leaves_other_factor_tiers_untouched() -> None:
+    defaults = {f["id"]: f["default_tier"] for f in registry.factors()}
+    tiers = factors._tiers(tier_trip({"cabin": pref("business", "primary")}))
+    assert tiers == {**defaults, "cabin_fit": "primary"}
+
+
+def test_derive_profile_shows_effective_tiers() -> None:
+    trip = tier_trip(
+        {"cabin": pref("business", "primary")},
+        {"layovers": {"priority": "primary"}},
+    )
+    profile = factors.derive_profile(trip, empty_prefs(), slug=None)
+    assert profile["cabin_fit"]["priority"] == "primary"  # declared preference priority
+    assert profile["layovers"]["priority"] == "primary"  # judgment.factors override
+    assert profile["mileage_fit"]["priority"] == "secondary"  # untouched registry default
+
+
+@pytest.mark.parametrize(
+    ("preferences", "factor_overrides", "expected"),
+    [
+        pytest.param(
+            {
+                "outbound_departure_window": pref(WINDOW, "primary"),
+                "return_arrival_by": pref("2026-09-20", "note"),
+            },
+            None,
+            {"outbound_departure_window"},
+            id="mixed-window-only-the-primary-declared-code",
+        ),
+        pytest.param(
+            {
+                "outbound_departure_window": pref(WINDOW, "secondary"),
+                "return_arrival_by": pref("2026-09-20", "note"),
+            },
+            {"window_fit": {"priority": "primary"}},
+            {"outbound_departure_window", "return_arrival_by"},
+            id="judgment-override-up-lifts-both-window-codes",
+        ),
+        pytest.param(
+            {
+                "outbound_departure_window": pref(WINDOW, "primary"),
+                "return_arrival_by": pref("2026-09-20", "primary"),
+            },
+            {"window_fit": {"priority": "note"}},
+            set(),
+            id="judgment-override-down-silences-both-window-codes",
+        ),
+        pytest.param(
+            {"cabin": pref("business", "primary")},
+            None,
+            {"cabin"},
+            id="single-key-declared-primary",
+        ),
+        pytest.param(
+            {"cabin": pref("business", "note")},
+            None,
+            set(),
+            id="single-key-declared-note",
+        ),
+    ],
+)
+def test_primary_codes_are_per_code(
+    preferences: dict, factor_overrides: dict | None, expected: set[str]
+) -> None:
+    trip = tier_trip(preferences, factor_overrides)
+    active = active_set(factors.derive_profile(trip, empty_prefs(), slug=None))
+    assert factors._primary_codes(trip, active) == frozenset(expected)
+
+
 PLAN = {
     "trip_type": "round_trip",
     "origins": ["SFO"],
@@ -210,6 +359,7 @@ def journey(
     departs_local: str = "2026-09-07T09:00",
     kind: str = "round_trip",
     award_legs: list[dict] | None = None,
+    misses: list[dict] | None = None,
 ) -> dict:
     single = len(by_program) == 1
     legs = (
@@ -235,7 +385,7 @@ def journey(
         "kind": kind,
         "legs": legs,
         "fit_facts": {},
-        "preference_misses": [],
+        "preference_misses": misses or [],
         "cost": {
             "mileage": {
                 "by_program": by_program,
@@ -850,3 +1000,293 @@ def test_verified_gone_demotes_within_cost_band(biz_trip: str) -> None:
     clean = journey("B", {"aeroplan": 82000})  # no matching verify result
     # availability_verified is a primary lane verdict: the gone journey sinks below its band-mate.
     assert order(do_rank(biz_trip, [gone, clean])) == ["B", "A"]
+
+
+def miss(code: str) -> dict:
+    return {"code": code, "delta": 1, "annotation": f"{code} miss"}
+
+
+def _entry(j: dict) -> dict:
+    return {"journey": j}
+
+
+def cabin_primary(slug: str, *, mileage: bool = False) -> None:
+    # Declared preference priorities alone drive the primary lane — no judgment.factors crutch.
+    preferences: dict = {"cabin": {"value": "business", "priority": "primary"}}
+    if mileage:
+        preferences["mileage_target"] = {
+            "value": {"miles": 70000, "scope": "total"},
+            "priority": "primary",
+        }
+    trips.set_patch(slug, {"plan": {**PLAN, "preferences": preferences}})
+
+
+@pytest.mark.parametrize(
+    ("a_misses", "b_misses", "dominates"),
+    [
+        pytest.param([miss("cabin")], [], False, id="cheaper-missing-never-dominates-clearing"),
+        pytest.param([miss("cabin")], [miss("cabin")], True, id="both-missing-bands-as-before"),
+        pytest.param([], [], True, id="both-clearing-guard-passes"),
+        pytest.param([], [miss("cabin")], True, id="clearing-may-dominate-missing"),
+    ],
+)
+def test_dominates_primary_clears_guard(
+    a_misses: list[dict], b_misses: list[dict], dominates: bool
+) -> None:
+    a = _entry(journey("A", {"united": 60000}, misses=a_misses))
+    b = _entry(journey("B", {"united": 90000}, misses=b_misses))
+    assert factors._dominates(a, b, frozenset({"cabin"})) is dominates
+    # With no primary codes the guard is inert: cheaper-beyond-band always dominates.
+    assert factors._dominates(a, b, frozenset()) is True
+
+
+@pytest.mark.parametrize(
+    ("a_cost", "b_cost", "b_cash", "expected"),
+    [
+        pytest.param({"united": 60000}, {"united": 90000}, None, True, id="beyond-band"),
+        pytest.param({"united": 80000}, {"united": 90000}, None, False, id="within-band"),
+        pytest.param({"united": 100000}, {"united": 115000}, None, False, id="band-edge"),
+        pytest.param({"united": 100000}, {"united": 115001}, None, True, id="past-band-edge"),
+        pytest.param(
+            {"united": 40000, "delta": 40000},
+            {"united": 50000, "delta": 50000},
+            None,
+            True,
+            id="mixed-pareto-dominated",
+        ),
+        pytest.param({"united": 90000}, {"delta": 80000}, None, False, id="cross-incomparable"),
+        pytest.param({"united": 80000}, {"united": 80000}, _cash(12000), True, id="cash-axis"),
+    ],
+)
+def test_dominates_with_empty_codes_matches_prior_behavior(
+    a_cost: dict, b_cost: dict, b_cash: list | None, expected: bool
+) -> None:
+    a = _entry(journey("A", a_cost))
+    b = _entry(journey("B", b_cost, cash=b_cash))
+    assert factors._dominates(a, b, frozenset()) is expected
+
+
+def test_guard_keeps_clearing_journey_on_the_front() -> None:
+    def entries() -> list[dict]:
+        return [
+            _entry(journey("MISS", {"united": 60000}, misses=[miss("cabin")])),
+            _entry(journey("CLEAR", {"united": 90000})),
+        ]
+
+    guarded = entries()
+    factors._assign_cost_tiers(guarded, frozenset({"cabin"}))
+    assert [e["_cost_tier"] for e in guarded] == [0, 0]  # both stay tier 0
+    unguarded = entries()
+    factors._assign_cost_tiers(unguarded, frozenset())
+    assert [e["_cost_tier"] for e in unguarded] == [0, 1]  # without the guard, CLEAR sinks
+
+
+@pytest.mark.parametrize(
+    ("costs", "expected_tiers"),
+    [
+        pytest.param(
+            [("A", {"united": 80000}), ("B", {"united": 90000}), ("C", {"united": 200000})],
+            {"A": 0, "B": 0, "C": 1},
+            id="banded-plus-dominated",
+        ),
+        pytest.param(
+            [("A", {"united": 100000}), ("B", {"united": 115000})],
+            {"A": 0, "B": 0},
+            id="band-edge-same-tier",
+        ),
+        pytest.param(
+            [("A", {"united": 100000}), ("B", {"united": 115001})],
+            {"A": 0, "B": 1},
+            id="past-band-edge-later-tier",
+        ),
+        pytest.param(
+            [("U", {"united": 90000}), ("D", {"delta": 80000})],
+            {"U": 0, "D": 0},
+            id="cross-program-front",
+        ),
+        pytest.param(
+            [
+                ("CHEAP", {"united": 40000, "delta": 40000}),
+                ("DEAR", {"united": 50000, "delta": 50000}),
+            ],
+            {"CHEAP": 0, "DEAR": 1},
+            id="mixed-dominated",
+        ),
+    ],
+)
+def test_no_primary_preference_tier_assignment_pinned(
+    biz_trip: str, costs: list[tuple[str, dict]], expected_tiers: dict[str, int]
+) -> None:
+    ranked = do_rank(biz_trip, [journey(jid, cost) for jid, cost in costs])
+    assert {e["journey"]["id"]: e["cost_tier"] for e in ranked} == expected_tiers
+
+
+def test_all_economy_board_regression(biz_trip: str) -> None:
+    cabin_primary(biz_trip)
+    economy = [
+        journey(f"E{i}", {"united": 60000 + i * 1000}, cabin="Y", misses=[miss("cabin")])
+        for i in range(7)
+    ]
+    js = [*economy, journey("BIZ", {"united": 90000})]
+
+    # Without assess.json: the guard keeps BIZ tier 0 but the tiebreak leaves it beyond the
+    # cut; the deterministic trigger puts it on the board, naming the cabin preference.
+    do_rank(biz_trip, js)
+    doc = rank_doc(biz_trip)
+    assert [e["journey"]["id"] for e in doc["ranked"][:6]] == ["E0", "E1", "E2", "E3", "E4", "E5"]
+    assert all(e["cost_tier"] == 0 for e in doc["ranked"])  # guard: no economy buries BIZ
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["BIZ"]
+    assert doc["notable_stretches"][0]["why"] == (
+        "clears your business cabin preference — every finalist misses it"
+    )
+
+    # With assess verdicts: the guard keeps BIZ tier 0 and the primary lane lifts it to finalist.
+    assess = {f"E{i}": verdicts(("cabin_fit", "demote")) for i in range(7)}
+    assess["BIZ"] = verdicts(("cabin_fit", "promote"))
+    do_rank(biz_trip, js, assess=assess)
+    doc = rank_doc(biz_trip)
+    assert [e["journey"]["id"] for e in doc["ranked"][:6]] == [
+        "BIZ",
+        "E0",
+        "E1",
+        "E2",
+        "E3",
+        "E4",
+    ]
+    assert doc["ranked"][0]["cost_tier"] == 0
+    assert doc["notable_stretches"] == []  # BIZ is a finalist clearing cabin — no trigger
+
+
+def test_trigger_dedupes_across_codes(biz_trip: str) -> None:
+    cabin_primary(biz_trip, mileage=True)
+    finalists = [
+        journey(
+            f"F{i}",
+            {"united": 60000 + i * 1000},
+            misses=[miss("cabin"), miss("mileage_target")],
+        )
+        for i in range(6)
+    ]
+    do_rank(biz_trip, [*finalists, journey("BOTH", {"united": 90000})])
+    doc = rank_doc(biz_trip)
+    # BOTH clears both primary codes but surfaces once, under the first code.
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["BOTH"]
+    assert doc["notable_stretches"][0]["why"] == (
+        "clears your business cabin preference — every finalist misses it"
+    )
+
+
+def test_trigger_surfaces_one_stretch_per_code(biz_trip: str) -> None:
+    cabin_primary(biz_trip, mileage=True)
+    finalists = [
+        journey(
+            f"F{i}",
+            {"united": 60000 + i * 1000},
+            misses=[miss("cabin"), miss("mileage_target")],
+        )
+        for i in range(6)
+    ]
+    cabin_clear = journey("CABINCLEAR", {"united": 90000}, misses=[miss("mileage_target")])
+    mileage_clear = journey("MILEAGECLEAR", {"united": 95000}, misses=[miss("cabin")])
+    do_rank(biz_trip, [*finalists, cabin_clear, mileage_clear])
+    doc = rank_doc(biz_trip)
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["CABINCLEAR", "MILEAGECLEAR"]
+    assert doc["notable_stretches"][1]["why"] == (
+        "clears your mileage target preference — every finalist misses it"
+    )
+
+
+def test_trigger_dedupes_against_assess_picks(biz_trip: str) -> None:
+    cabin_primary(biz_trip)
+    finalists = [
+        journey(f"F{i}", {"united": 60000 + i * 1000}, misses=[miss("cabin")]) for i in range(6)
+    ]
+    stretch = journey("STRETCH", {"united": 90000})
+    notable = [{"journey_id": "STRETCH", "why": "assess picked it"}]
+    do_rank(biz_trip, [*finalists, stretch], assess={}, notable=notable)
+    doc = rank_doc(biz_trip)
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["STRETCH"]
+    assert doc["notable_stretches"][0]["why"] == "assess picked it"  # the assess why wins
+
+
+def test_no_trigger_when_a_finalist_clears_the_code(biz_trip: str) -> None:
+    cabin_primary(biz_trip)
+    clear = journey("CLEAR", {"united": 60000})
+    finalists = [
+        journey(f"F{i}", {"united": 61000 + i * 1000}, misses=[miss("cabin")]) for i in range(5)
+    ]
+    do_rank(biz_trip, [clear, *finalists, journey("BEYOND", {"united": 90000})])
+    doc = rank_doc(biz_trip)
+    assert [e["journey"]["id"] for e in doc["ranked"][:6]] == [
+        "CLEAR",
+        "F0",
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+    ]
+    assert doc["notable_stretches"] == []
+
+
+def test_mixed_window_declaration_guards_and_triggers_only_the_primary_code(
+    biz_trip: str,
+) -> None:
+    preferences = {
+        "outbound_departure_window": {"value": WINDOW, "priority": "primary"},
+        "return_arrival_by": {"value": {"latest_local_date": "2026-09-20"}, "priority": "note"},
+    }
+    trips.set_patch(biz_trip, {"plan": {**PLAN, "preferences": preferences}})
+    finalists = [
+        journey(
+            f"F{i}",
+            {"united": 60000 + i * 1000},
+            misses=[miss("outbound_departure_window"), miss("return_arrival_by")],
+        )
+        for i in range(6)
+    ]
+    ret_clear = journey("RETCLEAR", {"united": 90000}, misses=[miss("outbound_departure_window")])
+    ob_clear = journey("OBCLEAR", {"united": 95000}, misses=[miss("return_arrival_by")])
+    do_rank(biz_trip, [*finalists, ret_clear, ob_clear])
+    doc = rank_doc(biz_trip)
+    tiers = {e["journey"]["id"]: e["cost_tier"] for e in doc["ranked"]}
+    assert tiers["OBCLEAR"] == 0  # the declared-primary outbound code guards it
+    assert tiers["RETCLEAR"] == 1  # the note-declared return code no longer guards
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["OBCLEAR"]
+    assert doc["notable_stretches"][0]["why"] == (
+        "clears your outbound departure window preference — every finalist misses it"
+    )
+
+
+def test_trigger_skips_code_an_assess_pick_already_clears(biz_trip: str) -> None:
+    cabin_primary(biz_trip)
+    finalists = [
+        journey(f"F{i}", {"united": 60000 + i * 1000}, misses=[miss("cabin")]) for i in range(6)
+    ]
+    picked = journey("PICKED", {"united": 90000})
+    also_clears = journey("ALSO", {"united": 95000})
+    notable = [{"journey_id": "PICKED", "why": "assess picked it"}]
+    do_rank(biz_trip, [*finalists, picked, also_clears], assess={}, notable=notable)
+    doc = rank_doc(biz_trip)
+    # PICKED already clears cabin — no second, worse stretch surfaces for the same code.
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["PICKED"]
+    assert doc["notable_stretches"][0]["why"] == "assess picked it"
+
+
+def test_trigger_skips_a_verified_gone_stretch(biz_trip: str) -> None:
+    cabin_primary(biz_trip)
+    write_verify(biz_trip, verify_result("outbound-united-gone:J", "gone"))
+    finalists = [
+        journey(f"F{i}", {"united": 60000 + i * 1000}, misses=[miss("cabin")]) for i in range(6)
+    ]
+    gone = journey(
+        "GONE",
+        {"united": 90000},
+        award_legs=[{**leg("outbound", "united"), "id": "outbound-united-gone"}],
+    )
+    live = journey("LIVE", {"united": 115001})
+    do_rank(biz_trip, [*finalists, gone, live])
+    doc = rank_doc(biz_trip)
+    tiers = {e["journey"]["id"]: e["cost_tier"] for e in doc["ranked"]}
+    assert (tiers["GONE"], tiers["LIVE"]) == (0, 1)  # the gone journey outranks live on cost
+    assert [e["journey"]["id"] for e in doc["ranked"][6:]] == ["GONE", "LIVE"]
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["LIVE"]
