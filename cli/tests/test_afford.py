@@ -8,8 +8,15 @@ from getaway import afford, prefs
 from getaway.paths import StateConflictError
 
 
-def _prefs(programs: dict | None = None, transferable: dict | None = None) -> dict:
-    return {"balances": {"programs": programs or {}, "transferable": transferable or {}}}
+def _prefs(
+    programs: dict | None = None,
+    transferable: dict | None = None,
+    cards: list[dict] | None = None,
+) -> dict:
+    return {
+        "balances": {"programs": programs or {}, "transferable": transferable or {}},
+        "cards": cards or [],
+    }
 
 
 def test_covered_outright_has_zero_shortfall_and_no_purchase() -> None:
@@ -35,6 +42,8 @@ def test_shortfall_marks_only_the_covering_transfer_path() -> None:
         "ratio": "1:1",
         "points_required": 30000,
         "covers": True,
+        "note": None,
+        "card_access": None,
     }
     assert by_bank["chase"]["covers"] is False
     assert by_bank["capitalone"]["bank_balance"] == 0
@@ -78,6 +87,56 @@ def test_non_chase_bank_has_no_increment_rounding() -> None:
     amex = next(p for p in result["transfer_paths"] if p["bank"] == "amex")
     assert amex["points_required"] == 60500
     assert amex["covers"] is True
+
+
+@pytest.mark.parametrize(
+    ("cards", "status", "held"),
+    [
+        pytest.param(
+            [{"issuer": "chase", "product": "sapphire-reserve"}],
+            "on_file",
+            ["sapphire-reserve"],
+            id="qualifying-chase-card-on-file",
+        ),
+        pytest.param(
+            [{"issuer": "chase", "product": "freedom-unlimited"}],
+            "none_on_file",
+            [],
+            id="non-qualifying-chase-card-on-file",
+        ),
+        pytest.param(
+            [{"issuer": "amex", "product": "platinum"}],
+            "unknown",
+            [],
+            id="only-other-bank-card-on-file",
+        ),
+        pytest.param([], "unknown", [], id="no-cards-on-file"),
+    ],
+)
+def test_chase_card_access(cards: list[dict], status: str, held: list[str]) -> None:
+    result = afford.afford("hyatt", 60000, _prefs(cards=cards))
+    chase = next(p for p in result["transfer_paths"] if p["bank"] == "chase")
+    assert chase["card_access"] == {
+        "required": [
+            "sapphire-reserve",
+            "sapphire-reserve-business",
+            "sapphire-preferred",
+            "ink-business-preferred",
+            "ink-plus",
+        ],
+        "held": held,
+        "status": status,
+    }
+
+
+def test_ungated_amex_path_has_no_card_access() -> None:
+    result = afford.afford(
+        "aeroplan",
+        60000,
+        _prefs(cards=[{"issuer": "amex", "product": "platinum"}]),
+    )
+    amex = next(p for p in result["transfer_paths"] if p["bank"] == "amex")
+    assert amex["card_access"] is None
 
 
 def test_include_purchase_costs_from_typical_sale_cents() -> None:
@@ -135,6 +194,29 @@ def test_cli_afford_loads_prefs_from_home(getaway_home: Path) -> None:
     assert payload["shortfall"] == 50000
 
 
+def test_cli_afford_reports_card_access(getaway_home: Path) -> None:
+    prefs.init()
+    prefs.set_patch({"cards": [{"issuer": "chase", "product": "sapphire-reserve"}]})
+    result = CliRunner().invoke(
+        afford.afford_cmd,
+        ["--program", "united", "--miles", "90000"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    chase = next(p for p in payload["transfer_paths"] if p["bank"] == "chase")
+    assert chase["card_access"] == {
+        "required": [
+            "sapphire-reserve",
+            "sapphire-reserve-business",
+            "sapphire-preferred",
+            "ink-business-preferred",
+            "ink-plus",
+        ],
+        "held": ["sapphire-reserve"],
+        "status": "on_file",
+    }
+
+
 def test_cli_afford_unknown_program_exits_no_data(getaway_home: Path) -> None:
     result = CliRunner().invoke(afford.afford_cmd, ["--program", "nope", "--miles", "1000"])
     assert result.exit_code == 4
@@ -150,7 +232,7 @@ def test_cli_afford_rejects_legacy_prefs_shape(getaway_home: Path) -> None:
     result = CliRunner().invoke(afford.afford_cmd, ["--program", "united", "--miles", "90000"])
     assert isinstance(result.exception, SystemExit)
     assert result.exit_code == StateConflictError.exit_code
-    assert "pre-v2 shape" in result.stderr
+    assert "re-run getaway onboarding" in result.stderr
 
 
 def test_cli_afford_missing_prefs_uses_neutral_profile(getaway_home: Path) -> None:
@@ -175,6 +257,24 @@ def test_hotel_program_transfers_generically() -> None:
         "ratio": "1:1",
         "points_required": 60000,
         "covers": True,
+        "note": (
+            "Chase transfers in 1,000-point increments, only from an account holding a "
+            "transfer-eligible card. Sapphire Reserve transfers 1:1; Sapphire Preferred and "
+            "Ink Business Preferred move to 4:3 for applications on/after 2026-06-15, and "
+            "existing Sapphire Preferred holders convert from 1:1 to 4:3 on 2026-10-01 "
+            "(per Chase, verified 2026-07-13)."
+        ),
+        "card_access": {
+            "required": [
+                "sapphire-reserve",
+                "sapphire-reserve-business",
+                "sapphire-preferred",
+                "ink-business-preferred",
+                "ink-plus",
+            ],
+            "held": [],
+            "status": "unknown",
+        },
     }
 
 

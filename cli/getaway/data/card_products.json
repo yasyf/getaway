@@ -1,0 +1,38 @@
+{
+  "amex": {
+    "platinum": {"name": "The Platinum Card"},
+    "business-platinum": {"name": "Business Platinum Card"},
+    "gold": {"name": "American Express Gold Card"},
+    "business-gold": {"name": "American Express Business Gold Card"},
+    "green": {"name": "American Express Green Card"},
+    "blue-business-plus": {"name": "Blue Business Plus"}
+  },
+  "chase": {
+    "sapphire-reserve": {"name": "Chase Sapphire Reserve"},
+    "sapphire-reserve-business": {"name": "Chase Sapphire Reserve for Business"},
+    "sapphire-preferred": {"name": "Chase Sapphire Preferred"},
+    "ink-business-preferred": {"name": "Ink Business Preferred"},
+    "ink-business-premier": {"name": "Ink Business Premier", "note": "Earns Ultimate Rewards that cannot transfer to travel partners."},
+    "ink-business-cash": {"name": "Ink Business Cash"},
+    "ink-business-unlimited": {"name": "Ink Business Unlimited"},
+    "ink-plus": {"name": "Ink Plus", "note": "Discontinued; grandfathered accounts keep transfer access."},
+    "freedom-unlimited": {"name": "Chase Freedom Unlimited"},
+    "freedom-flex": {"name": "Chase Freedom Flex"}
+  },
+  "citi": {
+    "strata-elite": {"name": "Citi Strata Elite"},
+    "strata-premier": {"name": "Citi Strata Premier"},
+    "strata": {"name": "Citi Strata"},
+    "prestige": {"name": "Citi Prestige", "note": "Discontinued; grandfathered accounts keep transfer access."},
+    "double-cash": {"name": "Citi Double Cash"},
+    "custom-cash": {"name": "Citi Custom Cash"},
+    "rewards-plus": {"name": "Citi Rewards+"}
+  },
+  "capitalone": {
+    "venture-x": {"name": "Venture X"},
+    "venture-x-business": {"name": "Venture X Business"},
+    "venture": {"name": "Venture"},
+    "venture-one": {"name": "VentureOne"},
+    "spark-miles": {"name": "Spark Miles for Business"}
+  }
+}

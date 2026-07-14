@@ -102,6 +102,14 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   run's all-business journeys directly since rank's cut cannot yet
   surface them past cheaper cabins. `docs/scripts/demo.sh` regenerates
   the capture.
+- Held credit cards: a `cards` preference (`{issuer, product}` slugs
+  validated against the new `card_products.json` registry and
+  `registry card-products`), onboarding detection from Gmail and the
+  bank-dashboard browser pass (suggestion-only, adopted by typing),
+  and soft `card_access`/`note` annotations on `afford` transfer
+  paths — the Chase/Citi card gates now structured as
+  `transfer_partners.json` `card_gate` data annotate confidence,
+  never remove a path.
 
 ### Changed
 - `skills/getaway/SKILL.md`, `references/planning.md`, and
@@ -132,6 +140,9 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   `op_ref` detail relocated to Requirements, "How it plans" cut to one
   architecture paragraph, and the stale 26-program count caught up to
   the opener's 28.
+- A preferences doc predating the `cards` preference is rejected
+  loudly and regenerates through onboarding, the same clean cutover
+  the v2 loyalty shape took.
 
 ### Removed
 - The `return_viability` factor, its evidence collector, and the

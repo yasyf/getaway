@@ -40,6 +40,10 @@ def transfer_partners() -> dict:
     return _load("transfer_partners")
 
 
+def card_products() -> dict:
+    return _load("card_products")
+
+
 def seat_quality() -> list:
     return _load("seat_quality")
 
@@ -184,6 +188,17 @@ def _transfer_partners(bank: str | None, program: str | None) -> None:
         table = {b: paths for b, paths in table.items() if paths}
         if not table:
             raise ExitNoData(f"no transfer path to {program}")
+    emit(table)
+
+
+@registry_group.command("card-products")
+@click.option("--bank", help="Restrict to one bank.")
+def _card_products(bank: str | None) -> None:
+    table = card_products()
+    if bank is not None:
+        if bank not in table:
+            raise ExitNoData(f"unknown bank {bank}")
+        table = {bank: table[bank]}
     emit(table)
 
 

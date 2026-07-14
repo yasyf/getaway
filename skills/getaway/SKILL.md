@@ -36,7 +36,7 @@ The CLI resolves the seats.aero Pro key itself: the `SEATS_AERO_API_KEY` environ
 | `bridge` | Cash-leg pricing through the hardened fli driver: `bridge <slug>` |
 | `stays` | rooms.aero lodging: `stays intervals <slug>` (the per-journey worklist), `stays ingest <slug>` (normalized rows on stdin) |
 | `rank`, `afford`, `quality` | Lane-based rank over assess verdicts, transfer-first affordability, seat-quality classification |
-| `registry` | Packaged reference data: `programs [--kind airline\|hotel]`, `banks`, `hosts` (browser-read host list with auth classes), `transfer-partners`, `regions`, `factors`, `status-earning`, `points-pricing`, `cabins`, `continents` |
+| `registry` | Packaged reference data: `programs [--kind airline\|hotel]`, `banks`, `hosts` (browser-read host list with auth classes), `transfer-partners`, `card-products`, `regions`, `factors`, `status-earning`, `points-pricing`, `cabins`, `continents` |
 | `learnings` | Append-only planning learnings: `add --scope <api\|prefs\|general>`, `list` |
 | `quota` | Quota report from recorded call headers; the floor enforces at the client — every API-spending command takes `--quota-floor N` |
 | `cache` | Zero-quota queries over cached availability: `query`, `stats`, `prune` |

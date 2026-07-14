@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, airline and hotel points balances, elite statuses, status goals, travel instruments (airline eCredits, vouchers, companion certificates, hotel free-night certificates), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
+description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, airline and hotel points balances, elite statuses, status goals, travel instruments (airline eCredits, vouchers, companion certificates, hotel free-night certificates), credit cards held (Amex Platinum, Chase Sapphire Reserve), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
 allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Bash(uv:*), Agent
 ---
 
@@ -8,8 +8,8 @@ allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Bash(uv:
 
 Onboarding collects the user's airports, balances — airline and hotel
 programs alike — elite statuses, status goals, travel instruments,
-travel documents — passports, residency, standing visas — and avoid
-lists and writes them in one pass. It is
+credit cards held, travel documents — passports, residency, standing
+visas — and avoid lists and writes them in one pass. It is
 optional: the user may skip it and plan on the neutral template. The
 CLI shorthand throughout:
 
@@ -25,7 +25,7 @@ any spawn. Prime the cookie grant at the main level per gather.md's
 [browser read](../refresh/gather.md#browser-read) — Touch ID denied
 means the spawn goes Gmail-only, no browser gatherers. Then run the
 gatherers below as parallel subagents in one spawn message — the
-Gmail gatherer (reads 2–6, the calendar read among them, and body
+Gmail gatherer (reads 2–7, the calendar read among them, and body
 fetches) beside one browser gatherer per host. The gatherers degrade
 independently: skipping one costs nothing but its answers, and none of
 them writes a byte. The form's Submit is the sole write gate, and the
@@ -35,7 +35,7 @@ form is never delegated.
 
 This section is the Gmail subagent's brief. Spawn it with the chosen
 account and the tally-narrowed `from:` list; it returns
-`{programs, statuses, balances, instruments, home_airport,
+`{programs, statuses, balances, instruments, cards, home_airport,
 origin_candidates, document_signals, notes}` as JSON. Query 1 runs at
 the main level first, so the tally can seed both gatherers.
 
@@ -50,11 +50,11 @@ Resolve the account per gather.md's account rule (`gog auth list
 onboarding the mailbox pick happens at the main level before the
 gatherers spawn — the lone pre-spawn question in this flow.
 
-Run the six reads below — five headers-first Gmail queries and one
+Run the seven reads below — six headers-first Gmail queries and one
 calendar read — fetching at most 10 message bodies total across
 queries 1–5 per gather.md's body-fetch rule (the flight-history
-fallback and the instruments-mining read carry their own budgets: 25 and
-10):
+fallback, the instruments-mining read, and the card read carry their
+own budgets: 25, 10, and 5):
 
 1. **Programs, airlines, and banks** — `from:(<every domain from
    registry programs --domains and registry banks>) newer_than:1y`,
@@ -106,6 +106,20 @@ fallback and the instruments-mining read carry their own budgets: 25 and
    with issuer and program slugs from the registry. Rows reach the
    form's travel-instruments section as label suffixes — mined values
    are suggestions, adopted only by typing.
+7. **Credit cards held** — headers-first over the bank domains only:
+   `from:(<the bank domains from registry banks>) subject:("welcome
+   to" OR cardmember OR "card member" OR "annual fee" OR "your new
+   card" OR "card is on its way" OR statement) newer_than:1y`,
+   `--max 50`. Product names usually sit in the subject or the
+   sender's display name ("Your Platinum Card® statement is ready");
+   spend a dedicated budget of 5 sanitized body fetches, newest
+   first, one per issuer whose headers name no product. Map names to
+   slugs through `$CLI registry card-products` and return `cards` as
+   `[{issuer, product, evidence}]` rows — a name matching no registry
+   product goes in `notes`, never invented. Mined cards are hints for
+   banks the browser pass could not read — a dashboard-seen card
+   beats a mined one — and reach the form's cards field as label
+   suffixes, adopted only by typing.
 
 The flight-history fallback: `from:(<the program domains from
 registry programs --domains>)
@@ -128,8 +142,10 @@ frequency-and-margin rule then decides `home_airport` and
 The browser read fans out per host: after the main-level priming tap,
 spawn one browser gatherer per host beside the Gmail gatherer — all in
 one message, with the host list derived and fixed at spawn time. Each
-gatherer returns one `{slug, balance, tier}` record or a skip note;
-the orchestrator aggregates them. Programs the Gmail gatherer surfaces
+gatherer returns one `{slug, balance, tier}` record — a bank gatherer
+`{slug, balance, tier, cards}`, per gather.md's browser read — or a
+skip note; the orchestrator aggregates them, mapping card display
+names to slugs through `$CLI registry card-products`. Programs the Gmail gatherer surfaces
 after the spawn reach the form as Gmail-sourced label suffixes — offer
 a second browser pass only when the user wants exact numbers.
 
@@ -186,6 +202,8 @@ This document passes `cc-present push --dry-run`:
     { "id": "balances-hotels", "type": "input", "label": "Hotel programs (program:points, comma-separated)", "placeholder": "hyatt:60000, marriott:120000", "multiline": true },
     { "id": "balances-transferable", "type": "input", "label": "Transferable points (bank:points, comma-separated)", "placeholder": "amex:150000, chase:80000", "multiline": true },
     { "id": "statuses", "type": "input", "label": "Elite status (program:tier, comma-separated)", "placeholder": "united:1K, hyatt:Globalist", "multiline": true },
+    { "id": "sec-cards", "type": "section", "title": "Credit cards", "md": "Transferable-points cards you hold — they annotate bank transfer paths in planning, never gate them. Format: bank:product, slugs from registry card-products." },
+    { "id": "cards", "type": "input", "label": "Cards held (bank:product, comma-separated)", "placeholder": "amex:platinum, chase:sapphire-reserve", "multiline": true },
     { "id": "sec-status-goals", "type": "section", "title": "Status goals" },
     { "id": "status-goals", "type": "input", "label": "Status targets (program:target:by, comma-separated — by is an ISO date)", "placeholder": "none", "multiline": true },
     { "id": "sec-instruments", "type": "section", "title": "Travel instruments", "md": "Instruments to add — the placeholder lists what's already on file. One per line, free text with the expiry date included: a monetary credit (delta eCredit $300 expires 2026-12-31), a hotel free-night certificate (hyatt free night, Category 1-4, expires 2027-01-31), or a companion fare (alaska companion fare expires 2027-06-30)." },
@@ -252,6 +270,12 @@ the preference schema differ:
   slugs the same way and keep the tier string verbatim (`1K`,
   `MVP Gold 75K`). Each pair writes as one
   `$CLI prefs set-status <slug> "<tier>"`.
+- Card answers are `bank:product` free text. Resolve display names to
+  `$CLI registry card-products` slugs yourself (Amex Platinum is
+  `amex:platinum`), build `{issuer, product}` rows, and dedupe. The
+  whole list rides the scalar patch as `cards`, and the patch
+  replaces it whole, so send it merged with the current rows. A blank
+  field keeps the current list; a literal `none` clears it to `[]`.
 - Status-goal answers are `program:target:by` free text — the program
   resolves to a registry slug, the target is a tier string kept
   verbatim, and `by` is an ISO date. Build
@@ -284,7 +308,8 @@ Write per-record values first, then one scalar patch. Balances,
 statuses, and credits go through their first-class commands — one call
 per record, shown above. Everything else — `home_airport`,
 `origin_airports`, the avoid lists, `layovers`, `status_goals`,
-`documents`, `op_ref` — goes in ONE `$CLI prefs set` patch on stdin.
+`cards`, `documents`, `op_ref` — goes in ONE `$CLI prefs set` patch
+on stdin.
 The merge is top-level: each key in the patch replaces that whole key,
 every omitted key keeps its current value, and `prefs set` rejects
 unknown keys. A blank form field is omitted from the patch and from
@@ -306,6 +331,7 @@ $CLI prefs set <<'JSON'
 {"home_airport": "SFO",
  "avoid_airlines": [{"code": "ET", "name": "Ethiopian Airlines", "strength": "soft"}],
  "status_goals": [{"program": "united", "target": "1K", "by": "2027-01-31"}],
+ "cards": [{"issuer": "chase", "product": "sapphire-reserve"}],
  "documents": {"passports": ["Canada"], "residency": ["US green card"], "visas": []},
  "op_ref": "op://Vault/item/field"}
 JSON

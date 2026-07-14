@@ -112,6 +112,58 @@ def test_every_transfer_partner_program_resolves() -> None:
             assert registry.is_program(entry["program"]), entry["program"]
 
 
+def test_card_products_cover_every_bank() -> None:
+    assert set(registry.card_products()) == set(registry.banks())
+
+
+def test_every_card_product_has_a_name() -> None:
+    for products in registry.card_products().values():
+        assert all("name" in row for row in products.values())
+
+
+def test_every_card_gate_product_resolves() -> None:
+    products = registry.card_products()
+    for bank, paths in registry.transfer_partners().items():
+        for entry in paths:
+            for product in entry.get("card_gate", {}).get("products", []):
+                assert product in products[bank], f"{bank}:{product}"
+
+
+def test_card_gates_are_present_only_for_chase_and_citi() -> None:
+    partners = registry.transfer_partners()
+    assert {
+        bank: all("card_gate" in entry for entry in paths) for bank, paths in partners.items()
+    } == {
+        "amex": False,
+        "chase": True,
+        "citi": True,
+        "capitalone": False,
+    }
+    assert all("card_gate" not in entry for entry in partners["amex"])
+    assert all("card_gate" not in entry for entry in partners["capitalone"])
+
+
+def test_card_gates_pin_the_qualifying_products() -> None:
+    chase_gate = [
+        "sapphire-reserve",
+        "sapphire-reserve-business",
+        "sapphire-preferred",
+        "ink-business-preferred",
+        "ink-plus",
+    ]
+    citi_gate = ["strata-premier", "strata-elite", "prestige"]
+    partners = registry.transfer_partners()
+    gates = {
+        bank: [entry["card_gate"]["products"] for entry in paths]
+        for bank, paths in partners.items()
+        if bank in ("chase", "citi")
+    }
+    assert gates == {
+        "chase": [chase_gate] * len(partners["chase"]),
+        "citi": [citi_gate] * len(partners["citi"]),
+    }
+
+
 def test_every_seat_quality_row_has_product_key() -> None:
     rows = registry.seat_quality()
     assert rows
@@ -227,6 +279,17 @@ def test_cli_hosts_filters_by_kind_and_auth() -> None:
     assert {r["slug"] for r in json.loads(hotels.output)} == HOTEL_SLUGS
     device = CliRunner().invoke(registry.registry_group, ["hosts", "--gather-auth", "device_wall"])
     assert [r["slug"] for r in json.loads(device.output)] == ["amex"]
+
+
+def test_cli_card_products_filters_by_bank() -> None:
+    result = CliRunner().invoke(registry.registry_group, ["card-products", "--bank", "chase"])
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {"chase": registry.card_products()["chase"]}
+
+
+def test_cli_card_products_unknown_bank_exits_no_data() -> None:
+    result = CliRunner().invoke(registry.registry_group, ["card-products", "--bank", "bogus"])
+    assert result.exit_code == registry.ExitNoData.exit_code == 4
 
 
 def test_hotel_programs_reachable_by_transfer() -> None:

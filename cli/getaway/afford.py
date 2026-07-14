@@ -36,10 +36,25 @@ def _purchase(program: str, shortfall: int) -> dict:
     }
 
 
+def _card_access(gate: dict | None, bank: str, cards: list[dict]) -> dict | None:
+    if gate is None:
+        return None
+    bank_cards = [c["product"] for c in cards if c["issuer"] == bank]
+    held = [p for p in bank_cards if p in gate["products"]]
+    if held:
+        status = "on_file"
+    elif bank_cards:
+        status = "none_on_file"
+    else:
+        status = "unknown"
+    return {"required": gate["products"], "held": held, "status": status}
+
+
 def afford(
     program: str, miles_needed: int, prefs_doc: dict, include_purchase: bool = False
 ) -> dict:
     balances = prefs_doc.get("balances", {})
+    cards = prefs_doc.get("cards", [])
     balance = balances.get("programs", {}).get(program, 0)
     bank_balances = balances.get("transferable", {})
     shortfall = max(0, miles_needed - balance)
@@ -62,6 +77,8 @@ def afford(
                     "ratio": entry["ratio"],
                     "points_required": points_required,
                     "covers": bank_balance >= points_required,
+                    "note": entry.get("note"),
+                    "card_access": _card_access(entry.get("card_gate"), bank, cards),
                 }
             )
 

@@ -42,6 +42,7 @@ def test_init_writes_neutral_template(getaway_home: Path) -> None:
         "balances": {"programs": {}, "transferable": {}},
         "travel_instruments": [],
         "documents": {"passports": [], "residency": [], "visas": []},
+        "cards": [],
     }
     assert json.loads(prefs.prefs_path().read_text()) == doc
 
@@ -134,6 +135,27 @@ def test_status_cli_exit_codes(ready: Path, runner: CliRunner) -> None:
             {"passports": ["US"], "residency": [], "visas": []},
             id="documents",
         ),
+        pytest.param(
+            {"cards": [{"issuer": "amex", "product": "platinum"}]},
+            "cards",
+            [{"issuer": "amex", "product": "platinum"}],
+            id="one-card",
+        ),
+        pytest.param(
+            {
+                "cards": [
+                    {"issuer": "amex", "product": "platinum"},
+                    {"issuer": "chase", "product": "sapphire-reserve"},
+                ]
+            },
+            "cards",
+            [
+                {"issuer": "amex", "product": "platinum"},
+                {"issuer": "chase", "product": "sapphire-reserve"},
+            ],
+            id="two-cards-across-banks",
+        ),
+        pytest.param({"cards": []}, "cards", [], id="clear-cards"),
     ],
 )
 def test_set_patch_merges_valid(ready: Path, patch: dict, key: str, value: object) -> None:
@@ -280,6 +302,36 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
         pytest.param(
             {"balances": {"programs": {}, "transferable": {"amex": 1.5}}},
             id="balances-transferable-value-not-int",
+        ),
+        pytest.param({"cards": {}}, id="cards-not-list"),
+        pytest.param(
+            {"cards": [{"issuer": "amex"}]},
+            id="card-missing-product",
+        ),
+        pytest.param(
+            {"cards": [{"issuer": "amex", "product": "platinum", "note": "primary"}]},
+            id="card-extra-key",
+        ),
+        pytest.param(
+            {"cards": [{"issuer": "boa", "product": "premium-rewards"}]},
+            id="card-issuer-not-bank",
+        ),
+        pytest.param(
+            {"cards": [{"issuer": "amex", "product": "sapphire-reserve"}]},
+            id="card-cross-bank-product",
+        ),
+        pytest.param(
+            {"cards": [{"issuer": "amex", "product": 5}]},
+            id="card-product-not-string",
+        ),
+        pytest.param(
+            {
+                "cards": [
+                    {"issuer": "amex", "product": "platinum"},
+                    {"issuer": "amex", "product": "platinum"},
+                ]
+            },
+            id="duplicate-card",
         ),
     ],
 )
@@ -464,6 +516,14 @@ def _legacy_doc() -> dict:
 
 def test_legacy_credits_shape_rejected_on_read(ready: Path) -> None:
     prefs.prefs_path().write_text(json.dumps(_legacy_doc()))
+    with pytest.raises(StateConflictError, match="re-run getaway onboarding"):
+        prefs.show()
+
+
+def test_stale_shape_without_cards_rejected_on_read(ready: Path) -> None:
+    doc = prefs._template()
+    del doc["cards"]
+    prefs.prefs_path().write_text(json.dumps(doc))
     with pytest.raises(StateConflictError, match="re-run getaway onboarding"):
         prefs.show()
 

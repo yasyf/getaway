@@ -86,66 +86,165 @@
       "program": "aeroplan",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "british",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all."
     },
     {
       "program": "flyingblue",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "hyatt",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Sapphire Reserve transfers 1:1; Sapphire Preferred and Ink Business Preferred move to 4:3 for applications on/after 2026-06-15, and existing Sapphire Preferred holders convert from 1:1 to 4:3 on 2026-10-01 (per Chase, verified 2026-07-13)."
     },
     {
       "program": "ihg",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "jetblue",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "marriott",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "singapore",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Transfer takes 24–48h."
     },
     {
       "program": "united",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card."
     },
     {
       "program": "wyndham",
       "ratio": "1:1",
       "increment": 1000,
+      "card_gate": {
+        "products": [
+          "sapphire-reserve",
+          "sapphire-reserve-business",
+          "sapphire-preferred",
+          "ink-business-preferred",
+          "ink-plus"
+        ]
+      },
       "note": "Chase transfers in 1,000-point increments, only from an account holding a transfer-eligible card. Wyndham added 2026-02-25, Chase's first new transfer partner since 2021."
     }
   ],
@@ -154,72 +253,108 @@
       "program": "american",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "choice",
       "ratio": "1:1.5",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Citi devalued this from 1:2 to 1:1.5 on 2026-04-19; requires a premium ThankYou card (Strata Premier, Strata Elite, or legacy Prestige)."
     },
     {
       "program": "emirates",
       "ratio": "1:0.8",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access. Citi devalued this to 1:0.8 on 2025-07-27."
     },
     {
       "program": "etihad",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "flyingblue",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "jetblue",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "qantas",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "qatar",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access. Avios currency — pools freely on avios.com across british, qatar, and finnair; a transfer into any of the three funds awards in all. Gives Citi an indirect british path via this pool."
     },
     {
       "program": "singapore",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "turkish",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "virginatlantic",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     },
     {
       "program": "wyndham",
       "ratio": "1:1",
       "increment": null,
+      "card_gate": {
+        "products": ["strata-premier", "strata-elite", "prestige"]
+      },
       "note": "Requires a Citi Strata Premier, Strata Elite, or legacy Prestige card; other ThankYou-earning cards may have no transfer access."
     }
   ],

@@ -39,6 +39,9 @@ INSTRUMENT_OPTIONAL = frozenset({"note"})
 # cutover rejects them loudly rather than migrating (STYLEGUIDE: no compat layers).
 LEGACY_KEYS = frozenset({"credits"})
 
+# Missing cutover keys identify preference docs written against older schemas.
+CUTOVER_KEYS = frozenset({"travel_instruments", "cards"})
+
 _EXPIRING_RE = re.compile(r"^(\d+)d$")
 
 
@@ -62,6 +65,7 @@ def _template() -> dict:
         "balances": {"programs": {}, "transferable": {}},
         "travel_instruments": [],
         "documents": {"passports": [], "residency": [], "visas": []},
+        "cards": [],
     }
 
 
@@ -76,13 +80,17 @@ def _hotel_programs() -> set[str]:
     return {slug for slug, row in _load_data("programs.json").items() if row["kind"] == "hotel"}
 
 
+def _card_products() -> dict:
+    return _load_data("card_products.json")
+
+
 def _reject_legacy(doc: dict) -> None:
     if not doc:
         return
-    if LEGACY_KEYS & set(doc) or "travel_instruments" not in doc:
+    if LEGACY_KEYS & set(doc) or CUTOVER_KEYS - set(doc):
         raise StateConflictError(
-            "preferences use a pre-v2 shape (the credits list became travel_instruments); "
-            f"delete {prefs_path()} and re-run getaway onboarding"
+            f"preferences predate the current schema; delete {prefs_path()} "
+            "and re-run getaway onboarding"
         )
 
 
@@ -242,6 +250,23 @@ def _validate(doc: dict) -> None:
     require_keys(doc["documents"], {"passports", "residency", "visas"}, "documents")
     for section in ("passports", "residency", "visas"):
         require_str_list(doc["documents"][section], f"documents.{section}")
+    if not isinstance(doc["cards"], list):
+        raise UsageError("cards must be a list")
+    banks = _load_data("banks.json")
+    products = _card_products()
+    seen = set()
+    for row in doc["cards"]:
+        row = require_keys(row, {"issuer", "product"}, "cards row")
+        issuer = require_str(row["issuer"], "cards.issuer")
+        product = require_str(row["product"], "cards.product")
+        if issuer not in banks:
+            raise UsageError(f"cards.issuer must be a bank slug: {issuer!r}")
+        if product not in products[issuer]:
+            raise UsageError(f"cards.product is not a {issuer} product: {product!r}")
+        pair = (issuer, product)
+        if pair in seen:
+            raise UsageError(f"duplicate card: {issuer}:{product}")
+        seen.add(pair)
 
 
 def init() -> dict:
