@@ -350,6 +350,35 @@ def test_no_itinerary_in_cabin_marks_leg_failed(
     }
 
 
+@pytest.mark.parametrize(
+    ("cached", "journeys_count", "leg_state"),
+    [
+        pytest.param(
+            detail("OB", []),
+            0,
+            {"state": "failed", "reason": "no_itinerary_in_cabin"},
+            id="empty-segment-cache-skips-without-crash",
+        ),
+        pytest.param(
+            ob_detail("OB"),
+            1,
+            {"state": "expanded"},
+            id="real-detail-control-expands",
+        ),
+    ],
+)
+def test_empty_segment_cached_detail_reads_as_no_itinerary(
+    home: Path, cached: dict, journeys_count: int, leg_state: dict
+) -> None:
+    # An empty-segment cache must skip, not pass _detail_matches_cabin (all([]) is True) and crash.
+    slug = make_trip(ONE_WAY)
+    seed("OB", cached)
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    assert len(doc["journeys"]) == journeys_count
+    assert doc["leg_states"]["outbound:OB:J"] == leg_state
+
+
 def test_quota_floor_stops_expand_unstamped(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
     slug = make_trip(ONE_WAY)

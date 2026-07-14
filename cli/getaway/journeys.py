@@ -94,6 +94,9 @@ class _Expander:
         if key in self._memo:
             return self._memo[key]
         cached = self._store.trip_detail_get(cid, fresh_within=_DETAIL_TTL)
+        if cached is not None and not cached["segments"]:  # known-empty cache reads as no itinerary
+            self._memo[key] = (None, None)
+            return None, None
         if cached is not None and _detail_matches_cabin(cached, letter):
             result: tuple[Detail | None, str | None] = (cached, None)
             self._memo[key] = result
