@@ -182,14 +182,17 @@ def journey_fit(
     trip_length_days = None
     away_nights = None
     if return_leg is not None:
-        # Effective destination is the last pre-return leg; a cash onward leg has no arrival clock.
+        # Effective destination is the last pre-return leg — its real arrival clock, whether
+        # award or cash.
         gateway, last_outbound = outbound_side[0], outbound_side[-1]
         _, _, ob_dep, _ = _leg_endpoints(gateway["detail"])
         _, _, ret_dep, ret_arr = _leg_endpoints(return_leg["detail"])
         trip_length_days = (_date(ret_arr) - _date(ob_dep)).days
-        if last_outbound.get("mode") != "cash":
+        if last_outbound.get("mode") == "cash":
+            dest_arr = last_outbound["cash"]["arrives_local"]
+        else:
             _, _, _, dest_arr = _leg_endpoints(last_outbound["detail"])
-            away_nights = (_date(ret_dep) - _date(dest_arr)).days
+        away_nights = (_date(ret_dep) - _date(dest_arr)).days
 
     fit_facts = {
         "legs": leg_facts,

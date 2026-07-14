@@ -408,6 +408,7 @@ def cash_quote(
     dest: str,
     price: float,
     *,
+    date: str = "2026-09-08",
     cabin: str = "economy",
     departs_local: str = "2026-09-08T09:00",
     arrives_local: str = "2026-09-08T12:00",
@@ -415,6 +416,7 @@ def cash_quote(
     return {
         "gateway": gateway,
         "onward_dest": dest,
+        "date": date,
         "cabin": cabin,
         "price": price,
         "currency": "USD",
@@ -424,6 +426,7 @@ def cash_quote(
         "flight_number": "JL1",
         "departs_local": departs_local,
         "arrives_local": arrives_local,
+        "source": "fli",
     }
 
 
@@ -489,6 +492,46 @@ def test_gateway_cash_hybrid_composes_typed_legs(home: Path) -> None:
     assert journey["seat_sufficiency"] == "sufficient"  # judged on the award gateway; cash skipped
     onward_fact = next(f for f in journey["fit_facts"]["legs"] if f["role"] == "onward")
     assert onward_fact["arrives_local"] == "2026-09-08T12:00"  # real observed hop arrival threaded
+
+
+def test_bridge_quotes_keyed_by_date_not_just_pair(home: Path) -> None:
+    # Two priced bridge quotes for the same (gateway, onward_dest) on different dates must not
+    # collapse onto each other — each bridge_pair spec gets its own date's quote.
+    slug = make_trip(HYBRID_ONE_WAY)
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
+    write_shortlists(slug, [])
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        pairs=[bpair("NRT", "OKA", "2026-09-08"), bpair("NRT", "OKA", "2026-09-15")],
+        quotes=[
+            cash_quote(
+                "NRT",
+                "OKA",
+                120.0,
+                date="2026-09-08",
+                departs_local="2026-09-08T09:00",
+                arrives_local="2026-09-08T12:00",
+            ),
+            cash_quote(
+                "NRT",
+                "OKA",
+                200.0,
+                date="2026-09-15",
+                departs_local="2026-09-15T09:00",
+                arrives_local="2026-09-15T12:00",
+            ),
+        ],
+    )
+    doc = _run(slug)
+    by_date = {j["legs"][1]["id"].rsplit(":", 1)[-1]: j for j in doc["journeys"]}
+    assert set(by_date) == {"2026-09-08", "2026-09-15"}
+    assert by_date["2026-09-08"]["cost"]["cash"][0]["amount_cents"] == 12000
+    assert by_date["2026-09-15"]["cost"]["cash"][0]["amount_cents"] == 20000
+    onward_08 = next(f for f in by_date["2026-09-08"]["fit_facts"]["legs"] if f["role"] == "onward")
+    onward_15 = next(f for f in by_date["2026-09-15"]["fit_facts"]["legs"] if f["role"] == "onward")
+    assert onward_08["departs_local"] == "2026-09-08T09:00"
+    assert onward_15["departs_local"] == "2026-09-15T09:00"
 
 
 def test_two_award_hybrid_composes_both_award_legs(home: Path) -> None:
@@ -594,5 +637,45 @@ def test_round_trip_hybrid_pairs_return_with_cash_onward(home: Path) -> None:
     assert journey["kind"] == "gateway_cash"
     assert [leg["role"] for leg in journey["legs"]] == ["outbound", "onward", "return"]
     fit_facts = journey["fit_facts"]
-    assert fit_facts["away_nights"] is None  # last pre-return leg is cash — no arrival clock
+    assert fit_facts["away_nights"] == 4  # cash arrival 09-08 -> return departure 09-12
     assert fit_facts["trip_length_days"] == 7  # 09-05 gateway departure -> 09-12 return arrival
+
+
+def test_cash_onward_return_same_day_before_arrival_rejected(home: Path) -> None:
+    # The return departs the same day as, but before, the cash leg's real arrival clock —
+    # structurally impossible, so no journey composes.
+    slug = make_trip(HYBRID_ROUND_TRIP)
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
+    seed(
+        "RET-OKA",
+        ret_detail("RET-OKA", origin="OKA", dep="2026-09-08T08:00", arr="2026-09-08T20:00"),
+    )
+    write_shortlists(slug, [], ret=[cand("RET-OKA", "OKA", "SFO", "2026-09-08")])
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        pairs=[bpair("NRT", "OKA")],
+        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
+    )
+    doc = _run(slug)
+    assert doc["journeys"] == []
+
+
+def test_cash_onward_return_next_morning_accepted(home: Path) -> None:
+    # The return departs the morning after the cash leg's real arrival clock — structurally fine.
+    slug = make_trip(HYBRID_ROUND_TRIP)
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
+    seed(
+        "RET-OKA",
+        ret_detail("RET-OKA", origin="OKA", dep="2026-09-09T08:00", arr="2026-09-09T20:00"),
+    )
+    write_shortlists(slug, [], ret=[cand("RET-OKA", "OKA", "SFO", "2026-09-09")])
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        pairs=[bpair("NRT", "OKA")],
+        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
+    )
+    doc = _run(slug)
+    (journey,) = doc["journeys"]
+    assert journey["kind"] == "gateway_cash"

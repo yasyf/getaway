@@ -161,11 +161,12 @@ def _local(value: dt.datetime) -> str:
     return value.replace(tzinfo=None).isoformat(timespec="minutes")
 
 
-def _quote(gateway: str, dest: str, result: Any, source: str) -> dict:
+def _quote(gateway: str, dest: str, date: str, result: Any, source: str) -> dict:
     first, last = result.legs[0], result.legs[-1]
     return {
         "gateway": gateway,
         "onward_dest": dest,
+        "date": date,
         "cabin": "economy",
         "source": source,
         "price": result.price,
@@ -205,7 +206,7 @@ def _price_pair(pair: Row, now: Callable[[], dt.datetime], search: Callable) -> 
             "reason": outcome.failure_detail or "no results returned",
             "retryable": True,
         }
-    return {"state": "quoted", "quote": _quote(gateway, dest, priced[0], outcome.source)}
+    return {"state": "quoted", "quote": _quote(gateway, dest, date, priced[0], outcome.source)}
 
 
 def run(

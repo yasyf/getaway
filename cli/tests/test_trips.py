@@ -375,6 +375,29 @@ def test_artifact_name_rejected(ready: Path, name: str) -> None:
         trips.artifact_write(SLUG, name, "{}")
 
 
+def test_bridge_artifact_rejects_clockless_quote(ready: Path) -> None:
+    # A hand-written quote missing its clocks used to crash `expand run` with a raw KeyError;
+    # the write boundary must reject it loudly instead.
+    trips.new(SLUG)
+    quote = {
+        "gateway": "NRT",
+        "onward_dest": "OKA",
+        "date": "2026-09-08",
+        "cabin": "economy",
+        "source": "fli",
+        "price": 120.0,
+        "currency": "USD",
+        "duration_minutes": 180,
+        "stops": 0,
+        "airline": "JL",
+        "flight_number": "JL1",
+    }
+    with pytest.raises(UsageError):
+        trips.artifact_write(
+            SLUG, "legs/outbound/bridge.json", json.dumps({"quotes": [quote], "failures": []})
+        )
+
+
 def test_current_cli_reports_null_when_unset(ready: Path, runner: CliRunner) -> None:
     result = runner.invoke(trips.trip_group, ["current"])
     assert result.exit_code == 0

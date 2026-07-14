@@ -82,6 +82,7 @@ def test_quotes_the_cheapest_priced_result(getaway_home: Path) -> None:
     assert quote == {
         "gateway": "NRT",
         "onward_dest": "OKA",
+        "date": "2026-09-10",
         "cabin": "economy",
         "source": "fli",
         "price": 120.0,
@@ -184,6 +185,7 @@ def test_fli_error_falls_back_to_serpapi(
     assert bridge_out()["quotes"][0] == {
         "gateway": "NRT",
         "onward_dest": "OKA",
+        "date": "2026-09-10",
         "cabin": "economy",
         "source": "serpapi",
         "price": 90.0,

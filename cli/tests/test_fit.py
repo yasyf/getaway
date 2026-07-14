@@ -126,6 +126,37 @@ def test_one_way_has_no_round_trip_spans() -> None:
     assert facts["away_nights"] is None
 
 
+def _cash_onward(
+    origin: str = "NRT",
+    dest: str = "OKA",
+    dep: str = "2026-09-08T09:00:00",
+    arr: str = "2026-09-08T12:00:00",
+) -> dict:
+    return {
+        "role": "onward",
+        "mode": "cash",
+        "origin": origin,
+        "dest": dest,
+        "cash": {
+            "duration_minutes": 180,
+            "stops": 0,
+            "airline": "JL",
+            "departs_local": dep,
+            "arrives_local": arr,
+        },
+    }
+
+
+def test_away_nights_uses_cash_leg_real_arrival_clock() -> None:
+    legs = [
+        _outbound(),
+        _cash_onward(arr="2026-09-08T12:00:00"),
+        _return(dep="2026-09-12T16:00:00", arr="2026-09-13T10:00:00"),
+    ]
+    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    assert facts["away_nights"] == 4  # 09-08 cash arrival -> 09-12 return departure
+
+
 def test_cabin_mixed_minutes() -> None:
     segments = [
         seg("SFO", "HND", "2026-09-05T11:00:00", "2026-09-06T14:00:00", 660, cabin="J"),

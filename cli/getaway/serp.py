@@ -91,5 +91,10 @@ def search(
 
     payload = response.json()
     options = payload.get("best_flights", []) + payload.get("other_flights", [])
-    results = [_normalize_option(option) for option in options if option.get("price") is not None]
+    try:
+        results = [
+            _normalize_option(option) for option in options if option.get("price") is not None
+        ]
+    except (KeyError, TypeError, ValueError) as err:
+        raise SerpApiError(f"SerpApi response malformed: {type(err).__name__}: {err}") from None
     return sorted(results, key=lambda result: result.price)

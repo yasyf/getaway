@@ -16,7 +16,7 @@ REFLECT = (
     "Istanbul') — in the layovers key. Point and mile balances land with `getaway prefs set-balance "
     "<slug> <amount>` ('my Alaska balance is actually 90k'), elite statuses with `getaway prefs "
     "set-status <program> <tier>`, and every credit or voucher the user mentions — a durable fact — with "
-    "`getaway prefs credit-add`. "
+    "`getaway prefs instrument-add` (and `instrument-remove` once it's used or expired). "
     "Trip-scoped facts land on the active trip via `getaway trip set <slug>` (a stdin JSON patch): this "
     "trip's travel window, cabin, party size, regions, vibe, and the destinations the trip must not end "
     "at (avoid_final_destinations — connections and layovers through them stay fine); any decision worth "

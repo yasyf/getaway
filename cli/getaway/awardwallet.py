@@ -24,6 +24,18 @@ STATUS_EXPIRATION_KIND = 15
 Row = dict[str, Any]
 
 
+class AwardWalletError(RuntimeError):
+    """A malformed AwardWallet response."""
+
+
+def _require_int_id(value: object, label: str) -> int:
+    # The documented schema types these ids as integers; a non-int (e.g. a crafted path-traversal
+    # string) must never reach the URL path we build from it.
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AwardWalletError(f"AwardWallet {label} must be an integer, got {value!r}")
+    return value
+
+
 def _property(raw: Row, kind: int) -> Row | None:
     return next((p for p in raw.get("properties") or [] if p.get("kind") == kind), None)
 
@@ -93,10 +105,12 @@ class AwardWalletClient:
 
     def user_accounts(self, user_id: int) -> Row:
         """One connected user's detail, including its accounts array."""
+        _require_int_id(user_id, "userId")
         return self._get(f"/connectedUser/{user_id}")
 
     def account(self, account_id: int) -> Row:
         """Full detail for one loyalty account."""
+        _require_int_id(account_id, "accountId")
         return self._get(f"/account/{account_id}")["account"]
 
     def providers(self) -> list[Row]:

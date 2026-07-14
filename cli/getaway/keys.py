@@ -15,7 +15,12 @@ class AuthError(Exception):
 def _op_read(ref: str) -> str:
     # errors="replace": a UnicodeDecodeError would embed the raw output in its repr;
     # replacement chars fail the printable-ASCII check in validate() instead.
-    result = subprocess.run(["op", "read", ref], capture_output=True, text=True, errors="replace")
+    try:
+        result = subprocess.run(
+            ["op", "read", ref], capture_output=True, text=True, errors="replace"
+        )
+    except FileNotFoundError:
+        raise AuthError("1Password CLI (op) not found on PATH") from None
     if result.returncode != 0:
         raise AuthError("failed to resolve the API key from the configured 1Password reference")
     return result.stdout.strip()

@@ -156,29 +156,24 @@ def _endpoints(detail: Detail) -> tuple[str, str, str, str]:
     return segs[0]["origin"], segs[-1]["dest"], segs[0]["departs_local"], segs[-1]["arrives_local"]
 
 
-def _side_endpoints(side: list[dict]) -> tuple[str, str, str, str | None]:
+def _side_endpoints(side: list[dict]) -> tuple[str, str, str, str]:
     """(origin, effective_dest, first_departure, last_arrival) of an outbound side.
 
-    Origin and departure come from the first (award gateway) leg; the destination is the last
-    pre-return leg (onward_dest). A cash onward leg has no arrival clock, so its arrival is None.
+    Origin and departure come from the first (award gateway) leg; the destination and arrival
+    come from the last pre-return leg (onward_dest) — a cash onward leg's real arrival clock is
+    used the same as an award leg's.
     """
     first, last = side[0], side[-1]
     origin, _, dep, _ = _endpoints(first["detail"])
     if last.get("mode") == "cash":
-        return origin, last["dest"], dep, None
+        return origin, last["dest"], dep, last["cash"]["arrives_local"]
     _, dest, _, arr = _endpoints(last["detail"])
     return origin, dest, dep, arr
 
 
 def _structural_ok(side: list[dict], ret: dict, same_airport: bool) -> bool:
-    last = side[-1]
     _, _, ret_dep, _ = _endpoints(ret["detail"])
-    if last.get("mode") == "cash":
-        # Cash onward has no arrival clock — require the return to depart on/after the onward date.
-        return dt.date.fromisoformat(ret_dep[:10]) >= dt.date.fromisoformat(
-            last["cash"]["depart_date"]
-        )
-    _, _, _, last_arr = _endpoints(last["detail"])
+    _, _, _, last_arr = _side_endpoints(side)
     if same_airport:  # one airport, one timezone — a full timestamp compare is safe
         return dt.datetime.fromisoformat(ret_dep) > dt.datetime.fromisoformat(last_arr)
     # open jaw: a surface hop of unknown timing sits between the legs — compare dates only
@@ -373,7 +368,7 @@ def _hybrid_specs(slug: str, gw_doc: dict, max_hybrids: int) -> list[dict]:
     if onward_doc is None:
         return []
     bridge_doc = _shortlist(slug, "legs/outbound/bridge.json") or {"quotes": []}
-    bridge_by_pair = {(q["gateway"], q["onward_dest"]): q for q in bridge_doc["quotes"]}
+    bridge_by_pair = {(q["gateway"], q["onward_dest"], q["date"]): q for q in bridge_doc["quotes"]}
     minima_by_key = {
         (m["gateway"], m["onward_dest"], m["date"], m["cabin"]): m for m in onward_doc["minima"]
     }
@@ -385,7 +380,7 @@ def _hybrid_specs(slug: str, gw_doc: dict, max_hybrids: int) -> list[dict]:
     for pair in onward_doc["bridge_pairs"]:
         gateway, dest, date = pair["gateway"], pair["onward_dest"], pair["date"]
         award = gateway_by_dest.get(gateway)
-        cash = bridge_by_pair.get((gateway, dest))
+        cash = bridge_by_pair.get((gateway, dest, date))
         if award is None or cash is None:
             continue
         specs.append(

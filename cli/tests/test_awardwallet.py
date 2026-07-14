@@ -159,6 +159,43 @@ def test_non_2xx_raises() -> None:
 
 
 @respx.mock
+def test_malformed_userid_rejected_before_second_request() -> None:
+    # A crafted string userId (e.g. a path-traversal probe) must never reach the request path —
+    # the schema declares userId as an integer, so a non-int id is rejected before any second
+    # request fires.
+    respx.get(USERS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "connectedUsers": [
+                    {"userId": "../providers/list?probe=1", "fullName": "Evil User"}
+                ]
+            },
+        )
+    )
+    with pytest.raises(awardwallet.AwardWalletError, match="userId"):
+        AwardWalletClient(api_key="test-key").pull(now=lambda: FROZEN)
+
+
+@respx.mock
+def test_malformed_accountid_rejected_before_request() -> None:
+    respx.get(USERS_URL).mock(return_value=httpx.Response(200, json=load("awardwallet_users.json")))
+    respx.get(f"{USERS_URL}/45").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "userId": 45,
+                "fullName": "Yasyf Mohamedali",
+                "accounts": [{"accountId": "../providers/list?probe=1", "code": "aeroplan"}],
+            },
+        )
+    )
+    respx.get(f"{USERS_URL}/46").mock(return_value=httpx.Response(200, json=SECOND_USER_DETAIL))
+    with pytest.raises(awardwallet.AwardWalletError, match="accountId"):
+        AwardWalletClient(api_key="test-key").pull(now=lambda: FROZEN)
+
+
+@respx.mock
 def test_pull_walks_users_then_accounts_then_details() -> None:
     routes = _mock_pull_routes()
     result = AwardWalletClient(api_key="test-key").pull(now=lambda: FROZEN)

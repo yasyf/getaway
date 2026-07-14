@@ -99,6 +99,22 @@ def test_op_failure_does_not_leak_reference(
     assert OP_REF not in _rendered(excinfo.value)
 
 
+def test_missing_op_binary_maps_to_auth_error_without_leaking(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    _write_prefs_ref(OP_REF)
+
+    def _missing(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError(2, "No such file or directory", "op")
+
+    monkeypatch.setattr(keys.subprocess, "run", _missing)
+    with pytest.raises(AuthError) as excinfo:
+        _resolve()
+    assert OP_REF not in str(excinfo.value)
+    assert OP_REF not in _rendered(excinfo.value)
+
+
 @pytest.mark.parametrize(
     "bad_key",
     ["example\ufffdsecret", "example\x01secret"],

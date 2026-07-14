@@ -175,6 +175,38 @@ def test_search_500_failure_does_not_leak_key() -> None:
 
 
 @respx.mock
+def test_search_malformed_time_raises_sanitized_error_without_leaking_key() -> None:
+    # A 200 response with a structurally malformed flight (unparseable time) must not let a raw
+    # ValueError/KeyError escape the sanitized wrapper and carry the api_key-bearing request.
+    malformed = {
+        "best_flights": [
+            {
+                "flights": [
+                    {
+                        "departure_airport": {"time": "not-a-time"},
+                        "arrival_airport": {"time": "2026-09-10 09:25"},
+                        "airline": "United Airlines",
+                        "flight_number": "UA 7951",
+                    }
+                ],
+                "total_duration": 300,
+                "price": 280,
+            }
+        ],
+        "other_flights": [],
+    }
+    respx.get(serp.BASE_URL).mock(return_value=httpx.Response(200, json=malformed))
+
+    with pytest.raises(serp.SerpApiError, match="SerpApi response malformed") as caught:
+        serp.search("NRT", "OKA", "2026-09-10", "economy", api_key=API_KEY)
+
+    assert API_KEY not in str(caught.value)
+    assert API_KEY not in repr(caught.value)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert API_KEY not in rendered
+
+
+@respx.mock
 def test_search_timeout_does_not_leak_key() -> None:
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout(f"request timed out at {request.url}", request=request)

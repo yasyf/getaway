@@ -63,6 +63,23 @@ LODGING_KEYS = frozenset({"checkout"})
 JUDGMENT_KEYS = frozenset({"guidance", "factors"})
 FACTOR_PRIORITIES = frozenset({"primary", "secondary", "note"})
 ASSESS_VERDICTS = frozenset({"promote", "neutral", "demote"})
+BRIDGE_QUOTE_KEYS = frozenset(
+    {
+        "gateway",
+        "onward_dest",
+        "date",
+        "cabin",
+        "source",
+        "price",
+        "currency",
+        "duration_minutes",
+        "stops",
+        "airline",
+        "flight_number",
+        "departs_local",
+        "arrives_local",
+    }
+)
 JUDGMENT_FACTOR_KINDS = frozenset({"judgment", "deterministic+judgment"})
 DAY_TOKENS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
 LAYOVER_STYLES = frozenset({"minimize", "explore"})
@@ -614,10 +631,30 @@ def _validate_expand_artifact(doc: object, name: str) -> None:
             raise UsageError(f"{name}.{key} must be an object")
 
 
+def _validate_bridge_quote(quote: object, label: str) -> None:
+    quote = require_keys(quote, set(BRIDGE_QUOTE_KEYS), label)
+    require_str(quote["gateway"], f"{label}.gateway")
+    require_str(quote["onward_dest"], f"{label}.onward_dest")
+    _iso_date(quote["date"], f"{label}.date")
+    require_str(quote["cabin"], f"{label}.cabin")
+    require_str(quote["source"], f"{label}.source")
+    if not isinstance(quote["price"], (int, float)) or isinstance(quote["price"], bool):
+        raise UsageError(f"{label}.price must be a number")
+    require_str(quote["currency"], f"{label}.currency")
+    require_int(quote["duration_minutes"], f"{label}.duration_minutes")
+    require_int(quote["stops"], f"{label}.stops")
+    require_str(quote["airline"], f"{label}.airline")
+    require_str(quote["flight_number"], f"{label}.flight_number")
+    _iso_date(quote["departs_local"], f"{label}.departs_local")
+    _iso_date(quote["arrives_local"], f"{label}.arrives_local")
+
+
 def _validate_bridge_artifact(doc: object, name: str) -> None:
     doc = require_keys(doc, {"quotes"}, name, optional=frozenset({"failures"}))
     if not isinstance(doc["quotes"], list):
         raise UsageError(f"{name}.quotes must be a list")
+    for i, quote in enumerate(doc["quotes"]):
+        _validate_bridge_quote(quote, f"{name}.quotes[{i}]")
 
 
 def _validate_finalists_artifact(doc: object, name: str) -> None:
