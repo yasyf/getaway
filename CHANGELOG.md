@@ -13,6 +13,40 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Added
+- Confirmed constraints now gate in rank: `constraints.cabin` drops any
+  journey whose award segments book below the constrained cabin
+  (compared per segment; cash legs exempt — bridge quotes are economy
+  by construction) and `constraints.departure_days` drops wrong-weekday
+  outbound departures, each disclosed per journey in `dropped`.
+  `prefs.avoid_transit` vetoes at composition over real transit points:
+  award-leg connections (both sides of every boundary), landside
+  self-transfer points, and cash-hop connection airports — origin,
+  final destination, and the round-trip turnaround never count.
+- Primary preferences reach across cost tiers: `_dominates` carries a
+  primary-clears guard — a journey only cost-dominates another when it
+  clears every active primary fit preference the other clears, judged
+  on CLI-computed `preference_misses` as a set-difference test, never a
+  score — and a declared `preferences.<key>.priority` folds into factor
+  tiers deterministically (registry default, then declared priority,
+  then explicit `judgment.factors` override), so a business-cabin ask
+  lifts business journeys with no LLM in the loop.
+- Deterministic notable stretches: each primary preference every
+  finalist misses surfaces the best-ranked beyond-cut journey that
+  clears it — one per preference, deduplicated against assess picks by
+  coverage, skipping journeys the verify artifact marks gone or
+  degraded.
+- Bridge quotes carry `connections` — the intermediate airports of a
+  priced cash itinerary, from both the fli and SerpApi backends,
+  validated one-per-stop — stored on composed cash legs and exposed in
+  fit facts; the transit collector checks each connection airport
+  individually.
+- `plan.origins` defaults from prefs `origin_airports` (else
+  `[home_airport]`) at read time, and `home_airport` joins the prefs
+  fingerprint so an origin edit invalidates swept artifacts.
+- Walker failure reports carry `stderr_tail` — the failing command's
+  last stderr lines, kept even when the retry returns nothing — and an
+  exit-3 first attempt backs off 60 seconds before its retry, since
+  state-conflict windows are transient.
 - Background enhancers — fire-and-forget verification beside a trip in
   planning: `enhance targets <slug> verify` enumerates uncertain rows
   (unknown seat sufficiency, stale cache reads, unverified empty leads)
@@ -141,6 +175,19 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   rendered traceback.
 
 ### Changed
+- Cabin fit counts only below-preferred minutes, so a first-class
+  segment against a business preference carries zero miss; the fact is
+  renamed from `mixed_cabin_minutes` to `below_cabin_minutes`.
+- `rank` and `finalize` capture their input fingerprint at work start,
+  so a mid-run prefs edit marks the phase stale instead of stamping
+  over it; state-conflict (exit 3) messages name the prefs file or
+  trips directory they tripped on.
+- The empty-front collapse in cost-tier peeling is now an invariant
+  assert: an adversarial re-verification of the band/Pareto math (2.1M
+  ordered vector pairs, 3,000 fuzz populations, zero violations)
+  proved nonnegative costs make every domination strictly lower the L1
+  cost sum, so a front stays populated; the old silent collapse would
+  have masked mis-tiering.
 - `skills/getaway/SKILL.md`, `references/planning.md`, and
   `references/doctrine.md` rewritten for the journey engine: the parse
   table lands preferences/constraints, `## Journeys` and `## Hotels`
@@ -177,6 +224,12 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   observed arrivals with no unknown-arrival branch.
 
 ### Removed
+- The `layover_style` and `program_preference` trip preference keys —
+  validated, consumed nowhere. A stored trip carrying them fails its
+  next edit loudly, the same clean-cutover posture as the rest of v2.
+- The `window_overshoot` leg fact: its one consumer moved to
+  preference-relative math, and its trip-relative framing disagreed
+  with the miss it fed.
 - The `return_viability` factor, its evidence collector, and the
   "returns are a second invocation" flow — returns are pipeline data
   in the same dispatch.
@@ -198,6 +251,20 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   validation, with no migration story.
 
 ### Fixed
+- A business-class ask boards business journeys. The canonical
+  warm-beachy run produced six economy finalists, each annotated
+  "outside your preferred cabin", while all-business round trips sat
+  beyond the cut: a primary cabin preference had no reach across cost
+  tiers, and `constraints.cabin` was validated but consumed nowhere.
+  Fixed engine-side by the clears guard, the priority fold, and
+  deterministic notable stretches — pinned by a regression test that
+  asserts the business journey boards with and without an assess
+  artifact.
+- Window fit evidence measured from the wrong bound: a departure
+  inside the preferred window read "1 day(s) past", and a late one
+  measured its delta from the window start ("5 day(s) past" for 3).
+  The miss now reads the preference's own `{start, end}` on both
+  sides.
 - The plugin manifest declares its cc-present dependency (`>=0.9.1`,
   window-keyed board resolution), so fresh installs pull the boards
   plugin automatically once its marketplace is added — the README
