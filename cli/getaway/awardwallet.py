@@ -25,7 +25,7 @@ Row = dict[str, Any]
 
 
 def _property(raw: Row, kind: int) -> Row | None:
-    return next((p for p in raw["properties"] if p["kind"] == kind), None)
+    return next((p for p in raw.get("properties") or [] if p.get("kind") == kind), None)
 
 
 def _bucket(slug: str | None) -> str | None:
@@ -37,7 +37,10 @@ def _bucket(slug: str | None) -> str | None:
 def _age_days(last_retrieved: str | None, now: dt.datetime) -> int | None:
     if last_retrieved is None:
         return None
-    return (now - dt.datetime.fromisoformat(last_retrieved)).days
+    parsed = dt.datetime.fromisoformat(last_retrieved)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return (now - parsed).days
 
 
 def normalize_account(raw: Row, code_map: dict[str, str], now: dt.datetime) -> Row:
@@ -61,13 +64,14 @@ def normalize_account(raw: Row, code_map: dict[str, str], now: dt.datetime) -> R
         "owner": raw.get("owner"),
         "balance": raw.get("balanceRaw"),
         "tier": tier["value"] if tier else None,
-        "tier_rank": tier["rank"] if tier else None,
+        "tier_rank": tier.get("rank") if tier else None,
         "expiration": raw.get("expirationDate"),
         "status_expiration": status_expiration["value"] if status_expiration else None,
         "last_retrieved": last_retrieved,
         "last_change": raw.get("lastChangeDate"),
         "age_days": _age_days(last_retrieved, now),
         "error_code": raw["errorCode"],
+        "error_message": raw.get("errorMessage"),
     }
 
 

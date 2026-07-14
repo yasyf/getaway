@@ -202,8 +202,15 @@ def test_normalize_healthy_full_row_uses_balance_raw() -> None:
         "last_retrieved": "2026-07-11T12:00:00+00:00",
         "last_change": "2026-07-10T09:15:00+00:00",
         "age_days": 2,
-        "error_code": 0,
+        "error_code": 1,
+        "error_message": None,
     }
+
+
+def test_duplicate_kind_3_properties_first_match_wins() -> None:
+    row = normalize_account(account_variant("duplicate_tier"), registry.awardwallet_map(), FROZEN)
+    assert row["tier"] == "Gold"
+    assert row["tier_rank"] == 2
 
 
 @pytest.mark.parametrize(
@@ -235,6 +242,7 @@ def test_status_expiration_from_kind_15_and_expiration_verbatim(
 def test_error_code_is_data_not_an_exception() -> None:
     row = normalize_account(account_variant("errored"), registry.awardwallet_map(), FROZEN)
     assert row["error_code"] == 2
+    assert row["error_message"] == "The login credentials appear to be invalid."
     assert row["balance"] is None
     assert row["slug"] == "alaska"
 
@@ -247,6 +255,14 @@ def test_error_code_is_data_not_an_exception() -> None:
 def test_age_days_against_frozen_clock(variant: str, age_days: int | None) -> None:
     row = normalize_account(account_variant(variant), registry.awardwallet_map(), FROZEN)
     assert row["age_days"] == age_days
+
+
+def test_age_days_treats_offsetless_timestamp_as_utc() -> None:
+    assert awardwallet._age_days("2026-07-11T12:00:00", FROZEN) == 2
+
+
+def test_age_days_accepts_offset_carrying_timestamp() -> None:
+    assert awardwallet._age_days("2026-07-11T12:00:00+00:00", FROZEN) == 2
 
 
 @pytest.mark.parametrize(
@@ -292,6 +308,25 @@ def test_pull_command_zero_users_exits_no_data(
     assert result.exit_code == EXIT_NO_DATA
 
 
+@respx.mock
+def test_pull_command_empty_accounts_exits_no_data(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(awardwallet.API_KEY_ENV, "aw_test")
+    respx.get(USERS_URL).mock(
+        return_value=httpx.Response(
+            200, json={"connectedUsers": [{"userId": 45, "fullName": "Yasyf Mohamedali"}]}
+        )
+    )
+    respx.get(f"{USERS_URL}/45").mock(
+        return_value=httpx.Response(
+            200, json={"userId": 45, "fullName": "Yasyf Mohamedali", "accounts": []}
+        )
+    )
+    result = CliRunner().invoke(awardwallet.pull_cmd, [])
+    assert result.exit_code == EXIT_NO_DATA
+
+
 def test_pull_command_without_credentials_exits_auth(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -308,7 +343,7 @@ def test_providers_command_passthrough(
     providers = [
         {"code": "aeroplan", "displayName": "Air Canada Aeroplan", "kind": "Airlines"},
         {
-            "code": "membershiprewards",
+            "code": "amex",
             "displayName": "American Express Membership Rewards",
             "kind": "Credit Cards",
         },
