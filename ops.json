@@ -1,1 +1,1 @@
-{"v":1,"lamport":2,"ops":[{"kind":"verify_note","witness":[{"anchor":{"kind":"dir","value":"cli/getaway"},"oid":"8e00c1390df1d0eff759465497eae15a84858a0c"},{"anchor":{"kind":"dir","value":"skills/getaway"},"oid":"e39b64a6602c86e11b1ae49f5f373347a79c4989"}],"verified_commit":"a02e48589291ffd05096cc75dd1a93d6b37904df"}]}
+{"v":1,"lamport":3,"ops":[{"kind":"add_tag","tag":"doctrine"},{"kind":"add_tag","tag":"getaway-v2"}]}
