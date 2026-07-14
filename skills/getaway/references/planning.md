@@ -67,7 +67,7 @@ The founding instruction, verbatim: "lie flat on points to a common airport such
 
 Gateway sets are concrete IATA codes, never pseudo-codes. Seed them from the expansions in `registry regions`; refine per program with `routes <source>` ranked by monitored-route count: one call returns the program's entire route map, so redirect it to a scratch file. The cabin for each cash or stitched leg is a per-leg judgment call fed by duration fit facts — there is no fixed cutoff. The avoid union never vetoes a gateway: Tokyo on the avoid list kills NRT as an endpoint, not as the hub the award lands at. `trip set` enforces the flip side, rejecting an onward set that intersects the union.
 
-Cash legs price through `getaway bridge <slug>` — the fli driver with the Airport-alias and origin-local-date hardening built in — and each priced quote carries its real departure and arrival clocks, which is what lets a hybrid's lodging interval derive honestly.
+Cash legs price through `getaway bridge <slug>` — the fli driver with the Airport-alias and origin-local-date hardening built in — and each priced quote carries its real departure and arrival clocks, which is what lets a hybrid's lodging interval derive honestly. When the fli driver fails a pair and a SerpApi key is on file (`SERPAPI_API_KEY` or the `serpapi_op_ref` preference), bridge falls back to SerpApi's Google Flights API for that pair — quotes carry `source: fli|serpapi`.
 
 ## Hotels
 

@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, airline and hotel points balances, elite statuses, status goals, travel instruments (airline eCredits, vouchers, companion certificates, hotel free-night certificates), credit cards held (Amex Platinum, Chase Sapphire Reserve), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from Gmail and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
+description: Sets up getaway travel preferences. Triggers when the user wants to set up getaway ("set up getaway", "set up my travel preferences", "run getaway onboarding") or to record airports, airline and hotel points balances, elite statuses, status goals, travel instruments (airline eCredits, vouchers, companion certificates, hotel free-night certificates), credit cards held (Amex Platinum, Chase Sapphire Reserve), travel documents (passports, residency, standing visas), layover preferences (minimize or explore, connection floor, long-stop cities), or avoid lists for award planning. Auto-fills from AwardWallet, Gmail, and logged-in airline and bank sites; nothing is written until the form's Submit. Refreshing balances already on file is /getaway:refresh.
 allowed-tools: Bash(jq:*), Bash(op:*), Bash(gog:*), Bash(cookiesync:*), Bash(uv:*), Agent
 ---
 
@@ -21,7 +21,12 @@ When the user accepts onboarding, run auto-fill immediately — announce
 each step, do not ask permission for it. Start at the main level with
 Gmail query 1, the domain tally: the browser gatherer's host list
 derives from it, and the mailbox question below is asked here, before
-any spawn. Prime the cookie grant at the main level per gather.md's
+any spawn. Run `$CLI awardwallet pull` beside query 1 — main level,
+before the priming: rows passing gather.md's
+[AwardWallet read](../refresh/gather.md#awardwallet-read) gate become
+label suffixes on their form fields, and their hosts leave the
+browser fan-out at spawn time; no key (exit 2) costs one status line.
+Prime the cookie grant at the main level per gather.md's
 [browser read](../refresh/gather.md#browser-read) — Touch ID denied
 means the spawn goes Gmail-only, no browser gatherers. Then run the
 gatherers below as parallel subagents in one spawn message — the
@@ -152,7 +157,8 @@ a second browser pass only when the user wants exact numbers.
 Derive the host list automatically: the Gmail-tally programs and
 banks, any programs, hotels, or banks the user has named, and the
 keys already in `balances.programs`, `statuses`, and
-`balances.transferable` — banks and hotels need no special casing,
+`balances.transferable`, minus the hosts the AwardWallet read
+adopted — banks and hotels need no special casing,
 since each host gets its own gatherer and session and the shared
 per-session grant keeps the whole fan-out at one tap — mapped to
 login hosts and `gather_auth` classes through `$CLI registry hosts`
@@ -174,7 +180,8 @@ from `$CLI prefs show` — on a fresh install `prefs show` exits 3
 template it writes. The saved preference always wins the placeholder —
 a discovery never displaces it. Auto-fill discoveries appear only as a
 label suffix naming the source and its strength — `— Calendar suggests
-YVR, weak: 2 of 3 segments`, `— united.com reads 88,000`, or `— Gmail:
+YVR, weak: 2 of 3 segments`, `— united.com reads 88,000`,
+`— AwardWallet reads 88,000, 2 days ago`, or `— Gmail:
 delta eCredit $300, expires 2026-12-31` — never as the keep-on-blank
 value; accepting one means typing it.
 This document passes `cc-present push --dry-run`:
@@ -212,8 +219,10 @@ This document passes `cc-present push --dry-run`:
     { "id": "documents-passports", "type": "input", "label": "Passports held (countries, comma-separated)", "placeholder": "none" },
     { "id": "documents-residency", "type": "input", "label": "Residency and long-stay permits (comma-separated — US green card, UK ILR…)", "placeholder": "none" },
     { "id": "documents-visas", "type": "input", "label": "Standing visas (comma-separated — US B1/B2 to 2030…)", "placeholder": "none" },
-    { "id": "sec-auth", "type": "section", "title": "seats.aero API key" },
-    { "id": "op-ref", "type": "input", "label": "1Password reference for the seats.aero API key", "placeholder": "op://Vault/item/field" }
+    { "id": "sec-auth", "type": "section", "title": "API keys" },
+    { "id": "op-ref", "type": "input", "label": "1Password reference for the seats.aero API key", "placeholder": "op://Vault/item/field" },
+    { "id": "awardwallet-op-ref", "type": "input", "label": "1Password reference for the AwardWallet API key (optional — one-call balance refresh)", "placeholder": "op://Vault/item/field" },
+    { "id": "serpapi-op-ref", "type": "input", "label": "1Password reference for the SerpApi key (optional — cash-fare fallback when Google Flights scraping fails)", "placeholder": "op://Vault/item/field" }
   ]
 }
 ```
@@ -308,8 +317,8 @@ Write per-record values first, then one scalar patch. Balances,
 statuses, and credits go through their first-class commands — one call
 per record, shown above. Everything else — `home_airport`,
 `origin_airports`, the avoid lists, `layovers`, `status_goals`,
-`cards`, `documents`, `op_ref` — goes in ONE `$CLI prefs set` patch
-on stdin.
+`cards`, `documents`, `op_ref`, `awardwallet_op_ref`,
+`serpapi_op_ref` — goes in ONE `$CLI prefs set` patch on stdin.
 The merge is top-level: each key in the patch replaces that whole key,
 every omitted key keeps its current value, and `prefs set` rejects
 unknown keys. A blank form field is omitted from the patch and from
