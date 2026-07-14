@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from _api import expand_doc
 
-from getaway import factors, prefs, trips
+from getaway import enhance, factors, prefs, trips
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 SLUG = "2026-09-warm"
@@ -140,6 +140,69 @@ def test_one_way_outbound_failure_surfaces_in_finalists_not_empty_board(
     assert doc["journeys"] == []
     assert doc["search_states"] == states  # the outbound failure is carried, not dropped
     assert doc["search_states"]["outbound"]["NRT"]["state"] != "searched_empty"
+
+
+def _lead(dest: str = "NRT", cabin: str = "J") -> dict:
+    return {
+        "outbound": {"id": "OB", "dest": dest, "cabin": cabin, "mileage": 70000},
+        "return_search_state": {"state": "searched_empty", "verification": "unverified"},
+        "searched_at": None,
+        "cache_age_hours": 30.0,
+    }
+
+
+def test_lead_rescue_threads_onto_matching_unpaired_lead(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc(unpaired_outbounds=[_lead()]))
+    write_rank(slug, ["J0"])
+    # a background verifier found the return space the expired empty search had missed
+    enhance.merge(
+        slug,
+        "verify",
+        [
+            {
+                "target_id": "lead:NRT:J",
+                "outcome": "confirmed",
+                "checked_at": "2026-07-13T14:32:00+00:00",
+                "method": "cookie",
+                "observed": {"return_seats": 2},
+                "evidence": "found J space NRT-SFO",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    assert doc["unpaired_leads"][0]["rescue"] == {
+        "outcome": "confirmed",
+        "checked_at": "2026-07-13T14:32:00+00:00",
+        "observed": {"return_seats": 2},
+        "evidence": "found J space NRT-SFO",
+    }
+    # annotation only — the lead never re-pairs into a journey.
+    assert doc["unpaired_leads"][0]["outbound"]["id"] == "OB"
+    assert journey_ids(doc) == ["J0"]  # journeys unchanged from the no-rescue board
+    assert len(doc["unpaired_leads"]) == 1  # the lead stays in its own class, never re-paired
+
+
+def test_lead_without_matching_verify_result_has_no_rescue(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc(unpaired_outbounds=[_lead(dest="NRT")]))
+    write_rank(slug, ["J0"])
+    enhance.merge(
+        slug,
+        "verify",
+        [
+            {
+                "target_id": "lead:OKA:J",  # a different dest → no match for the NRT lead
+                "outcome": "confirmed",
+                "checked_at": "2026-07-13T14:32:00+00:00",
+                "method": "cookie",
+                "observed": {"return_seats": 2},
+                "evidence": "found J space OKA-SFO",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    assert "rescue" not in doc["unpaired_leads"][0]
 
 
 def test_notable_stretches_and_dropped_carry_through(getaway_home: Path) -> None:

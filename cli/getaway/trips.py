@@ -528,6 +528,20 @@ def _upstream_fp(slug: str, node: dict) -> str | None:
     return digest.hexdigest()
 
 
+def capture_upstream_fp(slug: str, key: str) -> str | None:
+    """Fingerprint a phase's upstream artifact inputs, captured at work start.
+
+    Mirrors ``capture_inputs_fp`` for artifact inputs: factors.rank and factors.finalize call this
+    before reading any input artifact and hand the result to ``phase_done(upstream_fp=...)``, so a
+    merge landing mid-run marks the phase stale rather than stamping the post-merge bytes over rows
+    read pre-merge. Capture-before-read can only cost an extra refold, never mask a result.
+    """
+    node = _node_index(slug).get(key)
+    if node is None:
+        raise UsageError(f"unknown node id: {key!r}")
+    return _upstream_fp(slug, node)
+
+
 def _ttl_ok(record: dict, node: dict, now: Callable[[], datetime]) -> bool:
     ttl = node["ttl_hours"]
     if ttl is None:
@@ -571,6 +585,7 @@ def phase_done(
     quota_after: int | None = None,
     now: Callable[[], datetime] = utcnow,
     inputs_fp: str | None = None,
+    upstream_fp: str | None = None,
 ) -> dict:
     _valid_slug(slug)
     node = _node_index(slug).get(key)
@@ -580,10 +595,12 @@ def phase_done(
     prefs_doc = prefs.show()
     if inputs_fp is None:
         inputs_fp = capture_inputs_fp(trip, prefs_doc, key)
+    if upstream_fp is None:
+        upstream_fp = _upstream_fp(slug, node)
     record = {
         "completed_at": now().isoformat(),
         "inputs_fp": inputs_fp,
-        "upstream_fp": _upstream_fp(slug, node),
+        "upstream_fp": upstream_fp,
     }
     if quota_after is not None:
         record["quota_after"] = quota_after
@@ -728,6 +745,11 @@ def _artifact_validator(leaf: str) -> Callable[[object, str], None] | None:
         from getaway import stays  # lazy: stays imports trips at module load
 
         return stays.validate_stays_doc
+    if leaf.startswith("enhance-") and leaf.endswith(".json"):
+        from getaway import enhance  # lazy: enhance imports trips at module load
+
+        enhancer = leaf[len("enhance-") : -len(".json")]
+        return lambda doc, _label: enhance.validate_enhancer_doc(doc, enhancer)
     return None
 
 
@@ -978,12 +1000,12 @@ def compile_graph(slug: str) -> dict:
             "rank",
             "rank",
             scope="journey",
-            inputs=[*shortlist_inputs, "expand.json", "assess.json"],
+            inputs=[*shortlist_inputs, "expand.json", "assess.json", "enhance-verify.json"],
             outputs=["rank.json"],
             command=["getaway", "rank", slug],
         )
     )
-    finalize_inputs = ["rank.json"]
+    finalize_inputs = ["rank.json", "enhance-verify.json"]
     if has_stays:
         finalize_inputs.append("stays.json")
     nodes.append(
@@ -1089,6 +1111,9 @@ def resume(slug: str, now: Callable[[], datetime] = utcnow) -> str:
         lines += [f"  - {d['ts']}: {d['text']}" for d in decisions]
     lines.append("Node freshness:")
     lines += [f"  {key}: {state}" for key, state in st["phase_map"].items()]
+    from getaway import enhance  # lazy: enhance imports trips at module load
+
+    lines += enhance.resume_lines(slug)
     expiring = prefs.instrument_list("90d", now=now)
     if expiring:
         lines.append("Instruments expiring within 90d:")

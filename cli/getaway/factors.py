@@ -16,7 +16,7 @@ from typing import Any
 
 import click
 
-from getaway import afford, prefs, registry, stays, trips
+from getaway import afford, enhance, prefs, registry, stays, trips
 from getaway.constants import MILEAGE_BAND, PRESENTATION_LIMIT
 from getaway.paths import UsageError, emit, map_errors, utcnow
 
@@ -99,6 +99,9 @@ def _activation(fid: str, trip: dict, prefs_doc: dict, slug: str | None) -> tupl
     if fid == "cabin_fit":
         active = "cabin" in preferences
         return active, "cabin preference set" if active else "no cabin preference"
+    if fid == "availability_verified":
+        active = slug is not None and enhance.present(slug, "verify")
+        return active, "verification artifact present" if active else "no verification artifact"
     raise UsageError(f"unknown factor id {fid!r}")
 
 
@@ -182,8 +185,33 @@ def _afford_fact(journey: dict, prefs_doc: dict) -> dict:
     }
 
 
+def _verification_rows(journey: dict, verify_results: dict) -> list[dict]:
+    rows = []
+    for leg in journey["legs"]:
+        if leg.get("mode") == "cash":
+            continue
+        result = verify_results.get(f"{leg['id']}:{leg['cabin']}")
+        if result is None:
+            continue
+        rows.append(
+            {
+                "leg": leg["role"],
+                "availability_id": leg["id"],
+                "outcome": result["outcome"],
+                "checked_at": result["checked_at"],
+                "observed": result["observed"],
+                "evidence": result["evidence"],
+            }
+        )
+    return rows
+
+
 def _facts(
-    journey: dict, prefs_doc: dict, active: set[str], now: Callable[[], dt.datetime]
+    journey: dict,
+    prefs_doc: dict,
+    active: set[str],
+    now: Callable[[], dt.datetime],
+    verify_results: dict,
 ) -> dict:
     by_program = journey["cost"]["mileage"]["by_program"]
     facts: dict[str, Any] = {"afford": _afford_fact(journey, prefs_doc)}
@@ -197,6 +225,10 @@ def _facts(
         ]
     if "trip_credits" in active:
         facts["trip_credits"] = _trip_credits_fact(journey, prefs_doc, now)
+    if "availability_verified" in active:
+        rows = _verification_rows(journey, verify_results)
+        if rows:
+            facts["availability_verification"] = rows
     return facts
 
 
@@ -233,6 +265,11 @@ def _deterministic_verdicts(journey: dict, facts: dict, active: set[str]) -> lis
         verdicts.append({"factor": "status_earning", "leg": None, "verdict": "promote"})
     if "trip_credits" in active and facts.get("trip_credits"):
         verdicts.append({"factor": "trip_credits", "leg": None, "verdict": "promote"})
+    for row in facts.get("availability_verification", []):
+        if row["outcome"] in ("gone", "degraded"):
+            verdicts.append(
+                {"factor": "availability_verified", "leg": row["leg"], "verdict": "demote"}
+            )
     return verdicts
 
 
@@ -321,6 +358,7 @@ def _mileage_limit(plan: dict) -> int | None:
 
 
 def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
+    upstream_fp = trips.capture_upstream_fp(slug, "rank")  # before any input artifact is read
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
@@ -330,12 +368,14 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     expand = json.loads(trips.artifact_read(slug, "expand.json"))
     assess = _optional_artifact(slug, "assess.json") or {}
     assess_journeys = assess.get("journeys", {})
+    verify_active = "availability_verified" in active
+    verify_results = enhance.results_index(slug, "verify") if verify_active else {}
     limit = _mileage_limit(plan)
 
     entries: list[dict] = []
     dropped: list[dict] = list(expand.get("gated", []))
     for journey in expand["journeys"]:
-        facts = _facts(journey, prefs_doc, active, now)
+        facts = _facts(journey, prefs_doc, active, now, verify_results)
         total_miles = sum(journey["cost"]["mileage"]["by_program"].values())
         if limit is not None and total_miles > limit:
             dropped.append(
@@ -367,7 +407,7 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
 
     doc = {"ranked": ranked, "notable_stretches": notable, "dropped": dropped}
     trips.artifact_write(slug, "rank.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "rank", now=now)  # freshness rides the node's declared inputs
+    trips.phase_done(slug, "rank", now=now, upstream_fp=upstream_fp)
     return ranked
 
 
@@ -385,7 +425,26 @@ def _thread_lodging(doc: dict, plan: dict, slug: str, now: Callable[[], dt.datet
     ]
 
 
+def _thread_verification(doc: dict, slug: str) -> None:
+    """Attach each verified lead's rescue result — a background verifier finding return space an
+    expired empty search missed. Annotation only: the lead never re-pairs into a journey."""
+    results = enhance.results_index(slug, "verify")
+    if not results:
+        return
+    leads = []
+    for lead in doc["unpaired_leads"]:
+        result = results.get(f"lead:{lead['outbound']['dest']}:{lead['outbound']['cabin']}")
+        if result is not None:
+            lead = {
+                **lead,
+                "rescue": {k: result[k] for k in ("outcome", "checked_at", "observed", "evidence")},
+            }
+        leads.append(lead)
+    doc["unpaired_leads"] = leads
+
+
 def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
+    upstream_fp = trips.capture_upstream_fp(slug, "finalize")  # before any input artifact is read
     trip = trips.show(slug)
     plan = trip["plan"]
     rank_doc = json.loads(trips.artifact_read(slug, "rank.json"))
@@ -401,8 +460,9 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     }
     if "lodging" in plan:
         _thread_lodging(doc, plan, slug, now)
+    _thread_verification(doc, slug)
     trips.artifact_write(slug, "finalists.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "finalize", now=now)
+    trips.phase_done(slug, "finalize", now=now, upstream_fp=upstream_fp)
     return doc
 
 

@@ -6,6 +6,7 @@ from getaway.afford import afford_cmd
 from getaway.awardwallet import awardwallet_group
 from getaway.bridge import bridge_cmd
 from getaway.constants import EXIT_USAGE
+from getaway.enhance import enhance_group
 from getaway.factors import rank_cmd
 from getaway.journeys import expand_group
 from getaway.learnings import learnings_group
@@ -41,6 +42,7 @@ for group in (
     expand_group,
     stays_group,
     awardwallet_group,
+    enhance_group,
 ):
     cli.add_command(group)
 

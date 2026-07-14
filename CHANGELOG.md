@@ -13,6 +13,17 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Added
+- Background enhancers — fire-and-forget verification beside a trip in
+  planning: `enhance targets <slug> verify` enumerates uncertain rows
+  (unknown seat sufficiency, stale cache reads, unverified empty leads)
+  and `enhance merge <slug> verify` upserts results concurrency-safe
+  into `enhance-verify.json`, which folds at rank/finalize as the
+  `availability_verified` factor — `gone`/`degraded` demote in-tier,
+  `confirmed` annotates and never promotes, and a verified-gone
+  finalist keeps its board row flagged. Auth lanes are public-first
+  plus seeded cookie sessions; the CDP lane waits on cookiesync's
+  native path. Contract and verifier briefs in
+  `skills/getaway/references/enhancers.md`.
 - Journeys as the unit of search, ranking, and presentation:
   `plan.trip_type` (`one_way`/`round_trip`) with in-run returns —
   return endpoints resolve mid-run from the outbound shortlist plus

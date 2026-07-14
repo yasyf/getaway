@@ -22,6 +22,7 @@ FACTOR_IDS = [
     "departure_day_fit",
     "mileage_fit",
     "cabin_fit",
+    "availability_verified",
 ]
 
 WST_AIRPORTS = [

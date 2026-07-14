@@ -22,6 +22,10 @@ Cost lane first: same-program journeys band on scalar bookable mileage; mixed-pr
 
 A `barely` seat-quality verdict soft-demotes within its cost tier: the journey sinks below every true lie-flat, keeps its spot, and carries an explicit warning at presentation. An unknown or unclassified product ranks neutral — never demote what the table doesn't condemn. (cc-notes fdd212c0)
 
+## Enhancers annotate and demote, never gate
+
+Background verification is incremental enhancement: fire-and-forget agents that never block the walk, the board, or the user, whose failure is silence, and whose results land only through the flock-guarded `enhance merge` — never a whole-file artifact write, never a journey mutation. Rank folds them as facts plus deterministic verdicts: `gone` and `degraded` demote within the cost tier, `confirmed` annotates and never promotes — ordering must not depend on verifier reach. A verified-gone finalist keeps its board row with a prominent flag. (cc-notes 81efec6c)
+
 ## Expansion is budgeted, and truncation is disclosed
 
 Twelve expansions per endpoint per leg, selection diversified across date, program, and cost cohorts, truncation always disclosed. No global cap: one hot endpoint never starves the others into false returnlessness. (cc-notes fdd212c0)

@@ -139,6 +139,35 @@ def test_explain_flags_node_freshness(getaway_home: Path) -> None:
     assert all(n["fresh"] is False for n in graph["nodes"])  # nothing has run yet
 
 
+def test_rank_and_finalize_declare_enhance_verify_input(getaway_home: Path) -> None:
+    graph = trips.compile_graph(make({"trip_type": "round_trip"}))
+    assert node(graph, "rank")["inputs"] == [
+        "legs/outbound/shortlist.json",
+        "legs/return/shortlist.json",
+        "expand.json",
+        "assess.json",
+        "enhance-verify.json",
+    ]
+    assert node(graph, "finalize")["inputs"] == ["rank.json", "enhance-verify.json"]
+
+
+def test_one_way_finalize_inputs_are_rank_and_enhance_verify(getaway_home: Path) -> None:
+    graph = trips.compile_graph(make({"trip_type": "one_way"}))
+    assert node(graph, "rank")["inputs"] == [
+        "legs/outbound/shortlist.json",
+        "expand.json",
+        "assess.json",
+        "enhance-verify.json",
+    ]
+    assert node(graph, "finalize")["inputs"] == ["rank.json", "enhance-verify.json"]
+
+
+def test_finalize_appends_stays_after_enhance_verify_with_lodging(getaway_home: Path) -> None:
+    graph = trips.compile_graph(make({"trip_type": "round_trip", "lodging": {}}))
+    # enhance-verify.json rides ahead of stays.json; both flip finalize on a fresh write.
+    assert node(graph, "finalize")["inputs"] == ["rank.json", "enhance-verify.json", "stays.json"]
+
+
 def test_checkpoints_key_by_node_id(getaway_home: Path) -> None:
     slug = make({"trip_type": "one_way"})
     trips.phase_done(slug, "shortlist:outbound", now=clock())

@@ -14,6 +14,10 @@ def main() -> None:
             paths.atomic_update(path, lambda d: {**d, "n": d.get("n", 0) + 1})
     elif cmd == "set-patch":
         prefs.set_patch(json.loads(sys.stdin.read()))
+    elif cmd == "enhance-merge":
+        from getaway import enhance
+
+        enhance.merge(sys.argv[2], sys.argv[3], json.loads(sys.stdin.read()))
     elif cmd == "reserve":
         # Reserve one call's quota and exit holding it, so a sibling process sees
         # the reservation. EXIT_NEGATIVE marks a refusal at the floor.

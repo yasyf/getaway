@@ -7,7 +7,7 @@ import pytest
 from _api import expand_doc, shortlist_doc, sweep_envelope
 from click.testing import CliRunner
 
-from getaway import prefs, trips
+from getaway import enhance, factors, prefs, trips
 from getaway.paths import UsageError
 
 SLUG = "2026-09-asia-business"
@@ -23,6 +23,17 @@ def at(hours: float) -> Callable[[], dt.datetime]:
 
 def _write(slug: str, name: str, doc: object) -> None:
     trips.artifact_write(slug, name, json.dumps(doc))
+
+
+def _verify_row(target_id: str) -> dict:
+    return {
+        "target_id": target_id,
+        "outcome": "gone",
+        "checked_at": "2026-07-13T14:32:00+00:00",
+        "method": "cookie",
+        "observed": None,
+        "evidence": "live-site check",
+    }
 
 
 @pytest.fixture
@@ -172,3 +183,58 @@ def test_phase_check_cli_exits_one_when_stale(trip: str, runner: CliRunner) -> N
     result = runner.invoke(trips.trip_group, ["phase-check", trip, "sweep:outbound:asia"])
     assert result.exit_code == 1
     assert json.loads(result.stdout)["fresh"] is False
+
+
+def test_enhance_merge_flips_only_rank_and_finalize(trip: str) -> None:
+    # rank and finalize declare enhance-verify.json as an input; nothing upstream does. A merge
+    # write flips exactly those two stale while expand and assess stay fresh.
+    for node_id in ("expand", "assess", "rank", "finalize"):
+        trips.phase_done(trip, node_id, now=at(0))
+    for node_id in ("expand", "assess", "rank", "finalize"):
+        assert trips.phase_fresh(trip, node_id, now=at(1))
+    enhance.merge(
+        trip,
+        "verify",
+        [
+            {
+                "target_id": "AV1:J",
+                "outcome": "gone",
+                "checked_at": "2026-07-13T14:32:00+00:00",
+                "method": "cookie",
+                "observed": None,
+                "evidence": "live-site check",
+            }
+        ],
+    )
+    assert trips.phase_fresh(trip, "expand", now=at(1))
+    assert trips.phase_fresh(trip, "assess", now=at(1))
+    assert not trips.phase_fresh(trip, "rank", now=at(1))
+    assert not trips.phase_fresh(trip, "finalize", now=at(1))
+
+
+def test_rank_folds_out_a_merge_that_lands_mid_run(
+    trip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A merge between rank's input read and its checkpoint stamp must leave rank stale, not masked.
+    enhance.merge(trip, "verify", [_verify_row("seed:J")])  # seed activates availability_verified
+    real = enhance.results_index
+
+    def racing(slug: str, name: str) -> dict:
+        enhance.merge(slug, "verify", [_verify_row("late:J")])  # lands between read and stamp
+        return real(slug, name)
+
+    monkeypatch.setattr(enhance, "results_index", racing)
+    factors.rank(trip, now=at(0))
+    fresh, record = trips.phase_check(trip, "rank", now=at(1))
+    assert record is not None
+    assert fresh is False
+
+
+def test_captured_upstream_fp_marks_rank_stale_after_a_later_merge(trip: str) -> None:
+    enhance.merge(trip, "verify", [_verify_row("seed:J")])
+    captured = trips.capture_upstream_fp(trip, "rank")
+    enhance.merge(trip, "verify", [_verify_row("late:J")])  # enhance-verify.json bytes change
+    trips.phase_done(trip, "rank", now=at(0), upstream_fp=captured)
+    fresh, record = trips.phase_check(trip, "rank", now=at(1))
+    assert record is not None
+    assert fresh is False

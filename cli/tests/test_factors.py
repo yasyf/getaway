@@ -553,3 +553,110 @@ def test_assess_write_rejects_extra_verdict_key(biz_trip: str) -> None:
     )
     with pytest.raises(UsageError):
         trips.artifact_write(biz_trip, "assess.json", doc)
+
+
+# ---- availability verification (enhance-verify.json rank-time fold) ------------------------
+
+
+def verify_result(
+    target_id: str,
+    outcome: str,
+    *,
+    observed: dict | None = None,
+    checked_at: str = "2026-07-13T14:32:00+00:00",
+    method: str = "cookie",
+    evidence: str = "live-site check",
+) -> dict:
+    return {
+        "target_id": target_id,
+        "outcome": outcome,
+        "checked_at": checked_at,
+        "method": method,
+        "observed": observed,
+        "evidence": evidence,
+    }
+
+
+def write_verify(slug: str, *rows: dict) -> None:
+    doc = {"enhancer": "verify", "results": {r["target_id"]: r for r in rows}}
+    trips.artifact_write(slug, "enhance-verify.json", json.dumps(doc))
+
+
+def test_availability_verified_inactive_without_artifact(biz_trip: str) -> None:
+    profile = factors.derive_profile(trips.show(biz_trip), prefs.show(), slug=biz_trip)
+    assert profile["availability_verified"]["active"] is False
+    entry = do_rank(biz_trip, [journey("A", {"united": 80000})])[0]
+    assert "availability_verification" not in entry["facts"]  # no artifact → no fold
+
+
+def test_availability_verified_active_with_artifact(biz_trip: str) -> None:
+    write_verify(biz_trip, verify_result("outbound-united:J", "confirmed", observed={}))
+    profile = factors.derive_profile(trips.show(biz_trip), prefs.show(), slug=biz_trip)
+    assert profile["availability_verified"]["active"] is True
+
+
+def test_verified_gone_yields_demote_verdict_and_fact(biz_trip: str) -> None:
+    write_verify(biz_trip, verify_result("outbound-united:J", "gone"))
+    entry = do_rank(biz_trip, [journey("A", {"united": 80000})])[0]
+    assert entry["facts"]["availability_verification"] == [
+        {
+            "leg": "outbound",
+            "availability_id": "outbound-united",
+            "outcome": "gone",
+            "checked_at": "2026-07-13T14:32:00+00:00",
+            "observed": None,
+            "evidence": "live-site check",
+        }
+    ]
+    assert {
+        "factor": "availability_verified",
+        "leg": "outbound",
+        "verdict": "demote",
+    } in entry["verdicts"]
+
+
+def test_verified_confirmed_yields_fact_but_no_verdict(biz_trip: str) -> None:
+    write_verify(
+        biz_trip, verify_result("outbound-united:J", "confirmed", observed={"remaining_seats": 4})
+    )
+    entry = do_rank(biz_trip, [journey("A", {"united": 80000})])[0]
+    fact = entry["facts"]["availability_verification"][0]
+    assert fact["outcome"] == "confirmed"
+    assert fact["observed"] == {"remaining_seats": 4}
+    # confirmed annotates only — a promote would make ordering depend on verifier reach.
+    assert all(v["factor"] != "availability_verified" for v in entry["verdicts"])
+
+
+def test_verified_degraded_yields_demote_verdict_and_fact(biz_trip: str) -> None:
+    write_verify(
+        biz_trip, verify_result("outbound-united:J", "degraded", observed={"remaining_seats": 1})
+    )
+    entry = do_rank(biz_trip, [journey("A", {"united": 80000})])[0]
+    fact = entry["facts"]["availability_verification"][0]
+    assert fact["outcome"] == "degraded"
+    assert fact["observed"] == {"remaining_seats": 1}
+    assert {
+        "factor": "availability_verified",
+        "leg": "outbound",
+        "verdict": "demote",
+    } in entry["verdicts"]
+
+
+def test_verified_inconclusive_yields_fact_but_no_verdict(biz_trip: str) -> None:
+    write_verify(biz_trip, verify_result("outbound-united:J", "inconclusive"))
+    entry = do_rank(biz_trip, [journey("A", {"united": 80000})])[0]
+    fact = entry["facts"]["availability_verification"][0]
+    assert fact["outcome"] == "inconclusive"
+    assert fact["observed"] is None
+    # inconclusive annotates only — no signal strong enough to reorder.
+    assert all(v["factor"] != "availability_verified" for v in entry["verdicts"])
+
+
+def test_verified_gone_demotes_within_cost_band(biz_trip: str) -> None:
+    prefs.set_balance("united", 90000)  # both covered → afford is not the differentiator
+    prefs.set_balance("aeroplan", 90000)
+    write_verify(biz_trip, verify_result("outbound-united:J", "gone"))
+    gone = journey("A", {"united": 80000})  # outbound leg id outbound-united → verified gone
+    clean = journey("B", {"aeroplan": 82000})  # no matching verify result
+    # availability_verified is a primary lane verdict: the gone journey sinks below its band-mate.
+    assert order(do_rank(biz_trip, [gone, clean])) == ["B", "A"]

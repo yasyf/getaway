@@ -127,6 +127,14 @@
       "activation": "plan.preferences.cabin set",
       "default_tier": "secondary",
       "provenance": "net-new"
+    },
+    {
+      "id": "availability_verified",
+      "kind": "deterministic",
+      "evidence": "rank-time fold of enhance-verify.json live-site checks",
+      "activation": "enhance-verify.json present",
+      "default_tier": "primary",
+      "provenance": "net-new"
     }
   ]
 }

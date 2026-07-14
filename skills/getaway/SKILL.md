@@ -36,6 +36,7 @@ The CLI resolves the seats.aero Pro key itself: the `SEATS_AERO_API_KEY` environ
 | `bridge` | Cash-leg pricing through the hardened fli driver: `bridge <slug>` |
 | `stays` | rooms.aero lodging: `stays intervals <slug>` (the per-journey worklist), `stays ingest <slug>` (normalized rows on stdin) |
 | `rank`, `afford`, `quality` | Lane-based rank over assess verdicts, transfer-first affordability, seat-quality classification |
+| `enhance` | Background verification primitives: `targets <slug> verify` (the enumerated worklist), `merge <slug> verify` (concurrency-safe result upsert, JSON array on stdin) |
 | `registry` | Packaged reference data: `programs [--kind airline\|hotel]`, `banks`, `hosts` (browser-read host list with auth classes), `transfer-partners`, `card-products`, `regions`, `factors`, `status-earning`, `points-pricing`, `cabins`, `continents` |
 | `learnings` | Append-only planning learnings: `add --scope <api\|prefs\|general>`, `list` |
 | `quota` | Quota report from recorded call headers; the floor enforces at the client — every API-spending command takes `--quota-floor N` |
@@ -63,7 +64,7 @@ Routing is enforced, not suggested: every compiled node carries `{model, effort}
 
 Invariants on every rung:
 
-- One writer for durable state. `prefs set`/`set-balance`/`set-status`/`instrument-add`, `trip set`, and `trip log` run at the main level only. Workflow agents and subagents write nothing under `~/.getaway` except their own artifact via `trip artifact write` (or `stays ingest` for the walk). Cross-session races are the CLI's flock problem, not yours.
+- One writer for durable state. `prefs set`/`set-balance`/`set-status`/`instrument-add`, `trip set`, and `trip log` run at the main level only. Workflow agents and subagents write nothing under `~/.getaway` except their own artifact via `trip artifact write` (`stays ingest` for the walk, `enhance merge` for background verifiers). Cross-session races are the CLI's flock problem, not yours.
 - Interactive surfaces stay at the main level: cc-present boards and `AskUserQuestion`.
 - Fan-out adds zero API calls: parallelize only calls you'd make anyway.
 
@@ -103,7 +104,7 @@ Pro keys get 1,000 calls per day, resetting at midnight UTC. The floor enforces 
    `preferences` order and annotate — the model trades them off, and every miss surfaces named on the board. `constraints` gate, and hold only what the user explicitly confirmed (each entry carries `confirmed: true`). `lodging: {}` puts hotel stays in scope; an explicit `checkout` belongs in it on an open jaw.
 
 6. Review the judgment profile: `$CLI trip profile <slug>` derives per-factor tiers from the ask and prefs. Where it disagrees with the user's emphasis, patch through another `trip set` with a `judgment` key — free-text `guidance` plus per-factor `{"priority": "primary"|"secondary"|"note"}`.
-7. Compile and inspect: `$CLI trip compile <slug>`, then `$CLI trip explain <slug>` — the node graph, per-node staleness and commands, the quota budget, and any `requires`. When `plan.lodging` is in scope, seed the rooms.aero browser session BEFORE dispatch: one main-level `cookiesync auth` tap, then `abwc-seed --session rooms rooms.aero seats.aero`. The walker preflights the session and fails loudly without it.
+7. Compile and inspect: `$CLI trip compile <slug>`, then `$CLI trip explain <slug>` — the node graph, per-node staleness and commands, the quota budget, and any `requires`. When `plan.lodging` is in scope, seed the rooms.aero browser session BEFORE dispatch: one main-level `cookiesync auth` tap — its `--reason` naming rooms.aero plus the cookie-class hosts step 10's verifiers will read, so one informed tap covers both — then `abwc-seed --session rooms rooms.aero seats.aero`. The walker preflights the session and fails loudly without it.
 8. Dispatch:
 
    ```
@@ -115,12 +116,14 @@ Pro keys get 1,000 calls per day, resetting at midnight UTC. The floor enforces 
 
    `args.project` is the absolute path to the CLI project directory. Optional: `refresh: true` forces stamped sweep nodes to re-run; `quotaFloor` overrides the client gate; `researchLane: "terra"` routes the judgment agents through gpt-5.6-terra. Everything else the walker needs is already on disk — one dispatch covers the outbound, the return, hybrids, and stays.
 9. Read finalists from disk, never from the workflow return: `$CLI trip artifact read <slug> finalists.json`.
-10. Present the journey board — ranked journeys, notable stretches, unpaired leads, search states, stays — with one evidence line per active factor and every preference miss named, per [references/planning.md](references/planning.md), "Presenting options".
-11. Log every decision as it lands: `$CLI trip log <slug> "picked the CPT stitch; QR over EK for the DOH stop"`. Pin new constraints with `trip set` the moment they're pinned, mid-planning, never at wrap-up. Route always-true facts ("never through IST", a balance correction) to `prefs set`/`set-balance`/`set-status`/`instrument-add` right then, and API quirks to `learnings add --scope api`; the plugin's Stop hook (`hooks/reflect.py`) backstops the sweep at session end.
+10. Kick off background verification per [references/enhancers.md](references/enhancers.md): `$CLI enhance targets <slug> verify` enumerates the rows worth a live check — unknown seat sufficiency, stale cached reads, unverified empty leads. When targets exist, group by auth lane, prime the cookie grant only if step 7's tap didn't cover it, spawn the verifiers as background subagents (sonnet — mechanical search-and-extract) in one message, and move on: the board never waits for them. On each completion notification, fold — `$CLI rank <slug> && $CLI trip finalize <slug>` — and update the live board: "verified live HH:MM" beside the freshness stamp, a prominent gone-on-`<host>` flag on a killed row. The row stays visible, and when it was the user's pick, tell them immediately.
+11. Present the journey board — ranked journeys, notable stretches, unpaired leads, search states, stays — with one evidence line per active factor and every preference miss named, per [references/planning.md](references/planning.md), "Presenting options".
+12. Log every decision as it lands: `$CLI trip log <slug> "picked the CPT stitch; QR over EK for the DOH stop"`. Pin new constraints with `trip set` the moment they're pinned, mid-planning, never at wrap-up. Route always-true facts ("never through IST", a balance correction) to `prefs set`/`set-balance`/`set-status`/`instrument-add` right then, and API quirks to `learnings add --scope api`; the plugin's Stop hook (`hooks/reflect.py`) backstops the sweep at session end.
 
 ## References
 
 - [references/planning.md](references/planning.md) — parsing the ask, origin expansion, region sweeps, season awareness, affordability, journeys, routing shapes, hotels, and presentation.
 - [references/workflows.md](references/workflows.md) — authoring an ad-hoc walker over the compiled graph.
+- [references/enhancers.md](references/enhancers.md) — fire-and-forget background verification: the contract, auth lanes, and the fold.
 - [references/doctrine.md](references/doctrine.md) — the settled rulings the whole pipeline obeys.
 - [docs/seats-aero-api.md](../../docs/seats-aero-api.md) — the raw Partner API surface, shapes, and program coverage.
