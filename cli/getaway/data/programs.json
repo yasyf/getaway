@@ -9,6 +9,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "aeroplan",
     "beta": false
   },
   "united": {
@@ -21,6 +22,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "united",
     "beta": false
   },
   "american": {
@@ -33,6 +35,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "aa",
     "beta": false
   },
   "delta": {
@@ -45,6 +48,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "delta",
     "beta": false
   },
   "alaska": {
@@ -57,6 +61,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "alaska",
     "beta": false
   },
   "flyingblue": {
@@ -70,6 +75,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "flyingblue",
     "beta": false
   },
   "lufthansa": {
@@ -82,6 +88,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "lufthansa",
     "beta": false
   },
   "singapore": {
@@ -94,6 +101,7 @@
     "rooms_aero": false,
     "sells_points": false,
     "gather_auth": "token",
+    "awardwallet": "krisflyer",
     "beta": false
   },
   "qatar": {
@@ -106,6 +114,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "qatar",
     "beta": false
   },
   "turkish": {
@@ -118,6 +127,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "turkish",
     "beta": false
   },
   "emirates": {
@@ -130,6 +140,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "emirates",
     "beta": false
   },
   "etihad": {
@@ -142,6 +153,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "etihad",
     "beta": false
   },
   "qantas": {
@@ -154,6 +166,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "qantas",
     "beta": false
   },
   "velocity": {
@@ -166,6 +179,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "velocity",
     "beta": false
   },
   "virginatlantic": {
@@ -178,6 +192,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "virginatlantic",
     "beta": false
   },
   "jetblue": {
@@ -190,6 +205,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "token",
+    "awardwallet": "jetblue",
     "beta": false
   },
   "finnair": {
@@ -202,6 +218,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "finnair",
     "beta": false
   },
   "eurobonus": {
@@ -214,6 +231,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "sas",
     "beta": false
   },
   "aeromexico": {
@@ -226,6 +244,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "aeromexico",
     "beta": false
   },
   "connectmiles": {
@@ -238,6 +257,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "copa",
     "beta": false
   },
   "azul": {
@@ -250,6 +270,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "azul",
     "beta": false
   },
   "smiles": {
@@ -262,6 +283,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "smiles",
     "beta": false
   },
   "ethiopian": {
@@ -274,6 +296,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "ethiopian",
     "beta": false
   },
   "saudia": {
@@ -286,6 +309,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "saudia",
     "beta": false
   },
   "frontier": {
@@ -298,6 +322,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "frontier",
     "beta": false
   },
   "spirit": {
@@ -310,6 +335,7 @@
     "rooms_aero": false,
     "sells_points": false,
     "gather_auth": "cookie",
+    "awardwallet": null,
     "beta": false,
     "note": "Spirit Airlines ceased operations 2026-05-02 (court-supervised liquidation); slug retained to mirror the seats.aero source list."
   },
@@ -324,6 +350,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "executiveclub",
     "beta": true
   },
   "iberia": {
@@ -336,6 +363,7 @@
     "rooms_aero": false,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "iberia",
     "beta": true
   },
   "hyatt": {
@@ -349,6 +377,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "hyatt",
     "beta": false
   },
   "hilton": {
@@ -361,6 +390,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "hilton",
     "beta": false
   },
   "marriott": {
@@ -373,6 +403,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "marriott",
     "beta": false
   },
   "ihg": {
@@ -385,6 +416,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "ihg",
     "beta": false
   },
   "choice": {
@@ -397,6 +429,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "choice",
     "beta": false
   },
   "wyndham": {
@@ -409,6 +442,7 @@
     "rooms_aero": true,
     "sells_points": true,
     "gather_auth": "cookie",
+    "awardwallet": "wyndham",
     "beta": false,
     "note": "rooms.aero source slug recorded as \"wyndham\", observed-pending-confirmation by a live rooms.aero capture."
   }

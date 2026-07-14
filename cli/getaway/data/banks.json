@@ -4,27 +4,31 @@
     "domain": "americanexpress.com",
     "dashboard_host": "global.americanexpress.com",
     "currency": "Membership Rewards",
-    "gather_auth": "device_wall"
+    "gather_auth": "device_wall",
+    "awardwallet": "membershiprewards"
   },
   "chase": {
     "name": "Chase",
     "domain": "chase.com",
     "dashboard_host": "secure.chase.com",
     "currency": "Ultimate Rewards",
-    "gather_auth": "cookie"
+    "gather_auth": "cookie",
+    "awardwallet": "ultimaterewards"
   },
   "citi": {
     "name": "Citi",
     "domain": "citi.com",
     "dashboard_host": "online.citi.com",
     "currency": "ThankYou Points",
-    "gather_auth": "cookie"
+    "gather_auth": "cookie",
+    "awardwallet": "thankyou"
   },
   "capitalone": {
     "name": "Capital One",
     "domain": "capitalone.com",
     "dashboard_host": "myaccounts.capitalone.com",
     "currency": "Capital One miles",
-    "gather_auth": "token"
+    "gather_auth": "token",
+    "awardwallet": "capitalone"
   }
 }

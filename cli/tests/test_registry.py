@@ -83,6 +83,26 @@ def test_banks_declare_gather_auth() -> None:
         assert row["gather_auth"] in registry.GATHER_AUTH_CLASSES
 
 
+def test_every_program_and_bank_declares_awardwallet_code() -> None:
+    for slug, row in {**registry.programs(), **registry.banks()}.items():
+        assert row["awardwallet"] is None or isinstance(row["awardwallet"], str), slug
+
+
+def test_awardwallet_codes_are_unique_across_programs_and_banks() -> None:
+    codes = [
+        row["awardwallet"]
+        for row in {**registry.programs(), **registry.banks()}.values()
+        if row["awardwallet"] is not None
+    ]
+    assert len(codes) == len(set(codes))
+
+
+def test_awardwallet_map_resolves_known_codes() -> None:
+    mapping = registry.awardwallet_map()
+    assert mapping["aeroplan"] == "aeroplan"
+    assert mapping["membershiprewards"] == "amex"
+
+
 def test_sells_points_agrees_with_points_pricing() -> None:
     progs = registry.programs()
     pricing = registry.points_pricing()
@@ -209,6 +229,10 @@ def test_region_unknown_code_raises() -> None:
 
 def test_spirit_note_records_shutdown() -> None:
     assert "2026-05-02" in registry.programs()["spirit"]["note"]
+
+
+def test_spirit_awardwallet_is_none() -> None:
+    assert registry.programs()["spirit"]["awardwallet"] is None
 
 
 def test_cli_continents_lists_six() -> None:

@@ -104,6 +104,12 @@ def gather_hosts() -> list[dict]:
     return rows
 
 
+def awardwallet_map() -> dict[str, str]:
+    """AwardWallet provider code -> getaway slug, programs and banks merged."""
+    rows = {**programs(), **banks()}
+    return {row["awardwallet"]: slug for slug, row in rows.items() if row["awardwallet"]}
+
+
 def region(code: str) -> dict:
     for row in regions():
         if row["code"] == code:
