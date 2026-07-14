@@ -4,9 +4,9 @@ Ranking has three stages and never sums verdicts into a score. (1) Cost lane: sa
 journeys band on scalar combined mileage, mixed-program journeys compare as per-program vectors
 on a Pareto front — there is no fungible cross-program scalar. (2) Judgment lane, consumed
 lexicographically within a cost tier: primary orders, secondary breaks ties, note annotates and
-never reorders; unknown is neutral. (3) A stable cost/id tie-break. Preferences never gate — the
-only hard budget is ``constraints.mileage_limit``; seat insufficiency is gated upstream at
-composition. ``finalize`` only formats the board's result classes.
+never reorders; unknown is neutral. (3) A stable cost/id tie-break. Preferences never gate;
+confirmed constraints gate here, while seat insufficiency is gated upstream at composition.
+``finalize`` only formats the board's result classes.
 """
 
 import datetime as dt
@@ -16,8 +16,8 @@ from typing import Any
 
 import click
 
-from getaway import afford, enhance, prefs, registry, stays, trips
-from getaway.constants import MILEAGE_BAND, PRESENTATION_LIMIT
+from getaway import afford, enhance, fit, prefs, registry, stays, trips
+from getaway.constants import CABIN_PREFIX, MILEAGE_BAND, PRESENTATION_LIMIT, cabin_rank
 from getaway.paths import UsageError, emit, map_errors, utcnow
 
 VERDICT_RANK = {"promote": -1, "neutral": 0, "demote": 1}
@@ -357,6 +357,16 @@ def _mileage_limit(plan: dict) -> int | None:
     return limit["miles"] if limit else None
 
 
+def _cabin_constraint(plan: dict) -> str | None:
+    constraint = plan.get("constraints", {}).get("cabin")
+    return constraint["value"] if constraint else None
+
+
+def _departure_days_constraint(plan: dict) -> set[str] | None:
+    constraint = plan.get("constraints", {}).get("departure_days")
+    return set(constraint["days"]) if constraint else None
+
+
 def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     upstream_fp = trips.capture_upstream_fp(slug, "rank")  # before any input artifact is read
     trip = trips.show(slug)
@@ -371,6 +381,8 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     verify_active = "availability_verified" in active
     verify_results = enhance.results_index(slug, "verify") if verify_active else {}
     limit = _mileage_limit(plan)
+    cabin_constraint = _cabin_constraint(plan)
+    departure_days = _departure_days_constraint(plan)
 
     entries: list[dict] = []
     dropped: list[dict] = list(expand.get("gated", []))
@@ -385,6 +397,45 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
                 }
             )
             continue
+        if cabin_constraint is not None:
+            minimum_cabin = CABIN_PREFIX[cabin_constraint]
+            minimum_rank = cabin_rank(minimum_cabin)
+            below = next(
+                (
+                    (leg, segment)
+                    for leg in journey["legs"]
+                    if leg["mode"] == "award"
+                    for segment in leg["detail"]["segments"]
+                    if cabin_rank(segment["cabin"]) < minimum_rank
+                ),
+                None,
+            )
+            if below is not None:
+                leg, segment = below
+                dropped.append(
+                    {
+                        "journey_id": journey["id"],
+                        "reason": (
+                            f"{leg['role']} award cabin {segment['cabin']} below confirmed cabin "
+                            f"{minimum_cabin}"
+                        ),
+                    }
+                )
+                continue
+        if departure_days is not None:
+            departs_local = journey["legs"][0]["detail"]["segments"][0]["departs_local"]
+            departure_day = fit._weekday(departs_local)
+            if departure_day not in departure_days:
+                dropped.append(
+                    {
+                        "journey_id": journey["id"],
+                        "reason": (
+                            f"outbound departs {departure_day} outside confirmed departure days "
+                            f"{sorted(departure_days)}"
+                        ),
+                    }
+                )
+                continue
         judged = assess_journeys.get(journey["id"], {}).get("verdicts", [])
         entries.append(
             {

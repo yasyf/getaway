@@ -14,6 +14,7 @@ from getaway.constants import (
     NODE_QUOTA_COST,
     NODE_ROUTING,
     NODE_TTL_HOURS,
+    NOTABLE_PREFERENCE_STRETCH_LIMIT,
 )
 from getaway.paths import (
     NegativePredicate,
@@ -82,7 +83,6 @@ BRIDGE_QUOTE_KEYS = frozenset(
 )
 JUDGMENT_FACTOR_KINDS = frozenset({"judgment", "deterministic+judgment"})
 DAY_TOKENS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
-LAYOVER_STYLES = frozenset({"minimize", "explore"})
 PREFERENCE_KEYS = frozenset(
     {
         "outbound_departure_window",
@@ -91,8 +91,6 @@ PREFERENCE_KEYS = frozenset(
         "departure_days",
         "cabin",
         "mileage_target",
-        "layover_style",
-        "program_preference",
     }
 )
 CONSTRAINT_KEYS = frozenset(
@@ -115,6 +113,7 @@ TRIP_FP_KEYS = (
     "judgment",
 )
 PREFS_FP_KEYS = (
+    "home_airport",
     "origin_airports",
     "avoid_transit",
     "avoid_destinations",
@@ -242,11 +241,6 @@ def _validate_pref_value(key: object, value: object, label: str) -> None:
         spec = require_keys(value, {"miles", "scope"}, label)
         require_int(spec["miles"], f"{label}.miles")
         require_str(spec["scope"], f"{label}.scope")
-    elif key == "layover_style":
-        if value not in LAYOVER_STYLES:
-            raise UsageError(f"{label} must be one of {sorted(LAYOVER_STYLES)}")
-    elif key == "program_preference":
-        require_str_list(value, label)
 
 
 def _validate_constraint_value(key: object, value: object, label: str) -> None:
@@ -434,7 +428,14 @@ def show(slug: str) -> dict:
     path = _trip_json(slug)
     if not path.exists():
         raise StateConflictError(f"no trip {slug!r}")
-    return json.loads(path.read_text())
+    doc = json.loads(path.read_text())
+    plan = doc["plan"]
+    if plan and "origins" not in plan:
+        prefs_doc = prefs.show()
+        origins = prefs_doc["origin_airports"] or [prefs_doc["home_airport"]]
+        require_str_list(origins, "plan.origins")
+        doc["plan"] = {**plan, "origins": origins}
+    return doc
 
 
 def list_() -> list[str]:
@@ -698,6 +699,11 @@ def _validate_assess_artifact(doc: object, name: str) -> None:
         raise UsageError(f"{name}.journeys must be an object")
     if not isinstance(doc["notable_stretches"], list):
         raise UsageError(f"{name}.notable_stretches must be a list")
+    if len(doc["notable_stretches"]) > NOTABLE_PREFERENCE_STRETCH_LIMIT:
+        raise UsageError(
+            f"{name}.notable_stretches must contain at most "
+            f"{NOTABLE_PREFERENCE_STRETCH_LIMIT} entries"
+        )
     judged = {f["id"] for f in registry.factors() if f["kind"] in JUDGMENT_FACTOR_KINDS}
     for jid, entry in doc["journeys"].items():
         entry = require_keys(entry, {"verdicts"}, f"{name}.journeys[{jid}]")

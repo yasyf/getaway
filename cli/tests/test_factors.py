@@ -155,17 +155,45 @@ def biz_trip(getaway_home: Path) -> str:
     return SLUG
 
 
-def leg(role: str, source: str, *, soft: bool = False, airlines: str = "UA") -> dict:
+def leg(
+    role: str,
+    source: str,
+    *,
+    soft: bool = False,
+    airlines: str = "UA",
+    cabin: str = "J",
+    segment_cabins: tuple[str, ...] | None = None,
+    departs_local: str = "2026-09-07T09:00",
+) -> dict:
+    segment_cabins = segment_cabins if segment_cabins is not None else (cabin,)
     return {
         "role": role,
         "id": f"{role}-{source}",
-        "cabin": "J",
+        "cabin": cabin,
         "source": source,
         "mode": "award",
         "soft": soft,
         "airlines": airlines,
-        "detail": {},
+        "detail": {
+            "segments": [
+                {"cabin": segment_cabin, "departs_local": departs_local}
+                for segment_cabin in segment_cabins
+            ]
+        },
         "fetched_at": None,
+    }
+
+
+def cash_onward() -> dict:
+    return {
+        "role": "onward",
+        "id": "onward-cash",
+        "cabin": "economy",
+        "source": None,
+        "mode": "cash",
+        "origin": "NRT",
+        "dest": "SIN",
+        "cash": {},
     }
 
 
@@ -176,12 +204,35 @@ def journey(
     soft: bool = False,
     airlines: str = "UA",
     cash: list | None = None,
+    cash_leg: dict | None = None,
+    cabin: str = "J",
+    segment_cabins: tuple[str, ...] | None = None,
+    departs_local: str = "2026-09-07T09:00",
+    kind: str = "round_trip",
+    award_legs: list[dict] | None = None,
 ) -> dict:
     single = len(by_program) == 1
-    legs = [leg("outbound", src, soft=soft, airlines=airlines) for src in by_program]
+    legs = (
+        award_legs
+        if award_legs is not None
+        else [
+            leg(
+                "outbound",
+                src,
+                soft=soft,
+                airlines=airlines,
+                cabin=cabin,
+                segment_cabins=segment_cabins,
+                departs_local=departs_local,
+            )
+            for src in by_program
+        ]
+    )
+    if cash_leg is not None:
+        legs.append(cash_leg)
     return {
         "id": jid,
-        "kind": "round_trip",
+        "kind": kind,
         "legs": legs,
         "fit_facts": {},
         "preference_misses": [],
@@ -405,17 +456,156 @@ def test_seat_insufficient_gated_carries_to_dropped(biz_trip: str) -> None:
     assert [d["journey_id"] for d in dropped] == ["COLLAPSED"]
 
 
-def test_mileage_limit_is_the_only_hard_budget(biz_trip: str) -> None:
+@pytest.mark.parametrize(
+    ("constraints", "blocked_miles", "blocked_cabin", "blocked_departure", "reason"),
+    [
+        pytest.param(
+            {"mileage_limit": {"miles": 120000}},
+            130000,
+            "J",
+            "2026-09-07T09:00",
+            "130000 miles over confirmed limit 120000",
+            id="mileage-limit",
+        ),
+        pytest.param(
+            {"cabin": {"value": "business", "confirmed": True}},
+            95000,
+            "W",
+            "2026-09-07T09:00",
+            "outbound award cabin W below confirmed cabin J",
+            id="cabin-minimum",
+        ),
+        pytest.param(
+            {"departure_days": {"days": ["Mon"], "confirmed": True}},
+            95000,
+            "J",
+            "2026-09-08T09:00",
+            "outbound departs Tue outside confirmed departure days ['Mon']",
+            id="departure-day",
+        ),
+    ],
+)
+def test_hard_constraint_gate_set_discloses_drops(
+    biz_trip: str,
+    constraints: dict,
+    blocked_miles: int,
+    blocked_cabin: str,
+    blocked_departure: str,
+    reason: str,
+) -> None:
     trips.set_patch(
-        biz_trip, {"plan": {**PLAN, "constraints": {"mileage_limit": {"miles": 120000}}}}
+        biz_trip,
+        {"plan": {**PLAN, "constraints": constraints}},
     )
-    blown = journey("BLOWN", {"united": 130000})
-    kept = journey("KEPT", {"united": 95000})
-    ranked = do_rank(biz_trip, [blown, kept])
+    blocked = journey(
+        "BLOCKED",
+        {"united": blocked_miles},
+        cabin=blocked_cabin,
+        departs_local=blocked_departure,
+    )
+    kept = journey("KEPT", {"united": 95000}, cabin="J", departs_local="2026-09-07T09:00")
+    ranked = do_rank(biz_trip, [blocked, kept])
     assert order(ranked) == ["KEPT"]
-    dropped = rank_doc(biz_trip)["dropped"]
-    assert dropped[0]["journey_id"] == "BLOWN"
-    assert "over confirmed limit" in dropped[0]["reason"]
+    assert rank_doc(biz_trip)["dropped"] == [{"journey_id": "BLOCKED", "reason": reason}]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected_order", "expected_dropped"),
+    [
+        pytest.param(
+            journey(
+                "MIXED-SEGMENT",
+                {"united": 95000},
+                award_legs=[
+                    leg("outbound", "united", cabin="J", segment_cabins=("J", "Y"))
+                ],
+            ),
+            [],
+            [
+                {
+                    "journey_id": "MIXED-SEGMENT",
+                    "reason": "outbound award cabin Y below confirmed cabin J",
+                }
+            ],
+            id="mixed-segment-drops",
+        ),
+        pytest.param(
+            journey(
+                "GATEWAY-AWARD",
+                {"united": 95000, "aeroplan": 25000},
+                kind="gateway_award",
+                award_legs=[
+                    leg("outbound", "united", cabin="J", segment_cabins=("J",)),
+                    leg("onward", "aeroplan", cabin="economy", segment_cabins=("Y",)),
+                ],
+            ),
+            [],
+            [
+                {
+                    "journey_id": "GATEWAY-AWARD",
+                    "reason": "onward award cabin Y below confirmed cabin J",
+                }
+            ],
+            id="gateway-award-economy-onward-drops",
+        ),
+        pytest.param(
+            journey(
+                "TWO-AWARD-LEGS",
+                {"united": 95000, "aeroplan": 25000},
+                kind="gateway_award",
+                award_legs=[
+                    leg("outbound", "united", cabin="MIXED", segment_cabins=("J", "F")),
+                    leg("onward", "aeroplan", cabin="business", segment_cabins=("J",)),
+                ],
+            ),
+            ["TWO-AWARD-LEGS"],
+            [],
+            id="all-award-segments-at-or-above-minimum-kept",
+        ),
+        pytest.param(
+            journey(
+                "CASH-ONWARD",
+                {"united": 95000},
+                cash=_cash(25000),
+                cash_leg=cash_onward(),
+                award_legs=[
+                    leg("outbound", "united", cabin="J", segment_cabins=("J",))
+                ],
+            ),
+            ["CASH-ONWARD"],
+            [],
+            id="cash-leg-exempt",
+        ),
+    ],
+)
+def test_cabin_constraint_checks_every_award_segment(
+    biz_trip: str,
+    candidate: dict,
+    expected_order: list[str],
+    expected_dropped: list[dict],
+) -> None:
+    trips.set_patch(
+        biz_trip,
+        {
+            "plan": {
+                **PLAN,
+                "constraints": {"cabin": {"value": "business", "confirmed": True}},
+            }
+        },
+    )
+    assert order(do_rank(biz_trip, [candidate])) == expected_order
+    assert rank_doc(biz_trip)["dropped"] == expected_dropped
+
+
+def test_absent_constraints_do_not_gate_preference_misses(biz_trip: str) -> None:
+    preference_miss = journey(
+        "PREFERENCE-MISS",
+        {"united": 95000},
+        cabin="W",
+        departs_local="2026-09-08T09:00",
+    )
+    assert order(do_rank(biz_trip, [preference_miss])) == ["PREFERENCE-MISS"]
+    assert rank_doc(biz_trip)["dropped"] == []
 
 
 def test_status_earning_fact_when_active(biz_trip: str) -> None:

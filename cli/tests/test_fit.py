@@ -1,6 +1,8 @@
 import datetime as dt
 from collections.abc import Callable
 
+import pytest
+
 from getaway import fit
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -157,15 +159,46 @@ def test_away_nights_uses_cash_leg_real_arrival_clock() -> None:
     assert facts["away_nights"] == 4  # 09-08 cash arrival -> 09-12 return departure
 
 
-def test_cabin_mixed_minutes() -> None:
+@pytest.mark.parametrize(
+    ("segment_cabin", "expected_below_minutes", "expected_misses"),
+    [
+        (
+            "Y",
+            150,
+            [
+                {
+                    "code": "cabin",
+                    "delta": 150,
+                    "annotation": "outbound leg has 150 min below your preferred cabin",
+                }
+            ],
+        ),
+        ("F", 0, []),
+    ],
+    ids=["economy-below-business", "first-above-business"],
+)
+def test_cabin_below_minutes(
+    segment_cabin: str, expected_below_minutes: int, expected_misses: list[dict]
+) -> None:
     segments = [
         seg("SFO", "HND", "2026-09-05T11:00:00", "2026-09-06T14:00:00", 660, cabin="J"),
-        seg("HND", "OKA", "2026-09-06T16:00:00", "2026-09-06T18:30:00", 150, cabin="Y"),
+        seg(
+            "HND",
+            "OKA",
+            "2026-09-06T16:00:00",
+            "2026-09-06T18:30:00",
+            150,
+            cabin=segment_cabin,
+        ),
     ]
-    facts = fit.journey_fit(trip(), PREFS, [leg("outbound", segments, layovers=[120])], clock())
-    cabin = facts["fit_facts"]["legs"][0]["cabin"]
+    preferences = {"cabin": {"value": "business", "priority": "note"}}
+    result = fit.journey_fit(
+        trip(preferences), PREFS, [leg("outbound", segments, layovers=[120])], clock()
+    )
+    cabin = result["fit_facts"]["legs"][0]["cabin"]
     assert cabin["matched"] is False
-    assert cabin["mixed_cabin_minutes"] == 150  # the economy segment
+    assert cabin["below_cabin_minutes"] == expected_below_minutes
+    assert result["preference_misses"] == expected_misses
 
 
 def test_connections_flags_airport_change() -> None:

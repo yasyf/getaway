@@ -156,6 +156,32 @@ def _endpoints(detail: Detail) -> tuple[str, str, str, str]:
     return segs[0]["origin"], segs[-1]["dest"], segs[0]["departs_local"], segs[-1]["arrives_local"]
 
 
+def _leg_airports(leg: dict) -> tuple[str, str]:
+    if leg.get("mode") == "cash":
+        return leg["origin"], leg["dest"]
+    origin, dest, _, _ = _endpoints(leg["detail"])
+    return origin, dest
+
+
+def _transit_points(legs: list[dict]) -> list[str]:
+    points = [
+        airport
+        for leg in legs
+        if leg.get("mode") != "cash"
+        for arriving, departing in zip(
+            leg["detail"]["segments"], leg["detail"]["segments"][1:]
+        )
+        for airport in (arriving["dest"], departing["origin"])
+    ]
+    for arriving, departing in zip(legs, legs[1:]):
+        if departing["role"] == "return":
+            continue
+        _, arrival_airport = _leg_airports(arriving)
+        departure_airport, _ = _leg_airports(departing)
+        points.extend((arrival_airport, departure_airport))
+    return points
+
+
 def _side_endpoints(side: list[dict]) -> tuple[str, str, str, str]:
     """(origin, effective_dest, first_departure, last_arrival) of an outbound side.
 
@@ -237,6 +263,7 @@ def _compose(
     one_way = trips._trip_type(plan) == "one_way"
     override = plan.get("return") or {}
     override_origins = set(override.get("origins") or [])
+    avoid_transit = set(prefs_doc["avoid_transit"])
 
     journeys: list[dict] = []
     gated: list[dict] = []
@@ -257,9 +284,13 @@ def _compose(
                     continue
                 candidate_legs.append([*side, ret])
         for legs in candidate_legs:
+            jid = _journey_id(legs)
+            avoided = next((code for code in _transit_points(legs) if code in avoid_transit), None)
+            if avoided is not None:
+                gated.append({"journey_id": jid, "reason": f"transits {avoided}, which you avoid"})
+                continue
             fitted = fit.journey_fit(trip, prefs_doc, legs, now)
             sufficiency = _seat_rollup(fitted["fit_facts"])
-            jid = _journey_id(legs)
             if sufficiency == "insufficient":
                 gated.append(
                     {"journey_id": jid, "reason": "a leg's live seats are below the party"}

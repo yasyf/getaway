@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from getaway import prefs, trips
+from getaway.constants import NOTABLE_PREFERENCE_STRETCH_LIMIT
 from getaway.paths import StateConflictError, UsageError
 
 SLUG = "2026-07-warm-beachy-week"
@@ -286,6 +287,63 @@ def test_plan_origins_string_list_accepted(ready: Path) -> None:
     assert doc["plan"]["origins"] == ["WST"]
 
 
+def test_explicit_plan_origins_are_unchanged_by_preferences(ready: Path) -> None:
+    prefs.set_patch({"home_airport": "SEA", "origin_airports": ["SFO", "OAK"]})
+    trips.new(SLUG)
+    trips.set_patch(SLUG, {"plan": {"trip_type": "one_way", "origins": ["WST"]}})
+
+    assert trips.show(SLUG)["plan"]["origins"] == ["WST"]
+
+
+@pytest.mark.parametrize(
+    ("pref_patch", "expected"),
+    [
+        pytest.param(
+            {"home_airport": "SEA", "origin_airports": ["SFO", "OAK"]},
+            ["SFO", "OAK"],
+            id="origin-airports",
+        ),
+        pytest.param(
+            {"home_airport": "SEA", "origin_airports": []},
+            ["SEA"],
+            id="home-airport-fallback",
+        ),
+    ],
+)
+def test_omitted_plan_origins_resolve_from_preferences(
+    ready: Path, pref_patch: dict, expected: list[str]
+) -> None:
+    prefs.set_patch(pref_patch)
+    trips.new(SLUG)
+    trips.set_patch(SLUG, {"plan": {"trip_type": "one_way"}})
+
+    assert trips.show(SLUG)["plan"]["origins"] == expected
+    assert json.loads((trips.trip_dir(SLUG) / "trip.json").read_text())["plan"] == {
+        "trip_type": "one_way"
+    }
+
+
+@pytest.mark.parametrize(
+    ("key", "before", "after"),
+    [
+        pytest.param("home_airport", "SFO", "SEA", id="home-airport"),
+        pytest.param("origin_airports", ["SFO"], ["OAK"], id="origin-airports"),
+    ],
+)
+def test_sweep_fingerprint_tracks_origin_source_preferences(
+    ready: Path, key: str, before: object, after: object
+) -> None:
+    prefs.set_patch({key: before})
+    trips.new(SLUG)
+    trips.set_patch(SLUG, {"plan": {"trip_type": "one_way", "origins": ["WST"]}})
+    trip = trips.show(SLUG)
+    before_fp = trips.capture_inputs_fp(trip, prefs.show(), "sweep:outbound:asia")
+
+    prefs.set_patch({key: after})
+
+    assert trips.capture_inputs_fp(trip, prefs.show(), "sweep:outbound:asia") != before_fp
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -398,6 +456,35 @@ def test_bridge_artifact_rejects_clockless_quote(ready: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("count", "accepted"),
+    [
+        pytest.param(NOTABLE_PREFERENCE_STRETCH_LIMIT, True, id="exactly-at-limit"),
+        pytest.param(NOTABLE_PREFERENCE_STRETCH_LIMIT + 1, False, id="over-limit"),
+    ],
+)
+def test_assess_notable_stretches_limit(ready: Path, count: int, accepted: bool) -> None:
+    trips.new(SLUG)
+    doc = {
+        "journeys": {},
+        "notable_stretches": [
+            {"journey_id": f"J{i}", "why": f"notable preference stretch {i}"}
+            for i in range(count)
+        ],
+    }
+
+    if accepted:
+        trips.artifact_write(SLUG, "assess.json", json.dumps(doc))
+        assert json.loads(trips.artifact_read(SLUG, "assess.json")) == doc
+    else:
+        with pytest.raises(
+            UsageError,
+            match=rf"assess\.json\.notable_stretches must contain at most "
+            rf"{NOTABLE_PREFERENCE_STRETCH_LIMIT} entries",
+        ):
+            trips.artifact_write(SLUG, "assess.json", json.dumps(doc))
+
+
 def test_current_cli_reports_null_when_unset(ready: Path, runner: CliRunner) -> None:
     result = runner.invoke(trips.trip_group, ["current"])
     assert result.exit_code == 0
@@ -442,6 +529,22 @@ def test_preference_rejects_unknown_key(ready: Path) -> None:
     with pytest.raises(UsageError, match="preference key"):
         trips.set_patch(
             SLUG, {"plan": {"preferences": {"seat_pitch": {"value": 34, "priority": "note"}}}}
+        )
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        pytest.param("layover_style", "minimize", id="layover-style"),
+        pytest.param("program_preference", ["aeroplan"], id="program-preference"),
+    ],
+)
+def test_removed_preference_key_rejected(ready: Path, key: str, value: object) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match=rf"unknown preference key: '{key}'"):
+        trips.set_patch(
+            SLUG,
+            {"plan": {"preferences": {key: {"value": value, "priority": "note"}}}},
         )
 
 

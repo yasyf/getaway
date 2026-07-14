@@ -1,5 +1,9 @@
 CABIN_PREFIX = {"economy": "Y", "premium": "W", "business": "J", "first": "F"}
 
+
+def cabin_rank(cabin: str) -> int:
+    return tuple(CABIN_PREFIX.values()).index(cabin)
+
 CONTINENTS = (
     "North America",
     "South America",
@@ -17,6 +21,7 @@ DEFAULT_QUOTA_FLOOR = 100
 # Presentation (A5): the ranked cut applies only after assess; assess additionally
 # surfaces up to NOTABLE_PREFERENCE_STRETCH_LIMIT excellent journeys from beyond it.
 PRESENTATION_LIMIT = 6
+# Keep in sync with skills/getaway/plan-trip.js's assess prompt literal "up to 2".
 NOTABLE_PREFERENCE_STRETCH_LIMIT = 2
 
 # --- getaway v2 journey engine (Phase 2: plan model, compile graph, retrieval) ---

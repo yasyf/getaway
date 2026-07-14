@@ -12,7 +12,7 @@ import datetime as dt
 from collections.abc import Callable
 from typing import Any
 
-from getaway.constants import CABIN_PREFIX
+from getaway.constants import CABIN_PREFIX, cabin_rank
 
 Detail = dict[str, Any]
 Leg = dict[str, Any]
@@ -54,10 +54,15 @@ def _window_overshoot(dep_local: str, arr_local: str, window: dict) -> dict:
 
 def _cabin_fit(detail: Detail, preferred_letter: str) -> dict:
     segments = detail["segments"]
-    mixed = sum(seg["duration_minutes"] for seg in segments if seg["cabin"] != preferred_letter)
+    preferred_rank = cabin_rank(preferred_letter)
+    below = sum(
+        seg["duration_minutes"]
+        for seg in segments
+        if cabin_rank(seg["cabin"]) < preferred_rank
+    )
     return {
         "matched": all(seg["cabin"] == preferred_letter for seg in segments),
-        "mixed_cabin_minutes": mixed,
+        "below_cabin_minutes": below,
     }
 
 
@@ -247,13 +252,13 @@ def _preference_misses(fit_facts: dict, plan: dict) -> list[dict]:
         for leg in fit_facts["legs"]:
             if "cabin" not in leg:
                 continue
-            mixed = leg["cabin"]["mixed_cabin_minutes"]
-            if mixed:
+            below = leg["cabin"]["below_cabin_minutes"]
+            if below:
                 misses.append(
                     _miss(
                         "cabin",
-                        mixed,
-                        f"{leg['role']} leg has {mixed} min outside your preferred cabin",
+                        below,
+                        f"{leg['role']} leg has {below} min below your preferred cabin",
                     )
                 )
 

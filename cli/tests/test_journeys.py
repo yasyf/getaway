@@ -679,3 +679,101 @@ def test_cash_onward_return_next_morning_accepted(home: Path) -> None:
     doc = _run(slug)
     (journey,) = doc["journeys"]
     assert journey["kind"] == "gateway_cash"
+
+
+@pytest.mark.parametrize(
+    ("segments", "dest", "avoided"),
+    [
+        pytest.param(
+            [
+                seg("SFO", "ICN", "2026-09-05T10:00", "2026-09-06T14:00"),
+                seg("ICN", "NRT", "2026-09-06T16:00", "2026-09-06T18:00"),
+            ],
+            "NRT",
+            "ICN",
+            id="same-airport-connection",
+        ),
+        pytest.param(
+            [
+                seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00"),
+                seg("HND", "OKA", "2026-09-06T16:00", "2026-09-06T18:00"),
+            ],
+            "OKA",
+            "HND",
+            id="airport-change-self-transfer",
+        ),
+    ],
+)
+def test_avoid_transit_gates_award_leg_connection_with_named_reason(
+    home: Path, segments: list[dict], dest: str, avoided: str
+) -> None:
+    slug = make_trip(ONE_WAY)
+    prefs.set_patch({"avoid_transit": [avoided]})
+    seed("OB", detail("OB", segments))
+    write_shortlists(slug, [cand("OB", "SFO", dest, "2026-09-05")])
+
+    doc = _run(slug)
+
+    assert doc["journeys"] == []
+    assert doc["gated"] == [
+        {"journey_id": "outbound:OB:J", "reason": f"transits {avoided}, which you avoid"}
+    ]
+
+
+def test_avoid_transit_gates_hybrid_boundary_with_named_reason(home: Path) -> None:
+    slug = make_trip(HYBRID_ONE_WAY)
+    prefs.set_patch({"avoid_transit": ["NRT"]})
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
+    write_shortlists(slug, [])
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        pairs=[bpair("NRT", "OKA")],
+        quotes=[cash_quote("NRT", "OKA", 120.0)],
+    )
+
+    doc = _run(slug)
+
+    assert doc["journeys"] == []
+    assert doc["gated"] == [
+        {
+            "journey_id": "outbound:GW-NRT:J|onward:cash:NRT:OKA:2026-09-08:economy",
+            "reason": "transits NRT, which you avoid",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("plan", "avoided", "return_leg", "expected_journey_id"),
+    [
+        pytest.param(ONE_WAY, "SFO", False, "outbound:OB:J", id="journey-origin"),
+        pytest.param(ONE_WAY, "NRT", False, "outbound:OB:J", id="one-way-destination"),
+        pytest.param(
+            ROUND_TRIP,
+            "NRT",
+            True,
+            "outbound:OB:J|return:RET:J",
+            id="round-trip-turnaround",
+        ),
+    ],
+)
+def test_avoid_transit_does_not_gate_trip_endpoints(
+    home: Path,
+    plan: dict,
+    avoided: str,
+    return_leg: bool,
+    expected_journey_id: str,
+) -> None:
+    slug = make_trip(plan)
+    prefs.set_patch({"avoid_transit": [avoided]})
+    seed("OB", ob_detail("OB"))
+    returns = None
+    if return_leg:
+        seed("RET", ret_detail("RET"))
+        returns = [cand("RET", "NRT", "SFO", "2026-09-12")]
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")], returns)
+
+    doc = _run(slug)
+
+    assert doc["gated"] == []
+    assert [journey["id"] for journey in doc["journeys"]] == [expected_journey_id]
