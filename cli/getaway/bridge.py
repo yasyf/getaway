@@ -23,6 +23,7 @@ import datetime as dt
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import click
@@ -161,6 +162,12 @@ def _local(value: dt.datetime) -> str:
     return value.replace(tzinfo=None).isoformat(timespec="minutes")
 
 
+def _iata(airport: Any) -> str:
+    # fli enum members give the IATA code via ``.name`` (raw string for serp); ``_rewrite_alias``
+    # maps an OKA connection back off the aliased "NAH" member (upstream punitarani/fli#131).
+    return _rewrite_alias(airport.name if isinstance(airport, Enum) else airport)
+
+
 def _quote(gateway: str, dest: str, date: str, result: Any, source: str) -> dict:
     first, last = result.legs[0], result.legs[-1]
     return {
@@ -173,6 +180,7 @@ def _quote(gateway: str, dest: str, date: str, result: Any, source: str) -> dict
         "currency": result.currency or "USD",
         "duration_minutes": result.duration,
         "stops": result.stops,
+        "connections": [_iata(leg.arrival_airport) for leg in result.legs[:-1]],
         "airline": first.airline.name,
         "flight_number": first.flight_number,
         "departs_local": _local(first.departure_datetime),

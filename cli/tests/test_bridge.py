@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from getaway import bridge, prefs, trips
+from getaway.paths import UsageError
 
 FROZEN = dt.datetime(2026, 9, 1, 12, 0, 0, tzinfo=dt.timezone.utc)  # 21:00 in JST
 SLUG = "2026-09-warm"
@@ -14,6 +15,25 @@ SLUG = "2026-09-warm"
 
 def clock() -> Callable[[], dt.datetime]:
     return lambda: FROZEN
+
+
+def fake_leg(
+    *,
+    airline: str = "NH",
+    fn: str = "NH1",
+    dep_airport: object = "NRT",
+    arr_airport: object = "OKA",
+    dep: dt.datetime = dt.datetime(2026, 9, 10, 9, 0),
+    arr: dt.datetime = dt.datetime(2026, 9, 10, 12, 0),
+) -> object:
+    return types.SimpleNamespace(
+        airline=types.SimpleNamespace(name=airline),
+        flight_number=fn,
+        departure_airport=dep_airport,
+        arrival_airport=arr_airport,
+        departure_datetime=dep,
+        arrival_datetime=arr,
+    )
 
 
 def fake_result(
@@ -27,14 +47,15 @@ def fake_result(
     dep: dt.datetime = dt.datetime(2026, 9, 10, 9, 0),
     arr: dt.datetime = dt.datetime(2026, 9, 10, 12, 0),
 ) -> object:
-    leg = types.SimpleNamespace(
-        airline=types.SimpleNamespace(name=airline),
-        flight_number=fn,
-        departure_datetime=dep,
-        arrival_datetime=arr,
-    )
+    leg = fake_leg(airline=airline, fn=fn, dep=dep, arr=arr)
     return types.SimpleNamespace(
         price=price, currency=currency, duration=duration, stops=stops, legs=[leg]
+    )
+
+
+def multi_result(price: float | None, legs: list[object], *, duration: int = 300) -> object:
+    return types.SimpleNamespace(
+        price=price, currency="USD", duration=duration, stops=len(legs) - 1, legs=legs
     )
 
 
@@ -70,6 +91,60 @@ def bridge_out() -> dict:
 PAIR = {"gateway": "NRT", "onward_dest": "OKA", "date": "2026-09-10"}
 
 
+def valid_quote(**overrides: object) -> dict:
+    quote = {
+        "gateway": "NRT",
+        "onward_dest": "OKA",
+        "date": "2026-09-10",
+        "cabin": "economy",
+        "source": "fli",
+        "price": 120.0,
+        "currency": "USD",
+        "duration_minutes": 180,
+        "stops": 1,
+        "connections": ["FUK"],
+        "airline": "NH",
+        "flight_number": "NH1",
+        "departs_local": "2026-09-10T07:15",
+        "arrives_local": "2026-09-10T12:15",
+    }
+    quote.update(overrides)
+    return quote
+
+
+def write_bridge(quote: dict) -> None:
+    trips.artifact_write(
+        SLUG, "legs/outbound/bridge.json", json.dumps({"quotes": [quote], "failures": []})
+    )
+
+
+def test_validator_rejects_missing_connections(getaway_home: Path) -> None:
+    make_trip()
+    quote = valid_quote()
+    del quote["connections"]
+    with pytest.raises(UsageError, match="connections"):
+        write_bridge(quote)
+
+
+def test_validator_rejects_non_string_connections(getaway_home: Path) -> None:
+    make_trip()
+    with pytest.raises(UsageError, match="connections must be a list of strings"):
+        write_bridge(valid_quote(connections=[123]))
+
+
+@pytest.mark.parametrize(
+    ("stops", "connections"),
+    [(1, []), (0, ["FUK"]), (2, ["FUK"])],
+    ids=["too-few", "too-many-for-nonstop", "too-few-for-two-stop"],
+)
+def test_validator_rejects_connections_length_mismatch(
+    getaway_home: Path, stops: int, connections: list[str]
+) -> None:
+    make_trip()
+    with pytest.raises(UsageError, match="one airport per stop"):
+        write_bridge(valid_quote(stops=stops, connections=connections))
+
+
 def test_quotes_the_cheapest_priced_result(getaway_home: Path) -> None:
     make_trip()
     write_onward([PAIR])
@@ -89,11 +164,94 @@ def test_quotes_the_cheapest_priced_result(getaway_home: Path) -> None:
         "currency": "USD",
         "duration_minutes": 180,
         "stops": 0,
+        "connections": [],
         "airline": "NH",
         "flight_number": "NH303",
         "departs_local": "2026-09-10T09:00",  # real observed Google Flights clock
         "arrives_local": "2026-09-10T12:00",
     }
+
+
+def test_connections_from_fli_multi_leg_are_non_final_arrival_iata(getaway_home: Path) -> None:
+    from fli.models import Airport
+
+    make_trip()
+    write_onward([PAIR])
+    legs = [
+        fake_leg(
+            fn="NH1",
+            dep_airport=Airport["NRT"],
+            arr_airport=Airport["FUK"],
+            dep=dt.datetime(2026, 9, 10, 7, 15),
+            arr=dt.datetime(2026, 9, 10, 9, 25),
+        ),
+        fake_leg(
+            fn="NH2",
+            dep_airport=Airport["FUK"],
+            arr_airport=Airport["OKA"],
+            dep=dt.datetime(2026, 9, 10, 10, 30),
+            arr=dt.datetime(2026, 9, 10, 12, 15),
+        ),
+    ]
+    result = bridge.run(SLUG, now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)])
+    assert result == {"quotes": 1, "failures": 0}
+    quote = bridge_out()["quotes"][0]
+    assert quote["stops"] == 1
+    assert quote["connections"] == ["FUK"]  # non-final arrival, decoded off the fli Airport enum
+    assert quote["departs_local"] == "2026-09-10T07:15"
+    assert quote["arrives_local"] == "2026-09-10T12:15"
+
+
+def test_connections_from_fli_multi_leg_rewrites_oka_alias(getaway_home: Path) -> None:
+    from fli.models import Airport
+
+    make_trip()
+    write_onward([PAIR])
+    legs = [
+        fake_leg(
+            fn="NH1",
+            dep_airport=Airport["HND"],
+            arr_airport=Airport["OKA"],
+            dep=dt.datetime(2026, 9, 10, 7, 15),
+            arr=dt.datetime(2026, 9, 10, 9, 25),
+        ),
+        fake_leg(
+            fn="NH2",
+            dep_airport=Airport["OKA"],
+            arr_airport=Airport["TPE"],
+            dep=dt.datetime(2026, 9, 10, 10, 30),
+            arr=dt.datetime(2026, 9, 10, 12, 15),
+        ),
+    ]
+    result = bridge.run(SLUG, now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)])
+    assert result == {"quotes": 1, "failures": 0}
+    quote = bridge_out()["quotes"][0]
+    assert quote["stops"] == 1
+    assert quote["connections"] == ["OKA"]  # aliased NAH member rewritten back to OKA
+
+
+def test_connections_from_serp_multi_leg_are_non_final_arrival_iata(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+    legs = [
+        fake_leg(fn="UA1", dep_airport="NRT", arr_airport="FUK"),
+        fake_leg(fn="NH2", dep_airport="FUK", arr_airport="OKA"),
+    ]
+    monkeypatch.setattr(bridge, "_search_flights", lambda g, d, date: None)  # fli empty -> serp
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
+    monkeypatch.setattr(
+        bridge.serp,
+        "search",
+        lambda o, d, date, cabin, api_key=None: [multi_result(280.0, legs)],
+    )
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    quote = bridge_out()["quotes"][0]
+    assert quote["source"] == "serpapi"
+    assert quote["stops"] == 1
+    assert quote["connections"] == ["FUK"]  # non-final arrival, the raw serp IATA string
 
 
 def test_zero_results_is_failed_never_no_fare(getaway_home: Path) -> None:
@@ -192,6 +350,7 @@ def test_fli_error_falls_back_to_serpapi(
         "currency": "USD",
         "duration_minutes": 180,
         "stops": 0,
+        "connections": [],
         "airline": "JL",
         "flight_number": "JL901",
         "departs_local": "2026-09-10T09:00",

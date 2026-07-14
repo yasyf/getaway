@@ -30,6 +30,8 @@ def _normalize_leg(segment: Row) -> SimpleNamespace:
     return SimpleNamespace(
         airline=SimpleNamespace(name=segment["airline"]),
         flight_number=segment["flight_number"],
+        departure_airport=segment["departure_airport"]["id"],
+        arrival_airport=segment["arrival_airport"]["id"],
         departure_datetime=dt.datetime.fromisoformat(segment["departure_airport"]["time"]),
         arrival_datetime=dt.datetime.fromisoformat(segment["arrival_airport"]["time"]),
     )

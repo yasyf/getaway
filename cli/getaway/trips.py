@@ -75,6 +75,7 @@ BRIDGE_QUOTE_KEYS = frozenset(
         "currency",
         "duration_minutes",
         "stops",
+        "connections",
         "airline",
         "flight_number",
         "departs_local",
@@ -659,6 +660,9 @@ def _validate_bridge_quote(quote: object, label: str) -> None:
     require_str(quote["currency"], f"{label}.currency")
     require_int(quote["duration_minutes"], f"{label}.duration_minutes")
     require_int(quote["stops"], f"{label}.stops")
+    require_str_list(quote["connections"], f"{label}.connections")
+    if len(quote["connections"]) != quote["stops"]:
+        raise UsageError(f"{label}.connections must have one airport per stop")
     require_str(quote["airline"], f"{label}.airline")
     require_str(quote["flight_number"], f"{label}.flight_number")
     _iso_date(quote["departs_local"], f"{label}.departs_local")

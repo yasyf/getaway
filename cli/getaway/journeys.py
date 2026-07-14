@@ -129,6 +129,7 @@ def _cash_leg(role: str, quote: dict, date: str) -> dict:
         "currency": quote["currency"],
         "duration_minutes": quote["duration_minutes"],
         "stops": quote["stops"],
+        "connections": quote["connections"],
         "airline": quote["airline"],
         "flight_number": quote["flight_number"],
         "depart_date": date,
@@ -164,15 +165,14 @@ def _leg_airports(leg: dict) -> tuple[str, str]:
 
 
 def _transit_points(legs: list[dict]) -> list[str]:
-    points = [
-        airport
-        for leg in legs
-        if leg.get("mode") != "cash"
-        for arriving, departing in zip(
-            leg["detail"]["segments"], leg["detail"]["segments"][1:]
-        )
-        for airport in (arriving["dest"], departing["origin"])
-    ]
+    points: list[str] = []
+    for leg in legs:
+        if leg.get("mode") == "cash":
+            points.extend(leg["cash"]["connections"])  # airside stops inside a priced cash hop
+        else:
+            segments = leg["detail"]["segments"]
+            for arriving, departing in zip(segments, segments[1:]):
+                points.extend((arriving["dest"], departing["origin"]))
     for arriving, departing in zip(legs, legs[1:]):
         if departing["role"] == "return":
             continue

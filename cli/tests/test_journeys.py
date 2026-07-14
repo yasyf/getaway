@@ -412,6 +412,8 @@ def cash_quote(
     cabin: str = "economy",
     departs_local: str = "2026-09-08T09:00",
     arrives_local: str = "2026-09-08T12:00",
+    stops: int = 0,
+    connections: list[str] | None = None,
 ) -> dict:
     return {
         "gateway": gateway,
@@ -421,7 +423,8 @@ def cash_quote(
         "price": price,
         "currency": "USD",
         "duration_minutes": 180,
-        "stops": 0,
+        "stops": stops,
+        "connections": connections or [],
         "airline": "Japan Airlines",
         "flight_number": "JL1",
         "departs_local": departs_local,
@@ -741,6 +744,64 @@ def test_avoid_transit_gates_hybrid_boundary_with_named_reason(home: Path) -> No
             "reason": "transits NRT, which you avoid",
         }
     ]
+
+
+CASH_HOP_JID = "outbound:GW-NRT:J|onward:cash:NRT:OKA:2026-09-08:economy"
+
+
+def _write_cash_hop(slug: str, connections: list[str]) -> None:
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
+    write_shortlists(slug, [])
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        pairs=[bpair("NRT", "OKA")],
+        quotes=[cash_quote("NRT", "OKA", 120.0, stops=len(connections), connections=connections)],
+    )
+
+
+def test_cash_leg_carries_connections_on_leg_and_fit_facts(home: Path) -> None:
+    slug = make_trip(HYBRID_ONE_WAY)
+    _write_cash_hop(slug, ["FUK"])
+
+    doc = _run(slug)
+
+    journey = doc["journeys"][0]
+    cash_leg = journey["legs"][-1]
+    assert cash_leg["mode"] == "cash"
+    assert cash_leg["cash"]["connections"] == ["FUK"]
+    cash_facts = journey["fit_facts"]["legs"][-1]
+    assert cash_facts["mode"] == "cash"
+    assert cash_facts["connections"] == ["FUK"]
+
+
+def test_avoid_transit_gates_cash_leg_internal_connection(home: Path) -> None:
+    slug = make_trip(HYBRID_ONE_WAY)
+    prefs.set_patch({"avoid_transit": ["FUK"]})  # a stop inside the priced cash hop, not a boundary
+    _write_cash_hop(slug, ["FUK"])
+
+    doc = _run(slug)
+
+    assert doc["journeys"] == []
+    assert doc["gated"] == [
+        {"journey_id": CASH_HOP_JID, "reason": "transits FUK, which you avoid"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "avoided",
+    ["SFO", "OKA"],
+    ids=["journey-origin", "cash-onward-destination"],
+)
+def test_avoid_transit_ignores_cash_hop_endpoints(home: Path, avoided: str) -> None:
+    slug = make_trip(HYBRID_ONE_WAY)
+    prefs.set_patch({"avoid_transit": [avoided]})
+    _write_cash_hop(slug, ["FUK"])
+
+    doc = _run(slug)
+
+    assert doc["gated"] == []
+    assert [journey["id"] for journey in doc["journeys"]] == [CASH_HOP_JID]
 
 
 @pytest.mark.parametrize(

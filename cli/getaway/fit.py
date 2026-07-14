@@ -98,6 +98,7 @@ def _cash_leg_facts(leg: Leg) -> dict:
         "dest": leg["dest"],
         "elapsed_minutes": cash["duration_minutes"],
         "stops": cash["stops"],
+        "connections": cash["connections"],
         "airline": cash["airline"],
         "departs_local": cash["departs_local"],
         "arrives_local": cash["arrives_local"],

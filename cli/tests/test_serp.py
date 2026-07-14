@@ -62,12 +62,16 @@ def test_search_merges_sorts_and_normalizes_priced_options() -> None:
                 types.SimpleNamespace(
                     airline=types.SimpleNamespace(name="United Airlines"),
                     flight_number="UA 7951",
+                    departure_airport="NRT",
+                    arrival_airport="FUK",
                     departure_datetime=dt.datetime(2026, 9, 10, 7, 15),
                     arrival_datetime=dt.datetime(2026, 9, 10, 9, 25),
                 ),
                 types.SimpleNamespace(
                     airline=types.SimpleNamespace(name="All Nippon Airways"),
                     flight_number="NH 1207",
+                    departure_airport="FUK",
+                    arrival_airport="OKA",
                     departure_datetime=dt.datetime(2026, 9, 10, 10, 30),
                     arrival_datetime=dt.datetime(2026, 9, 10, 12, 15),
                 ),
@@ -82,6 +86,8 @@ def test_search_merges_sorts_and_normalizes_priced_options() -> None:
                 types.SimpleNamespace(
                     airline=types.SimpleNamespace(name="All Nippon Airways"),
                     flight_number="NH 463",
+                    departure_airport="NRT",
+                    arrival_airport="OKA",
                     departure_datetime=dt.datetime(2026, 9, 10, 8, 0),
                     arrival_datetime=dt.datetime(2026, 9, 10, 10, 55),
                 )
@@ -133,6 +139,8 @@ def test_search_normalizes_other_flights_only_response() -> None:
                 types.SimpleNamespace(
                     airline=types.SimpleNamespace(name="Japan Airlines"),
                     flight_number="JL 915",
+                    departure_airport="NRT",
+                    arrival_airport="OKA",
                     departure_datetime=dt.datetime(2026, 9, 10, 9, 0),
                     arrival_datetime=dt.datetime(2026, 9, 10, 11, 45),
                 )

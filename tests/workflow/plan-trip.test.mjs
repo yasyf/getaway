@@ -681,6 +681,20 @@ test('evidence: collectors fan out only for judged factors that own one, and ret
   assert.match(findCall(calls, 'assess').prompt, /trip artifact read my-trip evidence-verify\.json/);
 });
 
+test('evidence: the transit collector checks each cash-leg connection airport per-airport', async () => {
+  const state = mkState();
+  const { calls } = await runWorkflow(
+    ARGS,
+    baseScript(oneWayGraph(), state, { judgmentFactors: ['transit_risk'] }),
+  );
+
+  const transit = findCall(calls, 'evidence:transit').prompt;
+  assert.match(transit, /a cash onward leg carries its own airside connection airports/);
+  assert.match(transit, /Check every cash-leg connection airport individually/);
+  // A multi-stop cash hop gets one check per airport, never one blanket flag.
+  assert.match(transit, /never a single generic flag for a multi-stop hop/);
+});
+
 test('evidence: no judged factors means no collectors, and assess still runs', async () => {
   const state = mkState();
   const { calls, labels } = await runWorkflow(ARGS, baseScript(oneWayGraph(), state, { judgmentFactors: [] }));

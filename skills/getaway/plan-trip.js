@@ -228,7 +228,7 @@ const COLLECTOR_PROMPTS = {
     `Flag transit-visa and entry risk against the traveler's documents — WebSearch only, zero seats.aero quota, plus the getaway commands named here.\n` +
     `Read the traveler documents (passports, residency, standing visas):\n${CLI} prefs show\n` +
     `Read the composed journeys:\n${CLI} trip artifact read ${slug} expand.json\n` +
-    `Within one award leg, the origin of every segment after the first is a same-ticket airside connection. Where consecutive legs meet — an award gateway feeding a cash or separate-award onward leg — the meeting airport is a landside self-transfer, an entry rather than airside transit.\n` +
+    `Within one award leg, the origin of every segment after the first is a same-ticket airside connection; a cash onward leg carries its own airside connection airports in its connections list. Check every cash-leg connection airport individually — never a single generic flag for a multi-stop hop. Where consecutive legs meet — an award gateway feeding a cash or separate-award onward leg — the meeting airport is a landside self-transfer, an entry rather than airside transit.\n` +
     `For each unique connection airport determine transit (airside) visa risk; for each self-transfer airport determine entry risk. Prefer official government and airport sources.\n` +
     `Shape transit: an array of {airport, kind ("transit" or "entry"), risk ("none", "possible", or "required"), note}.\n` +
     `Write it as {"transit": [...]} via this command, feeding the JSON on standard input:\n${CLI} trip artifact write ${slug} evidence-transit.json\n` +

@@ -124,7 +124,9 @@ def _cash_onward(
     dest: str = "OKA",
     dep: str = "2026-09-08T09:00:00",
     arr: str = "2026-09-08T12:00:00",
+    connections: list[str] | None = None,
 ) -> dict:
+    conns = connections or []
     return {
         "role": "onward",
         "mode": "cash",
@@ -132,12 +134,22 @@ def _cash_onward(
         "dest": dest,
         "cash": {
             "duration_minutes": 180,
-            "stops": 0,
+            "stops": len(conns),
+            "connections": conns,
             "airline": "JL",
             "departs_local": dep,
             "arrives_local": arr,
         },
     }
+
+
+def test_cash_leg_facts_expose_connections_per_airport() -> None:
+    legs = [_outbound(), _cash_onward(connections=["FUK"])]
+    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    cash_facts = facts["legs"][-1]
+    assert cash_facts["mode"] == "cash"
+    assert cash_facts["stops"] == 1
+    assert cash_facts["connections"] == ["FUK"]
 
 
 def test_away_nights_uses_cash_leg_real_arrival_clock() -> None:
