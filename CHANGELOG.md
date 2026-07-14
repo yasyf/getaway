@@ -142,11 +142,10 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   messaging and a per-host retry ledger so no host silently drops.
 - A real finalist-board demo in the README: `docs/assets/board.webp`,
   a cc-present render of `docs/scripts/demo-board.json` — composed from
-  a live planning run of the canonical warm-beachy ask (neutral
-  profile, live seats.aero data, real assess verdicts), carrying the
-  run's all-business journeys directly since rank's cut cannot yet
-  surface them past cheaper cabins. `docs/scripts/demo.sh` regenerates
-  the capture.
+  a live planning run of the canonical warm-beachy ask on the fixed
+  engine (funded profile, live seats.aero data, real assess verdicts),
+  carrying rank's own output. `docs/scripts/demo.sh` regenerates the
+  capture.
 - Held credit cards: a `cards` preference (`{issuer, product}` slugs
   validated against the new `card_products.json` registry and
   `registry card-products`), onboarding detection from Gmail and the

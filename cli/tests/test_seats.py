@@ -157,6 +157,15 @@ def test_trip_detail_empty_data_raises_no_data(client: SeatsClient) -> None:
 
 
 @respx.mock
+def test_trip_detail_null_data_raises_no_data(client: SeatsClient) -> None:
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
+        return_value=httpx.Response(200, json={"data": None, "booking_links": []})
+    )
+    with pytest.raises(NoData):
+        client.trip_detail("AAA", "J")
+
+
+@respx.mock
 def test_trip_detail_normalizes_itinerary(client: SeatsClient) -> None:
     respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
         return_value=httpx.Response(200, json=load("trip_detail.json"))

@@ -1,10 +1,10 @@
 {
  "version": 1,
- "title": "Warm & beachy in business \u2014 finalists",
- "intro": "Three business-class round trips from the west coast, judged per your ask. Tap an option to pick, or leave feedback under any card.",
+ "title": "Warm & beachy week — rank's live finalists",
+ "intro": "Rank's own cut from a live run on the fixed engine: six economy round trips — Papeete twice, Rome four ways — plus its one notable stretch, a business-cabin outbound to Copenhagen. No finalist clears your business preference; the stretch clears it on the outbound only. Pick a journey, or leave feedback under any card. Two cards sit out the picker: their taxes split across two currencies, and a picker row carries one.",
  "submit": {
   "label": "Send my pick",
-  "note": "I'll pull taxes, transfer paths, and booking steps for the journey you choose."
+  "note": "I'll pull transfer paths and booking steps for the journey you choose."
  },
  "blocks": [
   {
@@ -13,333 +13,531 @@
    "label": "Which journey should I book?",
    "options": [
     {
-     "optionId": "outbound:36TqmCSpgKDdgFrg25bly4nMDeK:J|return:36TqmZ0GAKSrhR6dOrYo6EyNGuw:J",
+     "optionId": "outbound:30SNM04ZOCnJrsIjNI0XRcma56F:Y|return:30U9FVAuOl1ahspxCRsXT1SOS1X:Y",
      "origin": "LAX",
-     "destination": "CMN",
+     "destination": "PPT",
      "date": "2026-07-14",
-     "program": "American AAdvantage",
-     "miles": 115000,
+     "program": "Alaska Atmos Rewards",
+     "miles": 60000,
      "taxes": {
-      "amount": 14053,
+      "amount": 10633,
       "currency": "USD"
      },
-     "cabin": "business"
+     "cabin": "economy"
     },
     {
-     "optionId": "outbound:36Tqn6RPe725AlsnANzKFEFOJGq:J|return:36TqmZ0GAKSrhR6dOrYo6EyNGuw:J",
-     "origin": "LAX",
-     "destination": "CMN",
+     "optionId": "outbound:35PfltcwufvRAGyP1VZPMe0cCqw:Y|return:35PfnWkoZampvRg9qMWiUMQb58N:Y",
+     "origin": "SEA",
+     "destination": "FCO",
+     "date": "2026-07-13",
+     "program": "Alaska Atmos Rewards",
+     "miles": 60000,
+     "taxes": {
+      "amount": 6923,
+      "currency": "USD"
+     },
+     "cabin": "economy"
+    },
+    {
+     "optionId": "outbound:35PfltcwufvRAGyP1VZPMe0cCqw:Y|return:35Pfnv4ks1t3Xw0gk4KT5IBIho7:Y",
+     "origin": "SEA",
+     "destination": "FCO",
+     "date": "2026-07-13",
+     "program": "Alaska Atmos Rewards",
+     "miles": 60000,
+     "taxes": {
+      "amount": 6923,
+      "currency": "USD"
+     },
+     "cabin": "economy"
+    },
+    {
+     "optionId": "outbound:35PfmIXirbegNuy2zOJO4OHPx2H:Y|return:35PfnWkoZampvRg9qMWiUMQb58N:Y",
+     "origin": "SEA",
+     "destination": "FCO",
      "date": "2026-07-15",
-     "program": "Alaska + AAdvantage",
-     "miles": 167500,
+     "program": "Alaska Atmos Rewards",
+     "miles": 60000,
      "taxes": {
-      "amount": 17033,
+      "amount": 6923,
       "currency": "USD"
      },
-     "cabin": "business"
+     "cabin": "economy"
     },
     {
-     "optionId": "outbound:3AMTvMYdIuT4QrAbIb8CAUtrdI5:J|return:3AMTf4u9vTkQmt0oua7CIHQZXSt:J",
-     "origin": "LAX",
-     "destination": "CAI",
-     "date": "2026-07-19",
-     "program": "Air Canada Aeroplan",
-     "miles": 180000,
+     "optionId": "outbound:35PfmVuJEzLcQEtD6jLr4s1tAuG:Y|return:35PfnWkoZampvRg9qMWiUMQb58N:Y",
+     "origin": "SEA",
+     "destination": "FCO",
+     "date": "2026-07-14",
+     "program": "Alaska Atmos Rewards",
+     "miles": 60000,
      "taxes": {
-      "amount": 32510,
-      "currency": "CAD"
+      "amount": 6923,
+      "currency": "USD"
      },
-     "cabin": "business"
+     "cabin": "economy"
     }
    ]
   },
   {
-   "id": "card-aa-cmn",
+   "id": "card-ppt-alaska",
    "type": "card",
-   "title": "1 \u00b7 Casablanca \u2014 115,000 AAdvantage miles round trip",
+   "title": "1 · Papeete — 60,000 Alaska miles round trip, economy",
    "children": [
     {
-     "id": "itin-aa-cmn-outbound",
-     "type": "getaway.itinerary",
-     "program": "American AAdvantage",
-     "miles": 57500,
-     "taxes": {
-      "amount": 3560,
-      "currency": "USD"
-     },
-     "remainingSeats": 0,
-     "bookingLink": {
-      "label": "Book via American AAdvantage",
-      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=LAX&to=CMN&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-14&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-11T18:55:29.307472Z",
-     "totalDurationMinutes": 1085,
-     "segments": [
-      {
-       "flightNumber": "AA136",
-       "origin": "LAX",
-       "destination": "LHR",
-       "departsAt": "2026-07-14T18:10:00",
-       "arrivesAt": "2026-07-15T12:45:00",
-       "cabin": "business",
-       "aircraft": "Boeing 777-300ER",
-       "durationMinutes": 635
-      },
-      {
-       "flightNumber": "AT803",
-       "origin": "LGW",
-       "destination": "CMN",
-       "departsAt": "2026-07-15T16:50:00",
-       "arrivesAt": "2026-07-15T20:15:00",
-       "cabin": "business",
-       "aircraft": "Boeing 737-800",
-       "durationMinutes": 205
-      }
-     ]
-    },
-    {
-     "id": "itin-aa-cmn-return",
-     "type": "getaway.itinerary",
-     "program": "American AAdvantage",
-     "miles": 57500,
-     "taxes": {
-      "amount": 10493,
-      "currency": "USD"
-     },
-     "remainingSeats": 0,
-     "bookingLink": {
-      "label": "Book via American AAdvantage",
-      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=CMN&to=LAX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-18&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-11T19:00:20.555313Z",
-     "totalDurationMinutes": 1253,
-     "segments": [
-      {
-       "flightNumber": "AT972",
-       "origin": "CMN",
-       "destination": "MAD",
-       "departsAt": "2026-07-18T09:50:00",
-       "arrivesAt": "2026-07-18T12:35:00",
-       "cabin": "business",
-       "aircraft": "Boeing 737-800",
-       "durationMinutes": 105
-      },
-      {
-       "flightNumber": "AA741",
-       "origin": "MAD",
-       "destination": "PHL",
-       "departsAt": "2026-07-18T15:25:00",
-       "arrivesAt": "2026-07-18T17:40:00",
-       "cabin": "business",
-       "aircraft": "Boeing 787-8",
-       "durationMinutes": 495
-      },
-      {
-       "flightNumber": "AA2197",
-       "origin": "PHL",
-       "destination": "LAX",
-       "departsAt": "2026-07-18T19:40:00",
-       "arrivesAt": "2026-07-18T22:43:00",
-       "cabin": "business",
-       "aircraft": "Airbus A321neo/Lr/Xlr",
-       "durationMinutes": 363
-      }
-     ]
-    },
-    {
-     "id": "ev-aa-cmn",
-     "type": "markdown",
-     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 the outbound's 4h05m London connection changes airports, LHR arrival to LGW departure; the return's 2h50m MAD and 2h00m PHL are comfortable.\n- \u2705 **Seat** \u2014 lie-flat business on every segment, both directions.\n- \u2705 **Window** \u2014 departs 7/14, inside your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 4 days, 3 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
-    }
-   ]
-  },
-  {
-   "id": "card-qr-cmn",
-   "type": "card",
-   "title": "2 \u00b7 Casablanca via Doha \u2014 Qatar business out, 167,500 miles",
-   "children": [
-    {
-     "id": "itin-qr-cmn-outbound",
+     "id": "itin-ppt-alaska-outbound",
      "type": "getaway.itinerary",
      "program": "Alaska Atmos Rewards",
-     "miles": 110000,
+     "miles": 30000,
      "taxes": {
-      "amount": 6540,
+      "amount": 2560,
       "currency": "USD"
      },
-     "remainingSeats": 1,
+     "remainingSeats": 9,
      "bookingLink": {
       "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=LAX&D=CMN&OD=2026-07-15&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+      "url": "https://www.alaskaair.com/search/results?O=LAX&D=PPT&OD=2026-07-14&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
      },
-     "updatedAt": "2026-07-14T01:58:18.523006Z",
-     "totalDurationMinutes": 2280,
+     "updatedAt": "2026-07-14T20:40:57.129974Z",
+     "totalDurationMinutes": 490,
      "segments": [
       {
-       "flightNumber": "QR740",
+       "flightNumber": "TN7",
        "origin": "LAX",
-       "destination": "DOH",
-       "departsAt": "2026-07-15T16:20:00",
-       "arrivesAt": "2026-07-16T17:50:00",
-       "cabin": "business",
-       "aircraft": "Airbus A350-1000",
-       "durationMinutes": 930
-      },
-      {
-       "flightNumber": "QR1395",
-       "origin": "DOH",
-       "destination": "CMN",
-       "departsAt": "2026-07-17T08:30:00",
-       "arrivesAt": "2026-07-17T14:20:00",
-       "cabin": "business",
-       "aircraft": "Boeing 777-300ER",
-       "durationMinutes": 470
+       "destination": "PPT",
+       "departsAt": "2026-07-14T16:20:00",
+       "arrivesAt": "2026-07-14T21:30:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 490
       }
      ]
     },
     {
-     "id": "itin-qr-cmn-return",
+     "id": "itin-ppt-alaska-return",
      "type": "getaway.itinerary",
-     "program": "American AAdvantage",
-     "miles": 57500,
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
      "taxes": {
-      "amount": 10493,
+      "amount": 8073,
       "currency": "USD"
      },
-     "remainingSeats": 0,
+     "remainingSeats": 8,
      "bookingLink": {
-      "label": "Book via American AAdvantage",
-      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=CMN&to=LAX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-18&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=PPT&D=LAX&OD=2026-07-15&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
      },
-     "updatedAt": "2026-07-11T19:00:20.555313Z",
-     "totalDurationMinutes": 1253,
+     "updatedAt": "2026-07-14T16:17:40.249669Z",
+     "totalDurationMinutes": 471,
      "segments": [
       {
-       "flightNumber": "AT972",
-       "origin": "CMN",
-       "destination": "MAD",
-       "departsAt": "2026-07-18T09:50:00",
-       "arrivesAt": "2026-07-18T12:35:00",
-       "cabin": "business",
-       "aircraft": "Boeing 737-800",
-       "durationMinutes": 105
-      },
-      {
-       "flightNumber": "AA741",
-       "origin": "MAD",
-       "destination": "PHL",
-       "departsAt": "2026-07-18T15:25:00",
-       "arrivesAt": "2026-07-18T17:40:00",
-       "cabin": "business",
-       "aircraft": "Boeing 787-8",
-       "durationMinutes": 495
-      },
-      {
-       "flightNumber": "AA2197",
-       "origin": "PHL",
+       "flightNumber": "TN102",
+       "origin": "PPT",
        "destination": "LAX",
-       "departsAt": "2026-07-18T19:40:00",
-       "arrivesAt": "2026-07-18T22:43:00",
-       "cabin": "business",
-       "aircraft": "Airbus A321neo/Lr/Xlr",
-       "durationMinutes": 363
+       "departsAt": "2026-07-15T23:59:00",
+       "arrivesAt": "2026-07-16T10:50:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 471
       }
      ]
     },
     {
-     "id": "ev-qr-cmn",
+     "id": "ev-ppt-alaska",
      "type": "markdown",
-     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 an overnight 14h40m gap at DOH outbound is dead-long for a minimize-style traveler; the return's MAD and PHL stops are comfortable.\n- \u2705 **Seat** \u2014 Qsuites on the A350-1000 to DOH; the DOH\u2013CMN 777-300ER carries Qsuites on most frames \u2014 verify at booking.\n- \u2705 **Window** \u2014 departs 7/15, inside your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 3 days, 4 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 60,000 Alaska miles against your Alaska balance; covered.\n- ✅ **Destination** — promote: \"trip guidance names Tahiti prime dry season - the warm dry-season beach fit the ask wants\".\n- ⚠️ **Cabin** — economy both directions; the run's stretch note says every finalist misses the business preference."
     }
    ]
   },
   {
-   "id": "card-ac-cai",
+   "id": "card-ppt-qantas",
    "type": "card",
-   "title": "3 \u00b7 Cairo \u2014 180,000 Aeroplan miles, A380 home",
+   "title": "2 · Papeete — Alaska out, Qantas home, 59,000 miles, economy",
    "children": [
     {
-     "id": "itin-ac-cai-outbound",
+     "id": "itin-ppt-qantas-outbound",
      "type": "getaway.itinerary",
-     "program": "Air Canada Aeroplan",
-     "miles": 90000,
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
      "taxes": {
-      "amount": 11640,
-      "currency": "CAD"
+      "amount": 2560,
+      "currency": "USD"
      },
-     "remainingSeats": 1,
+     "remainingSeats": 9,
      "bookingLink": {
-      "label": "Book via Air Canada Aeroplan",
-      "url": "https://www.aircanada.com/aeroplan/redeem/availability/outbound?org0=LAX&dest0=CAI&departureDate0=2026-07-19&lang=en-CA&tripType=O&ADT=1&YTH=0&CHD=0&INF=0&INS=0&marketCode=INT"
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=LAX&D=PPT&OD=2026-07-14&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
      },
-     "updatedAt": "2026-07-13T21:38:05.587781Z",
-     "totalDurationMinutes": 1085,
+     "updatedAt": "2026-07-14T20:40:57.129974Z",
+     "totalDurationMinutes": 490,
      "segments": [
       {
-       "flightNumber": "LO24",
+       "flightNumber": "TN7",
        "origin": "LAX",
-       "destination": "WAW",
-       "departsAt": "2026-07-19T22:05:00",
-       "arrivesAt": "2026-07-20T18:40:00",
-       "cabin": "business",
+       "destination": "PPT",
+       "departsAt": "2026-07-14T16:20:00",
+       "arrivesAt": "2026-07-14T21:30:00",
+       "cabin": "economy",
        "aircraft": "Boeing 787-9",
-       "durationMinutes": 695
-      },
-      {
-       "flightNumber": "LO147",
-       "origin": "WAW",
-       "destination": "CAI",
-       "departsAt": "2026-07-20T21:15:00",
-       "arrivesAt": "2026-07-21T02:10:00",
-       "cabin": "business",
-       "aircraft": "Boeing 737-800",
-       "durationMinutes": 235
+       "durationMinutes": 490
       }
      ]
     },
     {
-     "id": "itin-ac-cai-return",
+     "id": "leg-ppt-qantas-return",
+     "type": "markdown",
+     "md": "**Return — Qantas Frequent Flyer** · 29,000 miles + 1,290,000 XPF taxes · QF3815 PPT to LAX, departs 2026-07-15 23:59, arrives 2026-07-16 10:50 local · economy · 471 min nonstop · 1 seat left · availability updated 2026-07-14T07:03:25Z · [Book via Qantas Frequent Flyer](https://www.qantas.com/?departureAirportCode=PPT&arrivalAirportCode=LAX&travelClass=ECO&tripType=O&usePoints=true&adults=1&departureDate=2026-07-15&utm_source=seatsaero)\n\nRendered as text: the artifact carries no aircraft for QF3815, and an itinerary card requires one."
+    },
+    {
+     "id": "ev-ppt-qantas",
+     "type": "markdown",
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ℹ️ **Affordability** — neutral: Alaska covers the 30,000 outbound (balance on file covers it); Qantas needs 29,000 against a 0 balance, not covered.\n- ✅ **Destination** — promote: \"trip guidance names Tahiti prime dry season - the warm dry-season beach fit the ask wants\".\n- ⚠️ **Cabin** — economy both directions.\n\nThis journey sits out the picker: its taxes split USD (outbound) and XPF (return), and a picker row carries one currency."
+    }
+   ]
+  },
+  {
+   "id": "card-fco-0713x0716",
+   "type": "card",
+   "title": "3 · Rome — 60,000 Alaska miles, Jul 13 out, Jul 16 home, economy",
+   "children": [
+    {
+     "id": "itin-fco-0713x0716-outbound",
      "type": "getaway.itinerary",
-     "program": "Air Canada Aeroplan",
-     "miles": 90000,
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
      "taxes": {
-      "amount": 20870,
-      "currency": "CAD"
+      "amount": 560,
+      "currency": "USD"
      },
-     "remainingSeats": 3,
+     "remainingSeats": 9,
      "bookingLink": {
-      "label": "Book via Air Canada Aeroplan",
-      "url": "https://www.aircanada.com/aeroplan/redeem/availability/outbound?org0=CAI&dest0=LAX&departureDate0=2026-07-21&lang=en-CA&tripType=O&ADT=1&YTH=0&CHD=0&INF=0&INS=0&marketCode=INT"
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=SEA&D=FCO&OD=2026-07-13&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
      },
-     "updatedAt": "2026-07-13T09:20:36.843413Z",
-     "totalDurationMinutes": 1280,
+     "updatedAt": "2026-07-13T19:34:50.839496Z",
+     "totalDurationMinutes": 645,
      "segments": [
       {
-       "flightNumber": "LH587",
-       "origin": "CAI",
+       "flightNumber": "AS180",
+       "origin": "SEA",
+       "destination": "FCO",
+       "departsAt": "2026-07-13T17:30:00",
+       "arrivesAt": "2026-07-14T13:15:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 645
+      }
+     ]
+    },
+    {
+     "id": "itin-fco-0713x0716-return",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 6363,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=FCO&D=SEA&OD=2026-07-16&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T20:49:49.505552Z",
+     "totalDurationMinutes": 675,
+     "segments": [
+      {
+       "flightNumber": "AS181",
+       "origin": "FCO",
+       "destination": "SEA",
+       "departsAt": "2026-07-16T15:25:00",
+       "arrivesAt": "2026-07-16T17:40:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 675
+      }
+     ]
+    },
+    {
+     "id": "ev-fco-0713x0716",
+     "type": "markdown",
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 60,000 Alaska miles against your Alaska balance; covered.\n- ⚠️ **Cabin** — economy both directions."
+    }
+   ]
+  },
+  {
+   "id": "card-fco-0713x0715",
+   "type": "card",
+   "title": "4 · Rome — 60,000 Alaska miles, Jul 13 out, Jul 15 home, economy",
+   "children": [
+    {
+     "id": "itin-fco-0713x0715-outbound",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 560,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=SEA&D=FCO&OD=2026-07-13&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-13T19:34:50.839496Z",
+     "totalDurationMinutes": 645,
+     "segments": [
+      {
+       "flightNumber": "AS180",
+       "origin": "SEA",
+       "destination": "FCO",
+       "departsAt": "2026-07-13T17:30:00",
+       "arrivesAt": "2026-07-14T13:15:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 645
+      }
+     ]
+    },
+    {
+     "id": "itin-fco-0713x0715-return",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 6363,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=FCO&D=SEA&OD=2026-07-15&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T17:27:31.898431Z",
+     "totalDurationMinutes": 675,
+     "segments": [
+      {
+       "flightNumber": "AS181",
+       "origin": "FCO",
+       "destination": "SEA",
+       "departsAt": "2026-07-15T15:25:00",
+       "arrivesAt": "2026-07-15T17:40:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 675
+      }
+     ]
+    },
+    {
+     "id": "ev-fco-0713x0715",
+     "type": "markdown",
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 60,000 Alaska miles against your Alaska balance; covered.\n- ⚠️ **Cabin** — economy both directions."
+    }
+   ]
+  },
+  {
+   "id": "card-fco-0715x0716",
+   "type": "card",
+   "title": "5 · Rome — 60,000 Alaska miles, Jul 15 out, Jul 16 home, economy",
+   "children": [
+    {
+     "id": "itin-fco-0715x0716-outbound",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 560,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=SEA&D=FCO&OD=2026-07-15&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T20:35:15.732414Z",
+     "totalDurationMinutes": 645,
+     "segments": [
+      {
+       "flightNumber": "AS180",
+       "origin": "SEA",
+       "destination": "FCO",
+       "departsAt": "2026-07-15T17:30:00",
+       "arrivesAt": "2026-07-16T13:15:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 645
+      }
+     ]
+    },
+    {
+     "id": "itin-fco-0715x0716-return",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 6363,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=FCO&D=SEA&OD=2026-07-16&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T20:49:49.505552Z",
+     "totalDurationMinutes": 675,
+     "segments": [
+      {
+       "flightNumber": "AS181",
+       "origin": "FCO",
+       "destination": "SEA",
+       "departsAt": "2026-07-16T15:25:00",
+       "arrivesAt": "2026-07-16T17:40:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 675
+      }
+     ]
+    },
+    {
+     "id": "ev-fco-0715x0716",
+     "type": "markdown",
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 60,000 Alaska miles against your Alaska balance; covered.\n- ⚠️ **Cabin** — economy both directions."
+    }
+   ]
+  },
+  {
+   "id": "card-fco-0714x0716",
+   "type": "card",
+   "title": "6 · Rome — 60,000 Alaska miles, Jul 14 out, Jul 16 home, economy",
+   "children": [
+    {
+     "id": "itin-fco-0714x0716-outbound",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 560,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=SEA&D=FCO&OD=2026-07-14&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T18:04:42.878412Z",
+     "totalDurationMinutes": 645,
+     "segments": [
+      {
+       "flightNumber": "AS180",
+       "origin": "SEA",
+       "destination": "FCO",
+       "departsAt": "2026-07-14T17:30:00",
+       "arrivesAt": "2026-07-15T13:15:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 645
+      }
+     ]
+    },
+    {
+     "id": "itin-fco-0714x0716-return",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 30000,
+     "taxes": {
+      "amount": 6363,
+      "currency": "USD"
+     },
+     "remainingSeats": 9,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=FCO&D=SEA&OD=2026-07-16&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T20:49:49.505552Z",
+     "totalDurationMinutes": 675,
+     "segments": [
+      {
+       "flightNumber": "AS181",
+       "origin": "FCO",
+       "destination": "SEA",
+       "departsAt": "2026-07-16T15:25:00",
+       "arrivesAt": "2026-07-16T17:40:00",
+       "cabin": "economy",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 675
+      }
+     ]
+    },
+    {
+     "id": "ev-fco-0714x0716",
+     "type": "markdown",
+     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 60,000 Alaska miles against your Alaska balance; covered.\n- ⚠️ **Cabin** — economy both directions."
+    }
+   ]
+  },
+  {
+   "id": "card-stretch-cph",
+   "type": "card",
+   "title": "7 · Stretch · Copenhagen — business out on United, economy home on Delta",
+   "children": [
+    {
+     "id": "itin-stretch-cph-outbound",
+     "type": "getaway.itinerary",
+     "program": "United MileagePlus",
+     "miles": 88000,
+     "taxes": {
+      "amount": 4850,
+      "currency": "USD"
+     },
+     "remainingSeats": 2,
+     "bookingLink": {
+      "label": "Book via United MileagePlus",
+      "url": "https://www.united.com/en/us/fsr/choose-flights?f=SFO&t=CPH&d=2026-07-13&sc=7&st=bestmatches&cbm=-1&cbm2=-1&ft=0&cp=0&tt=1&at=1&rm=1&act=0&px=1&taxng=1&clm=7&tqp=A&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-10T19:26:01.172664Z",
+     "totalDurationMinutes": 1040,
+     "segments": [
+      {
+       "flightNumber": "LH459",
+       "origin": "SFO",
        "destination": "MUC",
-       "departsAt": "2026-07-21T03:55:00",
-       "arrivesAt": "2026-07-21T07:00:00",
+       "departsAt": "2026-07-13T21:05:00",
+       "arrivesAt": "2026-07-14T17:10:00",
+       "cabin": "business",
+       "aircraft": "Airbus A350-900",
+       "durationMinutes": 665
+      },
+      {
+       "flightNumber": "LX1107",
+       "origin": "MUC",
+       "destination": "ZRH",
+       "departsAt": "2026-07-14T19:05:00",
+       "arrivesAt": "2026-07-14T20:05:00",
        "cabin": "business",
        "aircraft": "Airbus A320neo",
-       "durationMinutes": 245
+       "durationMinutes": 60
       },
       {
-       "flightNumber": "LH452",
-       "origin": "MUC",
-       "destination": "LAX",
-       "departsAt": "2026-07-21T12:15:00",
-       "arrivesAt": "2026-07-21T15:15:00",
+       "flightNumber": "LX1278",
+       "origin": "ZRH",
+       "destination": "CPH",
+       "departsAt": "2026-07-14T21:40:00",
+       "arrivesAt": "2026-07-14T23:25:00",
        "cabin": "business",
-       "aircraft": "Airbus A380-800",
-       "durationMinutes": 720
+       "aircraft": "Airbus A320",
+       "durationMinutes": 105
       }
      ]
     },
     {
-     "id": "ev-ac-cai",
+     "id": "leg-stretch-cph-return",
      "type": "markdown",
-     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 2h35m at WAW outbound is comfortable; 5h15m at MUC on the return lands in the dead-time zone.\n- \u2705 **Seat** \u2014 787-9 out, A380-800 home; business on every segment.\n- \u26a0\ufe0f **Window** \u2014 departs 7/19, 3 days past your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 2 days, 5 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
+     "md": "**Return — Delta SkyMiles** · 31,000 miles + 67,000 DKK taxes · economy · 7 seats · availability updated 2026-07-14T16:59:12Z · DL219 CPH to JFK, 2026-07-15 09:00 to 11:40 local, Boeing 767-300, then DL688 JFK to SEA, 2026-07-15 19:25 to 23:08 local, Airbus A320 · 1,388 min total with a 465-minute JFK stop · [Book via Delta SkyMiles](https://www.delta.com/flight-search/search?action=findFlights&searchByCabin=true&deltaOnlySearch=false&deltaOnly=off&go=Find%20Flights&tripType=ONE_WAY&passengerInfo=ADT:1&priceSchedule=price&awardTravel=true&originCity=CPH&destinationCity=SEA&departureDate=07/15/2026&returnDate=&forceMiles=true&utm_source=seatsaero)\n\nRendered as text: the artifact carries zero-length per-segment durations for this leg, and an itinerary card requires real ones."
+    },
+    {
+     "id": "ev-stretch-cph",
+     "type": "markdown",
+     "md": "**Why it boarded** — the run's own note, verbatim: \"clears your business cabin preference — every finalist misses it\"\n\n**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote.\n- ✅ **Trip credits** — promote.\n- ⚠️ **The catch** — business on all three outbound segments; the Delta return is economy, so the preference clears on the outbound only.\n\nThis journey sits out the picker: its taxes split USD (outbound) and DKK (return), and a picker row carries one currency."
     }
    ]
   }

@@ -97,7 +97,9 @@ def _trip_in_cabin(trip: Row, cabin: str) -> bool:
 
 
 def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
-    matching = [trip for trip in payload["data"] if _trip_in_cabin(trip, cabin)]
+    # data is null when a program reports no trip data for the availability (documented);
+    # read it as no itinerary, exactly like an empty list or a cabin miss.
+    matching = [trip for trip in (payload["data"] or []) if _trip_in_cabin(trip, cabin)]
     if not matching:
         raise NoData(f"no {cabin} itinerary for {availability_id}")
     trip = min(matching, key=lambda t: t["MileageCost"])
