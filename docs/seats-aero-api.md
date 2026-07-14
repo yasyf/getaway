@@ -225,8 +225,9 @@ cached endpoints or `disable_filters` on live.
 
 Type quirks to handle: `MileageCost` is a string in Availability objects but
 an integer in trips. Taxes are integers in minor currency units with a
-`TaxesCurrency` field. Some programs report seat counts of `0` or return no
-trip data.
+`TaxesCurrency` field — but some programs omit `TaxesCurrency` entirely while
+still reporting `TotalTaxes` (observed live on `american` trips, 2026-07-13).
+Some programs report seat counts of `0` or return no trip data.
 
 ## Sources (mileage programs)
 

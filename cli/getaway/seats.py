@@ -114,7 +114,8 @@ def _normalize_trip(availability_id: str, payload: Row, cabin: str) -> Row:
         "id": availability_id,
         "mileage": trip["MileageCost"],
         "total_taxes": trip["TotalTaxes"],
-        "taxes_currency": trip["TaxesCurrency"],
+        # Absent on some programs (observed live: american, 2026-07-13) — None means unreported.
+        "taxes_currency": trip.get("TaxesCurrency"),
         "remaining_seats": trip["RemainingSeats"],
         "total_duration": trip["TotalDuration"],
         "segments": [_normalize_segment(seg) for seg in segments],

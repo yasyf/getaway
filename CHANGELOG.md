@@ -142,6 +142,10 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
 ### Fixed
 - Region pseudo-code origins now expand against both the packaged airport floor and origins observed in search sweeps, preventing valid shortlist rows from being dropped.
 - Cached `/search` teaser seat counts no longer masquerade as bookable: sufficiency reads the live-expanded row, and stale cached empties render "unverified" instead of "no space".
+- `/trips/{id}` normalization tolerates programs that omit
+  `TaxesCurrency` while reporting `TotalTaxes` (observed live on
+  `american`): `taxes_currency` is `None` when unreported instead of a
+  `KeyError` crashing `expand run`.
 
 ## [1.0.0] - 2026-07-13
 

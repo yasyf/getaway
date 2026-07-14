@@ -179,6 +179,19 @@ def test_trip_detail_normalizes_itinerary(client: SeatsClient) -> None:
 
 
 @respx.mock
+def test_trip_detail_missing_taxes_currency_normalizes_to_none(client: SeatsClient) -> None:
+    # american omits TaxesCurrency entirely (observed live 2026-07-13); TotalTaxes still arrives.
+    trip = _trip(57500, "business")
+    del trip["TaxesCurrency"]
+    respx.get(f"{seats.BASE_URL}/trips/AAA").mock(
+        return_value=httpx.Response(200, json=_trip_payload(trip))
+    )
+    detail = client.trip_detail("AAA", "J")
+    assert detail["total_taxes"] == 100
+    assert detail["taxes_currency"] is None
+
+
+@respx.mock
 def test_availability_projects_cabins_and_records_quota(
     client: SeatsClient, tmp_store: store.Store
 ) -> None:
