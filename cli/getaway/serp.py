@@ -90,6 +90,6 @@ def search(
         ) from None
 
     payload = response.json()
-    options = payload["best_flights"] + payload["other_flights"]
+    options = payload.get("best_flights", []) + payload.get("other_flights", [])
     results = [_normalize_option(option) for option in options if option.get("price") is not None]
     return sorted(results, key=lambda result: result.price)

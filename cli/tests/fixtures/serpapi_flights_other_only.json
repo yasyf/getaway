@@ -1,0 +1,25 @@
+{
+  "other_flights": [
+    {
+      "flights": [
+        {
+          "departure_airport": {
+            "name": "Narita International Airport",
+            "id": "NRT",
+            "time": "2026-09-10 09:00"
+          },
+          "arrival_airport": {
+            "name": "Naha Airport",
+            "id": "OKA",
+            "time": "2026-09-10 11:45"
+          },
+          "airline": "Japan Airlines",
+          "flight_number": "JL 915"
+        }
+      ],
+      "total_duration": 165,
+      "layovers": [],
+      "price": 320
+    }
+  ]
+}

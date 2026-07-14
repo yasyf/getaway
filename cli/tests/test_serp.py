@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import traceback
 import types
 from pathlib import Path
 
@@ -103,6 +104,44 @@ def test_search_zero_results_returns_empty_without_leaking_key() -> None:
 
 
 @respx.mock
+def test_search_neither_array_present_returns_empty() -> None:
+    # SerpApi documents both best_flights and other_flights as absent, not just empty, on
+    # a route with zero results — payload.get(..., []) must not KeyError here.
+    respx.get(serp.BASE_URL).mock(return_value=httpx.Response(200, json={}))
+
+    result = serp.search("NRT", "OKA", "2026-09-10", "economy", api_key=API_KEY)
+
+    assert result == []
+
+
+@respx.mock
+def test_search_normalizes_other_flights_only_response() -> None:
+    # SerpApi can return priced options only in other_flights, with best_flights absent entirely.
+    respx.get(serp.BASE_URL).mock(
+        return_value=httpx.Response(200, json=load("serpapi_flights_other_only.json"))
+    )
+
+    results = serp.search("NRT", "OKA", "2026-09-10", "economy", api_key=API_KEY)
+
+    assert results == [
+        types.SimpleNamespace(
+            price=320,
+            currency="USD",
+            duration=165,
+            stops=0,
+            legs=[
+                types.SimpleNamespace(
+                    airline=types.SimpleNamespace(name="Japan Airlines"),
+                    flight_number="JL 915",
+                    departure_datetime=dt.datetime(2026, 9, 10, 9, 0),
+                    arrival_datetime=dt.datetime(2026, 9, 10, 11, 45),
+                )
+            ],
+        )
+    ]
+
+
+@respx.mock
 def test_search_401_raises_auth_error_without_leaking_key() -> None:
     respx.get(serp.BASE_URL).mock(
         return_value=httpx.Response(401, json={"error": "Invalid API key"})
@@ -113,6 +152,8 @@ def test_search_401_raises_auth_error_without_leaking_key() -> None:
 
     assert API_KEY not in str(caught.value)
     assert API_KEY not in repr(caught.value)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert API_KEY not in rendered
 
 
 @respx.mock
@@ -129,6 +170,8 @@ def test_search_500_failure_does_not_leak_key() -> None:
 
     assert API_KEY not in str(caught.value)
     assert API_KEY not in repr(caught.value)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert API_KEY not in rendered
 
 
 @respx.mock
@@ -143,6 +186,11 @@ def test_search_timeout_does_not_leak_key() -> None:
         match=r"^SerpApi request failed: ReadTimeout at https://serpapi\.com/search$",
     ) as caught:
         serp.search("NRT", "OKA", "2026-09-10", "economy", api_key=API_KEY)
+
+    assert API_KEY not in str(caught.value)
+    assert API_KEY not in repr(caught.value)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert API_KEY not in rendered
 
     assert API_KEY not in str(caught.value)
     assert API_KEY not in repr(caught.value)
