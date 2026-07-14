@@ -1,0 +1,89 @@
+{
+  "best_flights": [
+    {
+      "flights": [
+        {
+          "departure_airport": {
+            "name": "Narita International Airport",
+            "id": "NRT",
+            "time": "2026-09-10 08:00"
+          },
+          "arrival_airport": {
+            "name": "Naha Airport",
+            "id": "OKA",
+            "time": "2026-09-10 10:55"
+          },
+          "airline": "All Nippon Airways",
+          "flight_number": "NH 463"
+        }
+      ],
+      "total_duration": 175,
+      "layovers": [],
+      "price": 410
+    }
+  ],
+  "other_flights": [
+    {
+      "flights": [
+        {
+          "departure_airport": {
+            "name": "Narita International Airport",
+            "id": "NRT",
+            "time": "2026-09-10 07:15"
+          },
+          "arrival_airport": {
+            "name": "Fukuoka Airport",
+            "id": "FUK",
+            "time": "2026-09-10 09:25"
+          },
+          "airline": "United Airlines",
+          "flight_number": "UA 7951",
+          "plane_and_crew_by": "All Nippon Airways"
+        },
+        {
+          "departure_airport": {
+            "name": "Fukuoka Airport",
+            "id": "FUK",
+            "time": "2026-09-10 10:30"
+          },
+          "arrival_airport": {
+            "name": "Naha Airport",
+            "id": "OKA",
+            "time": "2026-09-10 12:15"
+          },
+          "airline": "All Nippon Airways",
+          "flight_number": "NH 1207"
+        }
+      ],
+      "total_duration": 300,
+      "layovers": [
+        {
+          "duration": 65,
+          "name": "Fukuoka Airport",
+          "id": "FUK"
+        }
+      ],
+      "price": 280
+    },
+    {
+      "flights": [
+        {
+          "departure_airport": {
+            "name": "Narita International Airport",
+            "id": "NRT",
+            "time": "2026-09-10 13:00"
+          },
+          "arrival_airport": {
+            "name": "Naha Airport",
+            "id": "OKA",
+            "time": "2026-09-10 16:05"
+          },
+          "airline": "Japan Airlines",
+          "flight_number": "JL 917"
+        }
+      ],
+      "total_duration": 185,
+      "layovers": []
+    }
+  ]
+}

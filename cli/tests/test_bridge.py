@@ -4,6 +4,8 @@ import types
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from getaway import bridge, prefs, trips
 
 FROZEN = dt.datetime(2026, 9, 1, 12, 0, 0, tzinfo=dt.timezone.utc)  # 21:00 in JST
@@ -81,6 +83,7 @@ def test_quotes_the_cheapest_priced_result(getaway_home: Path) -> None:
         "gateway": "NRT",
         "onward_dest": "OKA",
         "cabin": "economy",
+        "source": "fli",
         "price": 120.0,
         "currency": "USD",
         "duration_minutes": 180,
@@ -125,6 +128,170 @@ def test_search_exception_is_retryable_failure(getaway_home: Path) -> None:
     failure = bridge_out()["failures"][0]
     assert failure["retryable"] is True
     assert "search error" in failure["reason"]
+
+
+def test_fli_success_never_calls_serpapi(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+    serp_calls: list[str] = []
+
+    monkeypatch.setattr(bridge, "_search_flights", lambda g, d, date: [fake_result(120.0)])
+
+    def resolve_api_key_if_available() -> str:
+        serp_calls.append("resolve")
+        return "serp-key"
+
+    def serp_search(
+        origin: str, dest: str, date: str, cabin: str, api_key: str | None = None
+    ) -> list:
+        serp_calls.append("search")
+        return [fake_result(90.0)]
+
+    monkeypatch.setattr(
+        bridge.serp, "resolve_api_key_if_available", resolve_api_key_if_available
+    )
+    monkeypatch.setattr(bridge.serp, "search", serp_search)
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert serp_calls == []
+    assert bridge_out()["quotes"][0]["source"] == "fli"
+
+
+def test_fli_error_falls_back_to_serpapi(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+    calls: list[tuple] = []
+
+    def fli_search(origin: str, dest: str, date: str) -> list:
+        raise RuntimeError("google 500")
+
+    def serp_search(
+        origin: str, dest: str, date: str, cabin: str, api_key: str | None = None
+    ) -> list:
+        calls.append((origin, dest, date, cabin, api_key))
+        return [fake_result(90.0, airline="JL", fn="JL901")]
+
+    monkeypatch.setattr(bridge, "_search_flights", fli_search)
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
+    monkeypatch.setattr(bridge.serp, "search", serp_search)
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert calls == [("NRT", "OKA", "2026-09-10", "economy", "serp-key")]
+    assert bridge_out()["quotes"][0] == {
+        "gateway": "NRT",
+        "onward_dest": "OKA",
+        "cabin": "economy",
+        "source": "serpapi",
+        "price": 90.0,
+        "currency": "USD",
+        "duration_minutes": 180,
+        "stops": 0,
+        "airline": "JL",
+        "flight_number": "JL901",
+        "departs_local": "2026-09-10T09:00",
+        "arrives_local": "2026-09-10T12:00",
+    }
+
+
+@pytest.mark.parametrize(
+    "fli_results",
+    [None, [], [fake_result(None)]],
+    ids=["none", "empty", "unpriced"],
+)
+def test_fli_without_priced_results_falls_back_to_serpapi(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch, fli_results: list | None
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+    calls: list[tuple] = []
+
+    monkeypatch.setattr(bridge, "_search_flights", lambda g, d, date: fli_results)
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
+
+    def serp_search(
+        origin: str, dest: str, date: str, cabin: str, api_key: str | None = None
+    ) -> list:
+        calls.append((origin, dest, date, cabin, api_key))
+        return [fake_result(80.0)]
+
+    monkeypatch.setattr(bridge.serp, "search", serp_search)
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert calls == [("NRT", "OKA", "2026-09-10", "economy", "serp-key")]
+    assert bridge_out()["quotes"][0]["source"] == "serpapi"
+
+
+def test_both_search_backends_fail_once(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+
+    def fli_search(origin: str, dest: str, date: str) -> list:
+        raise RuntimeError("google 500")
+
+    def serp_search(
+        origin: str, dest: str, date: str, cabin: str, api_key: str | None = None
+    ) -> list:
+        raise RuntimeError("serpapi 500")
+
+    monkeypatch.setattr(bridge, "_search_flights", fli_search)
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
+    monkeypatch.setattr(bridge.serp, "search", serp_search)
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 0, "failures": 1}
+    assert bridge_out() == {
+        "quotes": [],
+        "failures": [
+            {
+                "gateway": "NRT",
+                "onward_dest": "OKA",
+                "date": "2026-09-10",
+                "reason": "search error: serpapi 500",
+                "retryable": True,
+            }
+        ],
+    }
+
+
+def test_missing_serpapi_key_preserves_fli_failure_detail(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_trip()
+    write_onward([PAIR])
+    serp_calls: list[str] = []
+
+    def fli_search(origin: str, dest: str, date: str) -> list:
+        raise RuntimeError("google 500")
+
+    def serp_search(
+        origin: str, dest: str, date: str, cabin: str, api_key: str | None = None
+    ) -> list:
+        serp_calls.append("search")
+        return [fake_result(90.0)]
+
+    monkeypatch.setattr(bridge, "_search_flights", fli_search)
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: None)
+    monkeypatch.setattr(bridge.serp, "search", serp_search)
+
+    assert bridge.run(SLUG, now=clock()) == {"quotes": 0, "failures": 1}
+    assert serp_calls == []
+    assert bridge_out() == {
+        "quotes": [],
+        "failures": [
+            {
+                "gateway": "NRT",
+                "onward_dest": "OKA",
+                "date": "2026-09-10",
+                "reason": "search error: google 500; fallback: no serpapi key",
+                "retryable": True,
+            }
+        ],
+    }
 
 
 def test_past_origin_local_date_is_nonretryable_and_never_queried(getaway_home: Path) -> None:

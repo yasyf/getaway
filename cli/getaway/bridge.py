@@ -22,11 +22,12 @@ so bridge quotes the positioning cabin (economy) and reports duration.
 import datetime as dt
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import click
 
-from getaway import prefs, trips
+from getaway import prefs, serp, trips
 from getaway.paths import emit, map_errors, utcnow
 
 Row = dict[str, Any]
@@ -58,6 +59,13 @@ _UTC_OFFSET_HOURS = {
 }
 
 _oka_installed = False
+
+
+@dataclass(frozen=True)
+class _SearchOutcome:
+    results: list | None
+    source: str
+    failure_detail: str | None = None
 
 
 def _rewrite_alias(obj: Any) -> Any:
@@ -124,17 +132,42 @@ def _search_flights(origin: str, dest: str, date: str) -> list | None:
     return SearchFlights().search(filters, top_n=_TOP_N)
 
 
+def _priced(results: list | None) -> list:
+    return [result for result in (results or []) if result.price is not None]
+
+
+def _search_with_fallback(origin: str, dest: str, date: str) -> _SearchOutcome:
+    try:
+        results = _search_flights(origin, dest, date)
+    except Exception as err:
+        fli_error = err
+    else:
+        if _priced(results):
+            return _SearchOutcome(results, "fli")
+        fli_error = None
+
+    api_key = serp.resolve_api_key_if_available()
+    if api_key is None:
+        reason = f"search error: {fli_error}" if fli_error is not None else "no results returned"
+        return _SearchOutcome(None, "fli", f"{reason}; fallback: no serpapi key")
+    return _SearchOutcome(
+        serp.search(origin, dest, date, "economy", api_key=api_key),
+        "serpapi",
+    )
+
+
 def _local(value: dt.datetime) -> str:
     # Google Flights times are the airport's local wall clock — match the seats.aero naive shape.
     return value.replace(tzinfo=None).isoformat(timespec="minutes")
 
 
-def _quote(gateway: str, dest: str, result: Any) -> dict:
+def _quote(gateway: str, dest: str, result: Any, source: str) -> dict:
     first, last = result.legs[0], result.legs[-1]
     return {
         "gateway": gateway,
         "onward_dest": dest,
         "cabin": "economy",
+        "source": source,
         "price": result.price,
         "currency": result.currency or "USD",
         "duration_minutes": result.duration,
@@ -158,21 +191,27 @@ def _price_pair(pair: Row, now: Callable[[], dt.datetime], search: Callable) -> 
             "retryable": False,
         }
     try:
-        results = search(gateway, dest, date)
-    except Exception as err:  # fli surfaces HTTP/timeout/parse failures as exceptions
+        searched = search(gateway, dest, date)
+    except Exception as err:  # Search backends surface HTTP/timeout/parse failures as exceptions.
         return {"state": "failed", **base, "reason": f"search error: {err}", "retryable": True}
-    priced = [r for r in (results or []) if r.price is not None]
+    outcome = searched if isinstance(searched, _SearchOutcome) else _SearchOutcome(searched, "fli")
+    priced = _priced(outcome.results)
     if not priced:
         # A viable positioning route with zero priced results reads as a failure to verify, never
         # as a confirmed absence of cash fares.
-        return {"state": "failed", **base, "reason": "no results returned", "retryable": True}
-    return {"state": "quoted", "quote": _quote(gateway, dest, priced[0])}
+        return {
+            "state": "failed",
+            **base,
+            "reason": outcome.failure_detail or "no results returned",
+            "retryable": True,
+        }
+    return {"state": "quoted", "quote": _quote(gateway, dest, priced[0], outcome.source)}
 
 
 def run(
     slug: str,
     now: Callable[[], dt.datetime] = utcnow,
-    search: Callable = _search_flights,
+    search: Callable = _search_with_fallback,
 ) -> dict:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
