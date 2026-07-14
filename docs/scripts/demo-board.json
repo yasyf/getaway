@@ -1,0 +1,347 @@
+{
+ "version": 1,
+ "title": "Warm & beachy in business \u2014 finalists",
+ "intro": "Three business-class round trips from the west coast, judged per your ask. Tap an option to pick, or leave feedback under any card.",
+ "submit": {
+  "label": "Send my pick",
+  "note": "I'll pull taxes, transfer paths, and booking steps for the journey you choose."
+ },
+ "blocks": [
+  {
+   "id": "picker",
+   "type": "getaway.option-picker",
+   "label": "Which journey should I book?",
+   "options": [
+    {
+     "optionId": "outbound:36TqmCSpgKDdgFrg25bly4nMDeK:J|return:36TqmZ0GAKSrhR6dOrYo6EyNGuw:J",
+     "origin": "LAX",
+     "destination": "CMN",
+     "date": "2026-07-14",
+     "program": "American AAdvantage",
+     "miles": 115000,
+     "taxes": {
+      "amount": 14053,
+      "currency": "USD"
+     },
+     "cabin": "business"
+    },
+    {
+     "optionId": "outbound:36Tqn6RPe725AlsnANzKFEFOJGq:J|return:36TqmZ0GAKSrhR6dOrYo6EyNGuw:J",
+     "origin": "LAX",
+     "destination": "CMN",
+     "date": "2026-07-15",
+     "program": "Alaska + AAdvantage",
+     "miles": 167500,
+     "taxes": {
+      "amount": 17033,
+      "currency": "USD"
+     },
+     "cabin": "business"
+    },
+    {
+     "optionId": "outbound:3AMTvMYdIuT4QrAbIb8CAUtrdI5:J|return:3AMTf4u9vTkQmt0oua7CIHQZXSt:J",
+     "origin": "LAX",
+     "destination": "CAI",
+     "date": "2026-07-19",
+     "program": "Air Canada Aeroplan",
+     "miles": 180000,
+     "taxes": {
+      "amount": 32510,
+      "currency": "CAD"
+     },
+     "cabin": "business"
+    }
+   ]
+  },
+  {
+   "id": "card-aa-cmn",
+   "type": "card",
+   "title": "1 \u00b7 Casablanca \u2014 115,000 AAdvantage miles round trip",
+   "children": [
+    {
+     "id": "itin-aa-cmn-outbound",
+     "type": "getaway.itinerary",
+     "program": "American AAdvantage",
+     "miles": 57500,
+     "taxes": {
+      "amount": 3560,
+      "currency": "USD"
+     },
+     "remainingSeats": 0,
+     "bookingLink": {
+      "label": "Book via American AAdvantage",
+      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=LAX&to=CMN&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-14&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-11T18:55:29.307472Z",
+     "totalDurationMinutes": 1085,
+     "segments": [
+      {
+       "flightNumber": "AA136",
+       "origin": "LAX",
+       "destination": "LHR",
+       "departsAt": "2026-07-14T18:10:00",
+       "arrivesAt": "2026-07-15T12:45:00",
+       "cabin": "business",
+       "aircraft": "Boeing 777-300ER",
+       "durationMinutes": 635
+      },
+      {
+       "flightNumber": "AT803",
+       "origin": "LGW",
+       "destination": "CMN",
+       "departsAt": "2026-07-15T16:50:00",
+       "arrivesAt": "2026-07-15T20:15:00",
+       "cabin": "business",
+       "aircraft": "Boeing 737-800",
+       "durationMinutes": 205
+      }
+     ]
+    },
+    {
+     "id": "itin-aa-cmn-return",
+     "type": "getaway.itinerary",
+     "program": "American AAdvantage",
+     "miles": 57500,
+     "taxes": {
+      "amount": 10493,
+      "currency": "USD"
+     },
+     "remainingSeats": 0,
+     "bookingLink": {
+      "label": "Book via American AAdvantage",
+      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=CMN&to=LAX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-18&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-11T19:00:20.555313Z",
+     "totalDurationMinutes": 1253,
+     "segments": [
+      {
+       "flightNumber": "AT972",
+       "origin": "CMN",
+       "destination": "MAD",
+       "departsAt": "2026-07-18T09:50:00",
+       "arrivesAt": "2026-07-18T12:35:00",
+       "cabin": "business",
+       "aircraft": "Boeing 737-800",
+       "durationMinutes": 105
+      },
+      {
+       "flightNumber": "AA741",
+       "origin": "MAD",
+       "destination": "PHL",
+       "departsAt": "2026-07-18T15:25:00",
+       "arrivesAt": "2026-07-18T17:40:00",
+       "cabin": "business",
+       "aircraft": "Boeing 787-8",
+       "durationMinutes": 495
+      },
+      {
+       "flightNumber": "AA2197",
+       "origin": "PHL",
+       "destination": "LAX",
+       "departsAt": "2026-07-18T19:40:00",
+       "arrivesAt": "2026-07-18T22:43:00",
+       "cabin": "business",
+       "aircraft": "Airbus A321neo/Lr/Xlr",
+       "durationMinutes": 363
+      }
+     ]
+    },
+    {
+     "id": "ev-aa-cmn",
+     "type": "markdown",
+     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 the outbound's 4h05m London connection changes airports, LHR arrival to LGW departure; the return's 2h50m MAD and 2h00m PHL are comfortable.\n- \u2705 **Seat** \u2014 lie-flat business on every segment, both directions.\n- \u2705 **Window** \u2014 departs 7/14, inside your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 4 days, 3 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
+    }
+   ]
+  },
+  {
+   "id": "card-qr-cmn",
+   "type": "card",
+   "title": "2 \u00b7 Casablanca via Doha \u2014 Qatar business out, 167,500 miles",
+   "children": [
+    {
+     "id": "itin-qr-cmn-outbound",
+     "type": "getaway.itinerary",
+     "program": "Alaska Atmos Rewards",
+     "miles": 110000,
+     "taxes": {
+      "amount": 6540,
+      "currency": "USD"
+     },
+     "remainingSeats": 1,
+     "bookingLink": {
+      "label": "Book via Alaska Atmos Rewards",
+      "url": "https://www.alaskaair.com/search/results?O=LAX&D=CMN&OD=2026-07-15&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-14T01:58:18.523006Z",
+     "totalDurationMinutes": 2280,
+     "segments": [
+      {
+       "flightNumber": "QR740",
+       "origin": "LAX",
+       "destination": "DOH",
+       "departsAt": "2026-07-15T16:20:00",
+       "arrivesAt": "2026-07-16T17:50:00",
+       "cabin": "business",
+       "aircraft": "Airbus A350-1000",
+       "durationMinutes": 930
+      },
+      {
+       "flightNumber": "QR1395",
+       "origin": "DOH",
+       "destination": "CMN",
+       "departsAt": "2026-07-17T08:30:00",
+       "arrivesAt": "2026-07-17T14:20:00",
+       "cabin": "business",
+       "aircraft": "Boeing 777-300ER",
+       "durationMinutes": 470
+      }
+     ]
+    },
+    {
+     "id": "itin-qr-cmn-return",
+     "type": "getaway.itinerary",
+     "program": "American AAdvantage",
+     "miles": 57500,
+     "taxes": {
+      "amount": 10493,
+      "currency": "USD"
+     },
+     "remainingSeats": 0,
+     "bookingLink": {
+      "label": "Book via American AAdvantage",
+      "url": "https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=CMN&to=LAX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-07-18&carriers=ALL&pos=US&adult=1&utm_source=seatsaero"
+     },
+     "updatedAt": "2026-07-11T19:00:20.555313Z",
+     "totalDurationMinutes": 1253,
+     "segments": [
+      {
+       "flightNumber": "AT972",
+       "origin": "CMN",
+       "destination": "MAD",
+       "departsAt": "2026-07-18T09:50:00",
+       "arrivesAt": "2026-07-18T12:35:00",
+       "cabin": "business",
+       "aircraft": "Boeing 737-800",
+       "durationMinutes": 105
+      },
+      {
+       "flightNumber": "AA741",
+       "origin": "MAD",
+       "destination": "PHL",
+       "departsAt": "2026-07-18T15:25:00",
+       "arrivesAt": "2026-07-18T17:40:00",
+       "cabin": "business",
+       "aircraft": "Boeing 787-8",
+       "durationMinutes": 495
+      },
+      {
+       "flightNumber": "AA2197",
+       "origin": "PHL",
+       "destination": "LAX",
+       "departsAt": "2026-07-18T19:40:00",
+       "arrivesAt": "2026-07-18T22:43:00",
+       "cabin": "business",
+       "aircraft": "Airbus A321neo/Lr/Xlr",
+       "durationMinutes": 363
+      }
+     ]
+    },
+    {
+     "id": "ev-qr-cmn",
+     "type": "markdown",
+     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 an overnight 14h40m gap at DOH outbound is dead-long for a minimize-style traveler; the return's MAD and PHL stops are comfortable.\n- \u2705 **Seat** \u2014 Qsuites on the A350-1000 to DOH; the DOH\u2013CMN 777-300ER carries Qsuites on most frames \u2014 verify at booking.\n- \u2705 **Window** \u2014 departs 7/15, inside your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 3 days, 4 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
+    }
+   ]
+  },
+  {
+   "id": "card-ac-cai",
+   "type": "card",
+   "title": "3 \u00b7 Cairo \u2014 180,000 Aeroplan miles, A380 home",
+   "children": [
+    {
+     "id": "itin-ac-cai-outbound",
+     "type": "getaway.itinerary",
+     "program": "Air Canada Aeroplan",
+     "miles": 90000,
+     "taxes": {
+      "amount": 11640,
+      "currency": "CAD"
+     },
+     "remainingSeats": 1,
+     "bookingLink": {
+      "label": "Book via Air Canada Aeroplan",
+      "url": "https://www.aircanada.com/aeroplan/redeem/availability/outbound?org0=LAX&dest0=CAI&departureDate0=2026-07-19&lang=en-CA&tripType=O&ADT=1&YTH=0&CHD=0&INF=0&INS=0&marketCode=INT"
+     },
+     "updatedAt": "2026-07-13T21:38:05.587781Z",
+     "totalDurationMinutes": 1085,
+     "segments": [
+      {
+       "flightNumber": "LO24",
+       "origin": "LAX",
+       "destination": "WAW",
+       "departsAt": "2026-07-19T22:05:00",
+       "arrivesAt": "2026-07-20T18:40:00",
+       "cabin": "business",
+       "aircraft": "Boeing 787-9",
+       "durationMinutes": 695
+      },
+      {
+       "flightNumber": "LO147",
+       "origin": "WAW",
+       "destination": "CAI",
+       "departsAt": "2026-07-20T21:15:00",
+       "arrivesAt": "2026-07-21T02:10:00",
+       "cabin": "business",
+       "aircraft": "Boeing 737-800",
+       "durationMinutes": 235
+      }
+     ]
+    },
+    {
+     "id": "itin-ac-cai-return",
+     "type": "getaway.itinerary",
+     "program": "Air Canada Aeroplan",
+     "miles": 90000,
+     "taxes": {
+      "amount": 20870,
+      "currency": "CAD"
+     },
+     "remainingSeats": 3,
+     "bookingLink": {
+      "label": "Book via Air Canada Aeroplan",
+      "url": "https://www.aircanada.com/aeroplan/redeem/availability/outbound?org0=CAI&dest0=LAX&departureDate0=2026-07-21&lang=en-CA&tripType=O&ADT=1&YTH=0&CHD=0&INF=0&INS=0&marketCode=INT"
+     },
+     "updatedAt": "2026-07-13T09:20:36.843413Z",
+     "totalDurationMinutes": 1280,
+     "segments": [
+      {
+       "flightNumber": "LH587",
+       "origin": "CAI",
+       "destination": "MUC",
+       "departsAt": "2026-07-21T03:55:00",
+       "arrivesAt": "2026-07-21T07:00:00",
+       "cabin": "business",
+       "aircraft": "Airbus A320neo",
+       "durationMinutes": 245
+      },
+      {
+       "flightNumber": "LH452",
+       "origin": "MUC",
+       "destination": "LAX",
+       "departsAt": "2026-07-21T12:15:00",
+       "arrivesAt": "2026-07-21T15:15:00",
+       "cabin": "business",
+       "aircraft": "Airbus A380-800",
+       "durationMinutes": 720
+      }
+     ]
+    },
+    {
+     "id": "ev-ac-cai",
+     "type": "markdown",
+     "md": "**Judgment** \u2014 one line per active factor:\n- \u26a0\ufe0f **Layovers** \u2014 2h35m at WAW outbound is comfortable; 5h15m at MUC on the return lands in the dead-time zone.\n- \u2705 **Seat** \u2014 787-9 out, A380-800 home; business on every segment.\n- \u26a0\ufe0f **Window** \u2014 departs 7/19, 3 days past your 7/14\u20137/16 window.\n- \u26a0\ufe0f **Trip length** \u2014 door-to-door 2 days, 5 short of your 7-day target.\n- \u2139\ufe0f **Funding** \u2014 neutral profile: no balances on file to weigh affordability."
+    }
+   ]
+  }
+ ]
+}

@@ -105,8 +105,8 @@ and hop the last leg on a cash ticket.
 
 The planner composes hybrid routings — gateway awards with cash hops,
 open jaws, two-award stitches — beside direct awards and compares them
-on total cost. A cash hop at or under four hours books economy; longer
-books business:
+on total cost. Each cash leg's cabin is judged per leg from its length:
+a short hop books economy, a long haul books business:
 
 ```text
 SFO  NRT  aeroplan business  88000 miles + $118 taxes  lie-flat
@@ -134,8 +134,8 @@ Every real ask becomes a trip: the verbatim ask, pinned constraints and
 preference lanes, and a judgment profile derived from both. The bundled
 CLI compiles each trip into an execution graph — sweeps, shortlists,
 journey composition, evidence, assess, rank — and the shipped workflow
-walks it. Preferences order and annotate but never gate, mileage stays
-dominant with judgment reordering only inside a band, and a trip with
+walks it. Preferences order and annotate but never gate, cost stays
+dominant with judgment reordering only within a cost tier, and a trip with
 lodging in scope picks up hotel award nights from rooms.aero along the
 way. The full doctrine lives in
 [skills/getaway/references/](skills/getaway/references/).
