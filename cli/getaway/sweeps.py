@@ -11,13 +11,14 @@ from getaway.constants import (
     AUTO_WIDEN_CALL_BUDGET_PER_LEG,
     DATE_WIDEN_STEP_DAYS,
     DEFAULT_QUOTA_FLOOR,
+    GENERATION_CUTTING_COMPLETENESS,
     SEARCH_PAGE_SIZE,
     SOFT_DATE_SEARCH_PADDING_DAYS,
     SWEEP_PAGE_BUDGET,
 )
 from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
 from getaway.seats import AuthError, PaginationError, SeatsClient
-from getaway.store import NoData, QuotaFloorError, connect
+from getaway.store import NoData, QuotaFloorError, availability_scope, connect, search_scope
 
 Spec = dict[str, Any]
 Leg = dict[str, Any]
@@ -207,6 +208,21 @@ def _is_region(code: str) -> bool:
     return True
 
 
+def _scope(
+    leg: Leg, rows: list[dict], searched: list[dict], sources: list[str] | None
+) -> list[dict]:
+    """The constraint groups a prior row must satisfy to fall under this sweep's supersede, so a
+    run never supersedes what it did not search. A bulk-availability leg scopes on its one program
+    source and the searched region columns (both directions when both are set); a search leg on the
+    concrete origin×dest airports it actually reached (region tokens resolved to demonstrated
+    airports), plus each plan source when the search is source-restricted."""
+    if leg["endpoint_field"] is None:  # bulk availability: one program source, region columns
+        return availability_scope(
+            leg["source"], leg.get("origin_region"), leg.get("dest_region"), searched
+        )
+    return search_scope(leg["origins"], leg["dests"], rows, searched, sources=sources)
+
+
 def _search_states(leg: Leg, rows: list[dict], has_more: bool, stop: tuple | None) -> dict:
     endpoints = leg["endpoints"]
     if stop is not None:
@@ -248,6 +264,7 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
     stop: tuple | None = None
     widen = 0
     calls = 0
+    covered = False  # a page returned data (not merely a completed call): the bar for 'partial'
     while True:
         try:
             params = _api_params(leg, start, end, plan)
@@ -270,8 +287,10 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
                 if row["ID"] not in seen_ids:
                     seen_ids.add(row["ID"])
                     rows.append(row)
-            if rows:
+            if err.covered:  # a page returned this window: it was genuinely searched
                 searched.append({"start": start, "end": end})
+                covered = True
+            if covered:  # a page landed this run (this window or an earlier widen): partial
                 if isinstance(err.cause, QuotaFloorError):
                     stop = ("partial", "quota_budget")
                 else:
@@ -281,13 +300,19 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
             else:
                 stop = ("failed", str(err.cause), "retryable")
             break
-        except QuotaFloorError:
-            stop = ("not_run", "quota_budget")
+        except QuotaFloorError:  # pre-request refusal: this call never left the client
+            stop = ("partial", "quota_budget") if covered else ("not_run", "quota_budget")
             break
         except httpx.HTTPError as err:
-            stop = ("failed", str(err), "retryable")
+            if isinstance(err, httpx.HTTPStatusError):
+                calls += 1  # a returned error response is a completed call
+            if covered:
+                stop = ("partial", str(err), "retryable")
+            else:
+                stop = ("failed", str(err), "retryable")
             break
         searched.append({"start": start, "end": end})
+        covered = True
         for row in page_rows:
             if row["ID"] not in seen_ids:
                 seen_ids.add(row["ID"])
@@ -334,8 +359,11 @@ def run(
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node_id)  # before the network fetch
     leg = _leg_for_key(slug, key, trip, prefs_doc)
     store = connect(cache_db(), now=now)
+    base_generation = store.pin_generation(slug, key)  # pinned before the fetch
+    watermark = store.global_watermark()  # global run-start watermark, before the fetch
     client = SeatsClient(store, floor=quota_floor)
     swept = _sweep_leg(client, leg, trip["plan"])
+    complete = swept["completeness"] in GENERATION_CUTTING_COMPLETENESS
     sweep = {
         "trip_slug": slug,
         "label": key,
@@ -343,12 +371,19 @@ def run(
         "params": {"origins": leg.get("origins"), "dests": leg.get("dests")},
         "started_at": now().isoformat(),
     }
-    result = store.ingest(swept["rows"], sweep=sweep)
     sources = trip["plan"].get("sources", [])
-    start, end = leg["window"]
-    superseded_ids = sorted(
-        row["id"] for row in result["superseded"] if start <= row["date"] <= end
+    scope = _scope(leg, swept["rows"], swept["searched"], sources or None)
+    result = store.ingest(
+        swept["rows"],
+        sweep=sweep,
+        complete=complete,
+        base_generation=base_generation,
+        scope=scope,
+        watermark=watermark,
     )
+    # The store returns only in-scope disappearances; out-of-scope prior rows carry
+    # forward into the new generation, kept visible but never disclosed here.
+    superseded_ids = sorted(row["id"] for row in result["superseded"])
     provenance = {
         "source": leg.get("source") or ",".join(sources) or "all",
         "fetched_at": now().isoformat(),

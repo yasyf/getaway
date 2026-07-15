@@ -17,9 +17,20 @@ from getaway.constants import (
     EXIT_AUTH,
     EXIT_NEGATIVE,
     EXIT_NO_DATA,
+    EXIT_USAGE,
 )
 from getaway.keys import AuthError
-from getaway.store import NoData, QuotaFloorError, Store, connect, parse_duration
+from getaway.paths import UsageError
+from getaway.store import (
+    NO_GENERATION,
+    NoData,
+    QuotaFloorError,
+    Store,
+    availability_scope,
+    connect,
+    parse_duration,
+    search_scope,
+)
 
 BASE_URL = "https://seats.aero/partnerapi"
 AUTH_HEADER = "Partner-Authorization"
@@ -44,12 +55,17 @@ class PaginationResult:
 
 
 class PaginationError(Exception):
-    """_paginate failed mid-pagination; carries progress made before the error."""
+    """_paginate failed mid-pagination; carries progress made before the error.
 
-    def __init__(self, rows: list[Row], calls: int, cause: Exception) -> None:
+    ``calls`` counts every completed request (a returned error response included) for quota;
+    ``covered`` counts only pages that returned data, so an error-only run earns no coverage.
+    """
+
+    def __init__(self, rows: list[Row], calls: int, covered: int, cause: Exception) -> None:
         super().__init__(str(cause))
         self.rows = rows
         self.calls = calls
+        self.covered = covered
         self.cause = cause
 
 
@@ -162,8 +178,8 @@ class SeatsClient:
         key = keys.validate(api_key, "seats.aero") if api_key is not None else resolve_api_key()
         self._client = httpx.Client(headers={AUTH_HEADER: key}, timeout=HTTP_TIMEOUT)
 
-    def search(
-        self,
+    @staticmethod
+    def _search_params(
         origins: Sequence[str],
         dests: Sequence[str],
         start: str | None = None,
@@ -173,12 +189,13 @@ class SeatsClient:
         carriers: Sequence[str] | None = None,
         direct: bool = False,
         order_by: str | None = None,
-        take: int = DEFAULT_TAKE,
-        pages: int = 1,
-    ) -> list[Row]:
+    ) -> Row:
         params: Row = {
             "origin_airport": ",".join(origins),
             "destination_airport": ",".join(dests),
+            # Matches the sweep path: defeats the server's default dynamic-price hiding, so raw
+            # ingests are as wide as sweeps and never fabricate disappearance of near-miss rows.
+            "include_filtered": "true",
         }
         if start:
             params["start_date"] = start
@@ -194,10 +211,48 @@ class SeatsClient:
             params["only_direct_flights"] = "true"
         if order_by:
             params["order_by"] = order_by
-        try:
-            return self._paginate("/search", params, take, pages).rows
-        except PaginationError as err:
-            raise err.cause from err
+        return params
+
+    def search(
+        self,
+        origins: Sequence[str],
+        dests: Sequence[str],
+        start: str | None = None,
+        end: str | None = None,
+        cabins: Sequence[str] | None = None,
+        sources: Sequence[str] | None = None,
+        carriers: Sequence[str] | None = None,
+        direct: bool = False,
+        order_by: str | None = None,
+        take: int = DEFAULT_TAKE,
+        pages: int = 1,
+    ) -> list[Row]:
+        params = self._search_params(
+            origins, dests, start, end, cabins, sources, carriers, direct, order_by
+        )
+        return self._query("/search", params, take, pages).rows
+
+    @staticmethod
+    def _availability_params(
+        source: str,
+        cabin: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        origin_region: str | None = None,
+        dest_region: str | None = None,
+    ) -> Row:
+        params: Row = {"source": source, "include_filtered": "true"}
+        if cabin:
+            params["cabin"] = cabin
+        if start:
+            params["start_date"] = start
+        if end:
+            params["end_date"] = end
+        if origin_region:
+            params["origin_region"] = origin_region
+        if dest_region:
+            params["destination_region"] = dest_region
+        return params
 
     def availability(
         self,
@@ -210,21 +265,8 @@ class SeatsClient:
         take: int = DEFAULT_TAKE,
         pages: int = 1,
     ) -> list[Row]:
-        params: Row = {"source": source}
-        if cabin:
-            params["cabin"] = cabin
-        if start:
-            params["start_date"] = start
-        if end:
-            params["end_date"] = end
-        if origin_region:
-            params["origin_region"] = origin_region
-        if dest_region:
-            params["destination_region"] = dest_region
-        try:
-            return self._paginate("/availability", params, take, pages).rows
-        except PaginationError as err:
-            raise err.cause from err
+        params = self._availability_params(source, cabin, start, end, origin_region, dest_region)
+        return self._query("/availability", params, take, pages).rows
 
     def routes(self, source: str) -> list[Row]:
         return self._get("/routes", {"source": source})
@@ -253,6 +295,14 @@ class SeatsClient:
             raise
         return response.json()
 
+    def _query(self, path: str, params: Row, take: int, pages: int) -> PaginationResult:
+        # Surface the underlying cause so callers see AuthError/QuotaFloorError, not
+        # the PaginationError wrapper; the paginated progress is discarded here.
+        try:
+            return self._paginate(path, params, take, pages)
+        except PaginationError as err:
+            raise err.cause from err
+
     def _paginate(self, path: str, params: Row, take: int, pages: int) -> PaginationResult:
         rows: list[Row] = []
         seen: set[str] = set()
@@ -260,6 +310,7 @@ class SeatsClient:
         skip = 0
         has_more = False
         calls = 0
+        covered = 0
         for _ in range(pages):
             page_params = dict(params)
             page_params["take"] = take
@@ -268,9 +319,14 @@ class SeatsClient:
                 page_params["skip"] = skip
             try:
                 payload = self._get(path, page_params)
-            except (QuotaFloorError, httpx.HTTPError) as err:
-                raise PaginationError(rows=rows, calls=calls, cause=err) from err
+            except QuotaFloorError as err:  # pre-request refusal: no HTTP call was made
+                raise PaginationError(rows=rows, calls=calls, covered=covered, cause=err) from err
+            except httpx.HTTPError as err:
+                if isinstance(err, httpx.HTTPStatusError):
+                    calls += 1  # a returned error response is a completed call
+                raise PaginationError(rows=rows, calls=calls, covered=covered, cause=err) from err
             calls += 1
+            covered += 1  # this page returned data
             page_rows = payload["data"]
             for row in page_rows:
                 if row["ID"] not in seen:
@@ -320,6 +376,9 @@ def _map_errors(fn: Callable[..., None]) -> Callable[..., None]:
         except QuotaFloorError as err:
             click.echo(str(err), err=True)
             raise SystemExit(EXIT_NEGATIVE) from err
+        except UsageError as err:
+            click.echo(str(err), err=True)
+            raise SystemExit(EXIT_USAGE) from err
 
     return wrapper
 
@@ -356,23 +415,47 @@ def search_cmd(
     label: str | None,
     quota_floor: int,
 ) -> None:
+    if pages < 1:
+        raise UsageError("--pages must be at least 1")
     store = _open_store()
     client = SeatsClient(store, floor=quota_floor)
-    rows = client.search(
+    sweep = _sweep_spec(trip, label, "search", {"origins": list(origins), "dests": list(dests)})
+    base_generation = (
+        store.pin_generation(trip, label)
+        if trip is not None and label is not None
+        else NO_GENERATION
+    )
+    watermark = store.global_watermark()  # captured before the fetch
+    params = client._search_params(
         list(origins),
         list(dests),
-        start=start,
-        end=end,
-        cabins=list(cabins) or None,
-        sources=list(sources) or None,
-        carriers=list(carriers) or None,
-        direct=direct,
-        order_by=order_by,
-        take=take,
-        pages=pages,
+        start,
+        end,
+        list(cabins) or None,
+        list(sources) or None,
+        list(carriers) or None,
+        direct,
+        order_by,
     )
-    sweep = _sweep_spec(trip, label, "search", {"origins": list(origins), "dests": list(dests)})
-    result = store.ingest(rows, sweep=sweep)
+    page = client._query("/search", params, take, pages)
+    scope = search_scope(
+        list(origins),
+        list(dests),
+        page.rows,
+        [{"start": start, "end": end}],
+        sources=list(sources) or None,
+    )
+    # Cabin/carrier/direct filters narrow the response but aren't row-expressible: a filtered
+    # lens is cache enrichment, not a re-sweep, so it never cuts a generation or supersedes.
+    complete = not page.has_more and not (cabins or carriers or direct)
+    result = store.ingest(
+        page.rows,
+        sweep=sweep,
+        complete=complete,
+        base_generation=base_generation,
+        scope=scope,
+        watermark=watermark,
+    )
     click.echo(json.dumps({**result, "quota_remaining": _quota_remaining(store)}))
 
 
@@ -402,19 +485,31 @@ def availability_cmd(
     label: str | None,
     quota_floor: int,
 ) -> None:
+    if pages < 1:
+        raise UsageError("--pages must be at least 1")
     store = _open_store()
     client = SeatsClient(store, floor=quota_floor)
-    rows = client.availability(
-        source,
-        cabin=cabin,
-        start=start,
-        end=end,
-        origin_region=origin_region,
-        dest_region=dest_region,
-        take=take,
-        pages=pages,
+    sweep = _sweep_spec(trip, label, "availability", {"source": source})
+    base_generation = (
+        store.pin_generation(trip, label)
+        if trip is not None and label is not None
+        else NO_GENERATION
     )
-    result = store.ingest(rows, sweep=_sweep_spec(trip, label, "availability", {"source": source}))
+    watermark = store.global_watermark()  # captured before the fetch
+    params = client._availability_params(source, cabin, start, end, origin_region, dest_region)
+    page = client._query("/availability", params, take, pages)
+    scope = availability_scope(source, origin_region, dest_region, [{"start": start, "end": end}])
+    # A cabin filter narrows the response but isn't row-expressible: cache enrichment, not an
+    # authoritative re-sweep, so it never cuts a generation or supersedes.
+    complete = not page.has_more and not cabin
+    result = store.ingest(
+        page.rows,
+        sweep=sweep,
+        complete=complete,
+        base_generation=base_generation,
+        scope=scope,
+        watermark=watermark,
+    )
     click.echo(json.dumps({**result, "quota_remaining": _quota_remaining(store)}))
 
 

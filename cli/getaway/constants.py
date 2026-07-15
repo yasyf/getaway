@@ -32,6 +32,8 @@ DATE_WIDEN_STEP_DAYS = 7
 AUTO_WIDEN_CALL_BUDGET_PER_LEG = 2
 SWEEP_PAGE_BUDGET = 3
 SEARCH_PAGE_SIZE = 1000
+# Completeness states that cut a fresh sweep generation, vs. refresh the current one.
+GENERATION_CUTTING_COMPLETENESS = frozenset({"complete", "searched_empty"})
 EXPANSION_BUDGET_PER_ENDPOINT = 12
 RETURN_EXPANSION_BUDGET_PER_ENDPOINT = 12
 

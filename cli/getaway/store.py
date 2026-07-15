@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import json
 import os
 import re
@@ -12,7 +13,7 @@ from typing import Any
 
 import click
 
-from getaway import paths
+from getaway import paths, registry
 from getaway.constants import EXIT_NEGATIVE, EXIT_NO_DATA
 
 APPLICATION_ID = 0x47544157  # 'GTAW'
@@ -91,6 +92,21 @@ _DURATION_PATTERN = re.compile(r"^(\d+)([hd])$")
 Clock = Callable[[], dt.datetime]
 Row = dict[str, Any]
 Sweep = dict[str, Any]
+# Constraint groups [{"start", "end", "constraints": {field: value}}]; a row is in scope when
+# some group covers its date (None bound = open) and matches every constrained field exactly.
+Scope = list[dict[str, Any]]
+
+
+class NoGeneration(enum.Enum):
+    """Sole member ``NO_GENERATION``: a pin captured when no sweep generation existed. Kept
+    distinct from an int generation id so an interleaved complete run cannot resurrect an
+    incomplete run's rows into a generation newer than the one the run pinned."""
+
+    MARKER = enum.auto()
+
+
+NO_GENERATION = NoGeneration.MARKER
+Pin = int | NoGeneration
 
 
 class NoData(Exception):
@@ -159,106 +175,269 @@ def connect(path: Path, now: Clock = _utcnow) -> Store:
     return Store(conn, path, now=now)
 
 
+def _in_scope(row: sqlite3.Row, scope: Scope | None) -> bool:
+    if scope is None:  # no scope restriction: the whole prior generation is in scope
+        return True
+    return any(
+        (entry["start"] is None or entry["start"] <= row["date"])
+        and (entry["end"] is None or row["date"] <= entry["end"])
+        and all(row[field] == value for field, value in entry["constraints"].items())
+        for entry in scope
+    )
+
+
+def _is_region_code(token: str) -> bool:
+    try:
+        registry.region(token)
+    except registry.NoData:
+        return False
+    return True
+
+
+def _side_scope(tokens: Sequence[str], rows: Sequence[Row], field: str) -> set[str]:
+    # Principle: a region token scopes to airports THIS run's rows demonstrate (server-searched),
+    # not registry expansion; a concrete token is itself.
+    key = "OriginAirport" if field == "origin" else "DestinationAirport"
+    airports: set[str] = set()
+    demonstrated: set[str] | None = None
+    for token in tokens:
+        if _is_region_code(token):
+            if demonstrated is None:
+                demonstrated = {row["Route"][key] for row in rows}
+            airports |= demonstrated
+        else:
+            airports.add(token)
+    return airports
+
+
+def search_scope(
+    origins: Sequence[str],
+    dests: Sequence[str],
+    rows: Sequence[Row],
+    windows: Sequence[dict],
+    sources: Sequence[str] | None = None,
+) -> Scope:
+    # A source-restricted search adds each source as a constraint (one entry per source), so a
+    # lens over one program never supersedes another's rows; unrestricted, no source constraint.
+    origin_airports = _side_scope(origins, rows, "origin")
+    dest_airports = _side_scope(dests, rows, "dest")
+    source_values = sorted(sources) if sources else [None]
+    return [
+        {
+            "start": window["start"],
+            "end": window["end"],
+            "constraints": {"origin": o, "dest": d, **({"source": s} if s else {})},
+        }
+        for window in windows
+        for o in sorted(origin_airports)
+        for d in sorted(dest_airports)
+        for s in source_values
+    ]
+
+
+def availability_scope(
+    source: str, origin_region: str | None, dest_region: str | None, windows: Sequence[dict]
+) -> Scope:
+    # Availability is always one program: source is a constraint on every entry.
+    constraints: dict[str, str] = {"source": source}
+    if origin_region:
+        constraints["origin_region"] = origin_region
+    if dest_region:
+        constraints["dest_region"] = dest_region
+    return [
+        {"start": window["start"], "end": window["end"], "constraints": dict(constraints)}
+        for window in windows
+    ]
+
+
 class Store:
     def __init__(self, conn: sqlite3.Connection, path: Path, now: Clock = _utcnow) -> None:
         self._conn = conn
         self._path = path
         self._now = now
 
-    def ingest(self, rows: Sequence[Row], sweep: Sweep | None = None) -> dict[str, Any]:
+    def ingest(
+        self,
+        rows: Sequence[Row],
+        sweep: Sweep | None = None,
+        complete: bool = True,
+        base_generation: Pin = NO_GENERATION,
+        scope: Scope | None = None,
+        watermark: int = 0,
+    ) -> dict[str, Any]:
+        fetched_at = self._now().isoformat()
+        superseded: list[Row] = []
+        new = 0
+        with self._conn:  # commits on success, rolls back on any exception
+            self._conn.execute("BEGIN IMMEDIATE")
+            sweep_id = self._resolve_sweep(
+                sweep, rows, complete, base_generation, scope, superseded
+            )
+            protected = self._protected_payloads(complete, watermark)
+            for row in rows:
+                row_id = row["ID"]
+                if row_id not in protected:  # a newer generation's payload must not be backdated
+                    new += self._upsert_row(row, fetched_at)
+                if sweep_id is not None:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO sweep_rows (sweep_id, availability_id) "
+                        "VALUES (?, ?)",
+                        (sweep_id, row_id),
+                    )
+        return {"rows": len(rows), "new": new, "superseded": superseded}
+
+    def _upsert_row(self, row: Row, fetched_at: str) -> int:
+        """Insert or refresh one availability row and its cabins; returns 1 if the id is new."""
         # function-level import: seats owns cabin normalization at the client boundary
         # and imports connect() from this module, so the reference is cycled lazily.
         from getaway.seats import cabin_rows
 
-        fetched_at = self._now().isoformat()
-        sweep_id: int | None = None
-        superseded: list[Row] = []
-        if sweep is not None:
-            self._conn.execute("BEGIN IMMEDIATE")
-            prior_rows = self._conn.execute(
-                "SELECT a.id, a.date FROM availability a "
-                "JOIN sweep_rows sr ON sr.availability_id = a.id "
-                "WHERE sr.sweep_id = ("
-                "SELECT MAX(s.id) FROM sweeps s WHERE s.trip_slug = ? AND s.label = ?) "
-                "ORDER BY a.id",
-                (sweep["trip_slug"], sweep["label"]),
-            ).fetchall()
-            row_ids = {row["ID"] for row in rows}
-            superseded = [
-                {"id": row["id"], "date": row["date"]}
-                for row in prior_rows
-                if row["id"] not in row_ids
-            ]
-            cursor = self._conn.execute(
-                "INSERT INTO sweeps (trip_slug, label, kind, params, started_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    sweep["trip_slug"],
-                    sweep["label"],
-                    sweep["kind"],
-                    json.dumps(sweep["params"]),
-                    sweep["started_at"],
-                ),
-            )
-            sweep_id = cursor.lastrowid
-        new = 0
-        for row in rows:
-            row_id = row["ID"]
-            route = row["Route"]
-            existed = self._conn.execute(
-                "SELECT 1 FROM availability WHERE id = ?", (row_id,)
-            ).fetchone()
-            if existed is None:
-                new += 1
+        row_id = row["ID"]
+        route = row["Route"]
+        existed = self._conn.execute(
+            "SELECT 1 FROM availability WHERE id = ?", (row_id,)
+        ).fetchone()
+        self._conn.execute(
+            "INSERT INTO availability "
+            "(id, origin, dest, date, source, origin_region, dest_region, "
+            " updated_at, fetched_at, raw) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            " origin=excluded.origin, dest=excluded.dest, date=excluded.date, "
+            " source=excluded.source, origin_region=excluded.origin_region, "
+            " dest_region=excluded.dest_region, updated_at=excluded.updated_at, "
+            " fetched_at=excluded.fetched_at, raw=excluded.raw",
+            (
+                row_id,
+                route["OriginAirport"],
+                route["DestinationAirport"],
+                row["Date"],
+                row["Source"],
+                route.get("OriginRegion"),
+                route.get("DestinationRegion"),
+                row.get("UpdatedAt"),
+                fetched_at,
+                json.dumps(row),
+            ),
+        )
+        for cabin in cabin_rows(row):
             self._conn.execute(
-                "INSERT INTO availability "
-                "(id, origin, dest, date, source, origin_region, dest_region, "
-                " updated_at, fetched_at, raw) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET "
-                " origin=excluded.origin, dest=excluded.dest, date=excluded.date, "
-                " source=excluded.source, origin_region=excluded.origin_region, "
-                " dest_region=excluded.dest_region, updated_at=excluded.updated_at, "
-                " fetched_at=excluded.fetched_at, raw=excluded.raw",
+                "INSERT INTO availability_cabin "
+                "(id, cabin, available, mileage_cost, remaining_seats, airlines, direct) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id, cabin) DO UPDATE SET "
+                " available=excluded.available, mileage_cost=excluded.mileage_cost, "
+                " remaining_seats=excluded.remaining_seats, airlines=excluded.airlines, "
+                " direct=excluded.direct",
                 (
                     row_id,
-                    route["OriginAirport"],
-                    route["DestinationAirport"],
-                    row["Date"],
-                    row["Source"],
-                    route.get("OriginRegion"),
-                    route.get("DestinationRegion"),
-                    row.get("UpdatedAt"),
-                    fetched_at,
-                    json.dumps(row),
+                    cabin["cabin"],
+                    int(cabin["available"]),
+                    cabin["mileage_cost"],
+                    cabin["remaining_seats"],
+                    cabin["airlines"],
+                    int(cabin["direct"]),
                 ),
             )
-            for cabin in cabin_rows(row):
-                self._conn.execute(
-                    "INSERT INTO availability_cabin "
-                    "(id, cabin, available, mileage_cost, remaining_seats, airlines, direct) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(id, cabin) DO UPDATE SET "
-                    " available=excluded.available, mileage_cost=excluded.mileage_cost, "
-                    " remaining_seats=excluded.remaining_seats, airlines=excluded.airlines, "
-                    " direct=excluded.direct",
-                    (
-                        row_id,
-                        cabin["cabin"],
-                        int(cabin["available"]),
-                        cabin["mileage_cost"],
-                        cabin["remaining_seats"],
-                        cabin["airlines"],
-                        int(cabin["direct"]),
-                    ),
-                )
-            if sweep_id is not None:
+        return 0 if existed else 1
+
+    def _protected_payloads(self, complete: bool, watermark: int) -> set[str]:
+        """Row ids a stale incomplete ingest must not backdate: any row displayed by a sweep that
+        landed past the global run-start watermark, across EVERY label — row ids are global, so a
+        concurrent sweep node in another bucket may hold the fresher payload. A run that began
+        after another label's sweep completed refreshes those shared rows freely (its data is
+        fresher); one that began before must not. A complete run cuts the newest generation and
+        refreshes freely, so it protects nothing."""
+        if complete:
+            return set()
+        return {
+            row["availability_id"]
+            for row in self._conn.execute(
+                "SELECT DISTINCT availability_id FROM sweep_rows WHERE sweep_id > ?",
+                (watermark,),
+            ).fetchall()
+        }
+
+    def _resolve_sweep(
+        self,
+        sweep: Sweep | None,
+        rows: Sequence[Row],
+        complete: bool,
+        base_generation: Pin,
+        scope: Scope | None,
+        superseded: list[Row],
+    ) -> int | None:
+        """Pick the sweep generation ``rows`` attach to, diffing the prior one.
+
+        A complete run cuts a new generation: prior rows the run re-found carry over
+        as the fresh inserts; prior rows inside ``scope`` yet absent are superseded
+        (excluded and reported); prior rows outside ``scope`` carry forward untouched
+        so a shrunken search never hides them. An incomplete run pinned to a generation
+        refreshes its rows into that pin — even after an interleaved complete run has cut
+        a newer one, so partial rows never resurrect into it. Pinned to ``NO_GENERATION``
+        (none existed when the run started), it establishes the first generation if one
+        still does not exist, else joins none — its payloads land but no membership does,
+        never attaching to a generation newer than the pin.
+        """
+        if sweep is None:
+            return None
+        current = self.current_generation(sweep["trip_slug"], sweep["label"])
+        if not complete:
+            if base_generation is NO_GENERATION:
+                return self._insert_sweep(sweep) if current is None else None
+            return base_generation
+        if current is None:
+            return self._insert_sweep(sweep)
+        new_id = self._insert_sweep(sweep)
+        row_ids = {row["ID"] for row in rows}
+        for prior in self._conn.execute(
+            "SELECT a.id AS id, a.date AS date, a.origin AS origin, a.dest AS dest, "
+            " a.source AS source, a.origin_region AS origin_region, a.dest_region AS dest_region "
+            "FROM availability a JOIN sweep_rows sr ON sr.availability_id = a.id "
+            "WHERE sr.sweep_id = ? ORDER BY a.id",
+            (current,),
+        ).fetchall():
+            if prior["id"] in row_ids:
+                continue
+            if _in_scope(prior, scope):
+                superseded.append({"id": prior["id"], "date": prior["date"]})
+            else:
                 self._conn.execute(
                     "INSERT OR IGNORE INTO sweep_rows (sweep_id, availability_id) VALUES (?, ?)",
-                    (sweep_id, row_id),
+                    (new_id, prior["id"]),
                 )
-        self._conn.commit()
-        return {"rows": len(rows), "new": new, "superseded": superseded}
+        return new_id
+
+    def current_generation(self, trip_slug: str, label: str) -> int | None:
+        return self._conn.execute(
+            "SELECT MAX(id) FROM sweeps WHERE trip_slug = ? AND label = ?",
+            (trip_slug, label),
+        ).fetchone()[0]
+
+    def pin_generation(self, trip_slug: str, label: str) -> Pin:
+        """Capture the current generation as an incomplete-ingest pin, marking absence with
+        ``NO_GENERATION`` so a later interleaved complete run cannot resurrect these rows."""
+        current = self.current_generation(trip_slug, label)
+        return NO_GENERATION if current is None else current
+
+    def global_watermark(self) -> int:
+        """The max sweep id across every label at run start; payload protection shields rows a
+        sweep past this watermark displays, so a concurrent sweep landing mid-run can't be
+        backdated. Captured alongside the label generation pin, before the fetch."""
+        return self._conn.execute("SELECT COALESCE(MAX(id), 0) FROM sweeps").fetchone()[0]
+
+    def _insert_sweep(self, sweep: Sweep) -> int | None:
+        return self._conn.execute(
+            "INSERT INTO sweeps (trip_slug, label, kind, params, started_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                sweep["trip_slug"],
+                sweep["label"],
+                sweep["kind"],
+                json.dumps(sweep["params"]),
+                sweep["started_at"],
+            ),
+        ).lastrowid
 
     def query_availability(
         self,

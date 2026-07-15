@@ -73,9 +73,7 @@ def test_new_cli_exits_state_conflict_on_duplicate(ready: Path, runner: CliRunne
         pytest.param(lambda: trips.log(SLUG, "note"), id="log"),
     ],
 )
-def test_missing_trip_names_trips_dir(
-    getaway_home: Path, operation: Callable[[], object]
-) -> None:
+def test_missing_trip_names_trips_dir(getaway_home: Path, operation: Callable[[], object]) -> None:
     with pytest.raises(StateConflictError) as exc:
         operation()
     message = str(exc.value)
@@ -512,6 +510,138 @@ def test_bridge_artifact_currency_code(ready: Path, currency: str, accepted: boo
             trips.artifact_write(SLUG, "legs/outbound/bridge.json", content)
 
 
+def _sweep_doc(
+    superseded_rows: dict,
+    *,
+    search_states: dict | None = None,
+    searched: list | None = None,
+    completeness: str = "complete",
+    rows: list | None = None,
+) -> dict:
+    return {
+        "provenance": {
+            "source": "all",
+            "fetched_at": "2026-07-13T12:00:00+00:00",
+            "searched": [{"start": "2026-09-01", "end": "2026-09-14"}]
+            if searched is None
+            else searched,
+            "completeness": completeness,
+            "expanded_origins": ["SFO"],
+            "superseded_rows": superseded_rows,
+        },
+        "search_states": {"NRT": {"state": "complete"}} if search_states is None else search_states,
+        "rows": [] if rows is None else rows,
+    }
+
+
+@pytest.mark.parametrize(
+    "doc_kwargs",
+    [
+        pytest.param({"superseded_rows": {"count": 1, "ids": ["A"]}}, id="single"),
+        pytest.param(
+            {"superseded_rows": {"count": 60, "ids": [f"R{index:02d}" for index in range(50)]}},
+            id="count-over-cap-ids-capped-at-fifty",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "completeness": "searched_empty"},
+            id="searched-empty-market-still-supersedes",
+        ),
+        pytest.param(
+            {
+                "superseded_rows": {"count": 1, "ids": ["A"]},
+                "completeness": "searched_empty",
+                "search_states": {"NRT": {"state": "searched_empty"}},
+            },
+            id="searched-empty-endpoint-counts-as-fully-searched",
+        ),
+    ],
+)
+def test_sweep_artifact_accepts_coherent_superseded_rows(ready: Path, doc_kwargs: dict) -> None:
+    trips.new(SLUG)
+    trips.artifact_write(
+        SLUG, "legs/outbound/sweep-asia.json", json.dumps(_sweep_doc(**doc_kwargs))
+    )
+
+
+@pytest.mark.parametrize(
+    "doc_kwargs",
+    [
+        pytest.param({"superseded_rows": {"count": 2, "ids": ["A", "A"]}}, id="duplicate-ids"),
+        pytest.param(
+            {"superseded_rows": {"count": 3, "ids": ["A", "B"]}}, id="ids-shorter-than-count"
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 60, "ids": [f"R{index:02d}" for index in range(49)]}},
+            id="capped-count-with-forty-nine-ids",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "searched": []},
+            id="searched-nothing",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "completeness": "partial"},
+            id="partial-completeness",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "completeness": "failed"},
+            id="failed-completeness",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "completeness": "not_run"},
+            id="not-run-completeness",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "completeness": ["complete"]},
+            id="unhashable-completeness-raises-usage-not-type-error",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "search_states": {"NRT": "partial"}},
+            id="search-state-not-an-object",
+        ),
+        pytest.param(
+            {
+                "superseded_rows": {"count": 1, "ids": ["A"]},
+                "search_states": {
+                    "NRT": {"state": "complete"},
+                    "BKK": {"state": "partial"},
+                },
+            },
+            id="one-endpoint-not-generation-cutting",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "search_states": {"NRT": {}}},
+            id="search-state-missing-state-key",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "searched": "2026-09-01"},
+            id="searched-not-a-list",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "rows": ["not-an-object"]},
+            id="row-not-an-object",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "rows": [{"ID": 7}]},
+            id="row-id-not-a-string",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "rows": [{"noid": "x"}]},
+            id="row-missing-id",
+        ),
+        pytest.param(
+            {"superseded_rows": {"count": 1, "ids": ["A"]}, "rows": [{"ID": "A"}]},
+            id="superseded-id-overlaps-own-row",
+        ),
+    ],
+)
+def test_sweep_artifact_rejects_incoherent_superseded_rows(ready: Path, doc_kwargs: dict) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.artifact_write(
+            SLUG, "legs/outbound/sweep-asia.json", json.dumps(_sweep_doc(**doc_kwargs))
+        )
+
+
 @pytest.mark.parametrize(
     ("count", "accepted"),
     [
@@ -524,8 +654,7 @@ def test_assess_notable_stretches_limit(ready: Path, count: int, accepted: bool)
     doc = {
         "journeys": {},
         "notable_stretches": [
-            {"journey_id": f"J{i}", "why": f"notable preference stretch {i}"}
-            for i in range(count)
+            {"journey_id": f"J{i}", "why": f"notable preference stretch {i}"} for i in range(count)
         ],
     }
 

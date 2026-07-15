@@ -13,6 +13,20 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Added
+- Sweep generations: only a complete, filter-honest run supersedes.
+  A sweep that fully searched its scope cuts a new generation and
+  disclosed rows it proved gone; anything less — a quota stop, a failed
+  page, a truncated fetch, a cabin/carrier/direct-filtered lens, a raw
+  call missing the widest server view — only adds knowledge to the
+  generation pinned at its run start, never erases. The supersede diff
+  is bounded by conjunctive scope (endpoints or demonstrated airports
+  for region tokens, dates, sources) so nothing outside what a run
+  actually searched is ever disclosed or hidden; carried-forward rows
+  stay visible undisclosed; incomplete runs cannot backdate a newer
+  generation's payload (global watermark at run start); `partial`
+  requires data coverage, not just spent calls; raw ingests send
+  `include_filtered` like sweeps. Six adversarial review rounds, every
+  accepted counterexample pinned as a regression test.
 - Shape-agnostic downstream engine, groundwork for arbitrary leg chains
   (bit-identical on today's shapes, pinned by equivalence sweeps): fit
   facts anchor positionally — first leg carries the departure-side

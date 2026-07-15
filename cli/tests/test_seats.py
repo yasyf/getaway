@@ -7,13 +7,15 @@ import traceback
 import types
 from pathlib import Path
 
+import click
 import httpx
 import pytest
 import respx
+from _api import api_row
 from click.testing import CliRunner
 
 from getaway import keys, paths, prefs, seats, store
-from getaway.constants import EXIT_AUTH, EXIT_NEGATIVE, EXIT_NO_DATA, EXIT_OK
+from getaway.constants import EXIT_AUTH, EXIT_NEGATIVE, EXIT_NO_DATA, EXIT_OK, EXIT_USAGE
 from getaway.seats import AuthError, SeatsClient
 from getaway.store import NoData, QuotaFloorError
 
@@ -145,6 +147,7 @@ def test_paginate_preserves_progress_on_quota_floor(
         )
     assert [row["ID"] for row in excinfo.value.rows] == ["AAA", "BBB"]
     assert excinfo.value.calls == 1
+    assert excinfo.value.covered == 1  # the first page returned data before the floor refusal
     assert isinstance(excinfo.value.cause, QuotaFloorError)
     assert route.call_count == 1
 
@@ -167,8 +170,27 @@ def test_paginate_preserves_progress_on_http_error(client: SeatsClient) -> None:
         )
     assert [row["ID"] for row in excinfo.value.rows] == ["AAA", "BBB"]
     assert excinfo.value.calls == 1
+    assert excinfo.value.covered == 1  # the first page returned data before the transport error
     assert isinstance(excinfo.value.cause, httpx.HTTPError)
     assert route.call_count == 2
+
+
+@respx.mock
+def test_paginate_counts_a_returned_error_response(client: SeatsClient) -> None:
+    # A completed request that returns 500 is a spent call; only a pre-request refusal is free.
+    route = respx.get(SEARCH_URL).mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    with pytest.raises(seats.PaginationError) as excinfo:
+        client._paginate(
+            "/search",
+            {"origin_airport": "SFO", "destination_airport": "NRT"},
+            take=500,
+            pages=2,
+        )
+    assert excinfo.value.calls == 1
+    assert excinfo.value.covered == 0  # the 500 returned no page: a completed call, no coverage
+    assert excinfo.value.rows == []
+    assert isinstance(excinfo.value.cause, httpx.HTTPStatusError)
+    assert route.call_count == 1
 
 
 @respx.mock
@@ -548,6 +570,166 @@ def test_search_command_ingests_and_reports(
 
 
 @respx.mock
+def test_search_command_truncated_page_refreshes_current_generation(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    data = load("search_page.json")["page1"]["data"]
+    complete_page = {"data": data[:1], "hasMore": False}  # [AAA] cleanly
+    truncated_page = {"data": data[1:], "hasMore": True, "cursor": "c"}  # [BBB] truncated
+    respx.get(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=complete_page, headers={seats.RATE_LIMIT_HEADER: "900"}),
+            httpx.Response(200, json=truncated_page, headers={seats.RATE_LIMIT_HEADER: "899"}),
+        ]
+    )
+    args = ["--origin", "SFO", "--dest", "NRT", "--trip", "trip-x", "--label", "asia"]
+    runner = CliRunner()
+    assert runner.invoke(seats.search_cmd, args).exit_code == EXIT_OK  # cuts the first generation
+    assert runner.invoke(seats.search_cmd, args).exit_code == EXIT_OK  # truncated: hasMore true
+    st = store.connect(paths.cache_db())
+    assert st.stats(trip_slug="trip-x")["sweeps"] == 1  # no new generation cut
+    visible = {row["id"] for row in st.query_availability(trip_slug="trip-x", labels=["asia"])}
+    assert visible == {"AAA", "BBB"}  # the truncated page refreshed into the one generation
+
+
+def _search_page(rows: list[dict], has_more: bool = False) -> httpx.Response:
+    payload: dict = {"data": rows, "hasMore": has_more}
+    if has_more:
+        payload["cursor"] = "c"
+    return httpx.Response(200, json=payload, headers={seats.RATE_LIMIT_HEADER: "900"})
+
+
+def _row(row_id: str, dest: str, date: str) -> dict:
+    return api_row(row_id, "SFO", dest, date, "united", {"J": {"mileage": "80000", "seats": 2}})
+
+
+def _visible(trip: str) -> set[str]:
+    st = store.connect(paths.cache_db())
+    return {row["id"] for row in st.query_availability(trip_slug=trip, labels=["asia"])}
+
+
+@respx.mock
+def test_search_command_narrower_dest_leaves_other_dest_undisclosed(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    broad = [_row("NRT-ROW", "NRT", "2026-09-05"), _row("HND-ROW", "HND", "2026-09-06")]
+    respx.get(SEARCH_URL).mock(side_effect=[_search_page(broad), _search_page([])])
+    runner = CliRunner()
+    base = ["--origin", "SFO", "--trip", "t", "--label", "asia"]
+    runner.invoke(seats.search_cmd, [*base, "--dest", "NRT", "--dest", "HND"])
+    result = runner.invoke(seats.search_cmd, [*base, "--dest", "NRT"])  # NRT-only, complete, empty
+    assert result.exit_code == EXIT_OK
+    superseded = {row["id"] for row in json.loads(result.output)["superseded"]}
+    assert superseded == {"NRT-ROW"}  # only the dest actually searched is superseded
+    assert _visible("t") == {"HND-ROW"}  # HND was not searched: it carries forward, undisclosed
+
+
+@respx.mock
+def test_search_command_narrower_dates_leaves_other_month_undisclosed(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    both = [_row("SEP-ROW", "NRT", "2026-09-15"), _row("OCT-ROW", "NRT", "2026-10-15")]
+    respx.get(SEARCH_URL).mock(side_effect=[_search_page(both), _search_page([])])
+    runner = CliRunner()
+    base = ["--origin", "SFO", "--dest", "NRT", "--trip", "t", "--label", "asia"]
+    runner.invoke(seats.search_cmd, base)  # both months ingested into the first generation
+    result = runner.invoke(
+        seats.search_cmd, [*base, "--start", "2026-09-01", "--end", "2026-09-30"]
+    )
+    assert result.exit_code == EXIT_OK
+    superseded = {row["id"] for row in json.loads(result.output)["superseded"]}
+    assert superseded == {"SEP-ROW"}  # only the month actually searched is superseded
+    assert _visible("t") == {"OCT-ROW"}  # October was outside the request window, carries forward
+
+
+@respx.mock
+def test_search_command_source_restriction_spares_another_source(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Finding 1(a): --source scopes the request to that program, so a source-restricted refresh
+    # never supersedes another program's rows.
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    united = api_row("UA", "SFO", "NRT", "2026-09-05", "united", {"J": {"mileage": "80000"}})
+    aeroplan = api_row("AC", "SFO", "NRT", "2026-09-05", "aeroplan", {"J": {"mileage": "80000"}})
+    respx.get(SEARCH_URL).mock(side_effect=[_search_page([united, aeroplan]), _search_page([])])
+    runner = CliRunner()
+    base = ["--origin", "SFO", "--dest", "NRT", "--trip", "t", "--label", "asia"]
+    runner.invoke(seats.search_cmd, base)  # unrestricted: both sources ingested
+    result = runner.invoke(seats.search_cmd, [*base, "--source", "aeroplan"])  # aeroplan-only
+    assert result.exit_code == EXIT_OK
+    superseded = {row["id"] for row in json.loads(result.output)["superseded"]}
+    assert superseded == {"AC"}  # only the aeroplan program was searched
+    assert _visible("t") == {"UA"}  # the united row is out of the source scope, carries forward
+
+
+@pytest.mark.parametrize(
+    "filter_args",
+    [["--cabin", "J"], ["--carrier", "NH"], ["--direct"]],
+    ids=["cabin", "carrier", "direct"],
+)
+@respx.mock
+def test_search_command_filter_is_cache_enrichment_not_a_re_sweep(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch, filter_args: list[str]
+) -> None:
+    # Finding 1(b): cabin/carrier/direct filters aren't row-expressible, so a filtered request is
+    # cache enrichment — it cuts no generation and supersedes nothing, even when its page is clean.
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    both = [_row("NRT-A", "NRT", "2026-09-05"), _row("HND-B", "HND", "2026-09-06")]
+    respx.get(SEARCH_URL).mock(side_effect=[_search_page(both), _search_page([both[0]])])
+    runner = CliRunner()
+    base = ["--origin", "SFO", "--dest", "NRT", "--dest", "HND", "--trip", "t", "--label", "asia"]
+    runner.invoke(seats.search_cmd, base)  # cuts the first generation holding both rows
+    result = runner.invoke(seats.search_cmd, [*base, *filter_args])  # filtered: enrichment only
+    assert result.exit_code == EXIT_OK
+    assert json.loads(result.output)["superseded"] == []  # a filtered lens supersedes nothing
+    st = store.connect(paths.cache_db())
+    assert st.stats(trip_slug="t")["sweeps"] == 1  # no new generation cut
+    assert _visible("t") == {"NRT-A", "HND-B"}  # the absent row is not superseded by the filter
+
+
+@respx.mock
+def test_availability_command_cabin_filter_is_cache_enrichment(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Finding 1(b): --cabin on availability is a filtered lens too — enrichment, never a re-sweep.
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    two = [
+        api_row("AV1", "SFO", "NRT", "2026-09-05", "united", {"J": {"mileage": "80000"}}),
+        api_row("AV2", "LAX", "HND", "2026-09-06", "united", {"J": {"mileage": "90000"}}),
+    ]
+    respx.get(AVAIL_URL).mock(side_effect=[_search_page(two), _search_page([two[0]])])
+    runner = CliRunner()
+    base = ["--source", "united", "--trip", "t", "--label", "prog"]
+    runner.invoke(seats.availability_cmd, base)  # cuts the first generation holding both rows
+    result = runner.invoke(seats.availability_cmd, [*base, "--cabin", "J"])  # filtered enrichment
+    assert result.exit_code == EXIT_OK
+    assert json.loads(result.output)["superseded"] == []  # a filtered lens supersedes nothing
+    st = store.connect(paths.cache_db())
+    assert st.stats(trip_slug="t")["sweeps"] == 1  # no new generation cut
+    visible = {row["id"] for row in st.query_availability(trip_slug="t", labels=["prog"])}
+    assert visible == {"AV1", "AV2"}  # the absent row is not superseded by the filter
+
+
+@respx.mock
+def test_raw_paths_send_include_filtered(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    search_route = respx.get(SEARCH_URL).mock(return_value=_search_page([]))
+    avail_route = respx.get(AVAIL_URL).mock(return_value=_search_page([]))
+    runner = CliRunner()
+    search = runner.invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
+    avail = runner.invoke(seats.availability_cmd, ["--source", "united"])
+    assert search.exit_code == EXIT_OK
+    assert avail.exit_code == EXIT_OK
+    assert search_route.calls[0].request.url.params["include_filtered"] == "true"
+    assert avail_route.calls[0].request.url.params["include_filtered"] == "true"
+
+
+@respx.mock
 def test_expand_command_serves_from_cache_on_repeat(
     getaway_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -599,6 +781,23 @@ def test_search_command_without_credentials_exits_auth(
     monkeypatch.delenv(seats.API_KEY_ENV, raising=False)
     result = CliRunner().invoke(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"])
     assert result.exit_code == EXIT_AUTH
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("command", "args"),
+    [
+        pytest.param(seats.search_cmd, ["--origin", "SFO", "--dest", "NRT"], id="search"),
+        pytest.param(seats.availability_cmd, ["--source", "aeroplan"], id="availability"),
+    ],
+)
+def test_command_rejects_nonpositive_pages(
+    command: click.Command, args: list[str], getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(seats.API_KEY_ENV, "pro_test")
+    result = CliRunner().invoke(command, [*args, "--pages", "0"])
+    assert result.exit_code == EXIT_USAGE  # rejected at the CLI boundary, not clamped
+    assert store.connect(paths.cache_db()).stats()["availability"] == 0  # no request, no rows
 
 
 def _reservations(db_path: Path) -> int:

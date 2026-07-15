@@ -367,6 +367,448 @@ def test_query_trip_scoped_latest_sweep_isolated_per_label(db_path: Path) -> Non
     assert {row["id"] for row in rows} == {"R1", "R3"}
 
 
+def test_incomplete_run_refreshes_rows_into_current_generation(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest(ROWS, sweep=_sweep("asia", FROZEN), complete=True)
+    g1 = st.pin_generation("trip", "asia")
+    result = st.ingest(
+        [ROWS[0]],
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)),
+        complete=False,
+        base_generation=g1,
+    )
+    assert result["superseded"] == []  # an incomplete run supersedes nothing
+    visible = st.query_availability(trip_slug="trip", labels=["asia"], cabin="Y")
+    assert {row["id"] for row in visible} == {"R1", "R2", "R3"}  # prior rows stay visible
+    assert st.stats(trip_slug="trip") == {"trip_slug": "trip", "sweeps": 1, "rows": 3}
+
+
+def test_incomplete_run_preserves_supersede_baseline(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest(ROWS, sweep=_sweep("asia", FROZEN), complete=True)
+    g1 = st.pin_generation("trip", "asia")
+    failed = st.ingest(
+        [],
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)),
+        complete=False,
+        base_generation=g1,
+    )
+    assert failed["superseded"] == []
+    assert {row["id"] for row in st.query_availability(trip_slug="trip", cabin="Y")} == {
+        "R1",
+        "R2",
+        "R3",
+    }
+    # the next complete run diffs against the original generation, not the failed one
+    later = st.ingest(
+        [ROWS[0]], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=2)), complete=True
+    )
+    assert later["superseded"] == [
+        {"id": "R2", "date": "2026-09-05"},
+        {"id": "R3", "date": "2026-09-10"},
+    ]
+
+
+def test_ingest_rolls_back_malformed_row_leaving_connection_usable(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    with pytest.raises(KeyError):
+        st.ingest([{"missing": "id"}], sweep=_sweep("asia", FROZEN))
+    assert st._conn.in_transaction is False  # the aborted BEGIN IMMEDIATE was rolled back
+    result = st.ingest(ROWS, sweep=_sweep("asia", FROZEN))
+    assert result == {"rows": 3, "new": 3, "superseded": []}
+    assert st.stats(trip_slug="trip") == {"trip_slug": "trip", "sweeps": 1, "rows": 3}
+
+
+def test_incomplete_run_pins_generation_captured_at_start(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest([ROWS[0], ROWS[1]], sweep=_sweep("asia", FROZEN), complete=True)  # G1 holds R1, R2
+    g1 = st.pin_generation("trip", "asia")
+    # an interleaved complete run cuts G2, superseding R2
+    cut = st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)), complete=True)
+    assert cut["superseded"] == [{"id": "R2", "date": "2026-09-05"}]
+    # the incomplete run, pinned to G1 at its start, refreshes R2 into G1 — never into G2
+    late = st.ingest(
+        [ROWS[1]],
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=2)),
+        complete=False,
+        base_generation=g1,
+    )
+    assert late["superseded"] == []  # an incomplete run supersedes nothing
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["asia"], cabin="Y")
+    }
+    assert visible == {"R1"}  # G2 unchanged; R2 stayed in G1 and was not resurrected
+
+
+def _biz_row(row_id: str, dest: str, date: str) -> dict:
+    return make_row(row_id, "SFO", dest, date, "united", {"J": (True, "80000", 2, "NH", True)})
+
+
+_BASE_SCOPE = [{"start": "2026-09-01", "end": "2026-09-14", "constraints": {"dest": "NRT"}}]
+
+
+def test_complete_run_carries_forward_out_of_scope_rows(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    widened = _biz_row("X", "NRT", "2026-09-22")  # outside the base window
+    in_window = _biz_row("Y", "NRT", "2026-09-05")
+    st.ingest([widened, in_window], sweep=_sweep("asia", FROZEN), complete=True)
+    refound = _biz_row("Y2", "NRT", "2026-09-05")
+    result = st.ingest(
+        [refound],
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)),
+        complete=True,
+        scope=_BASE_SCOPE,
+    )
+    assert result["superseded"] == [{"id": "Y", "date": "2026-09-05"}]  # only in-scope disappears
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["asia"], cabin="J")
+    }
+    assert visible == {"Y2", "X"}  # X carried forward out of scope, still visible
+
+
+def test_complete_run_supersedes_in_scope_disappearance(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest([_biz_row("X", "NRT", "2026-09-10")], sweep=_sweep("asia", FROZEN), complete=True)
+    result = st.ingest(
+        [], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)), complete=True, scope=_BASE_SCOPE
+    )
+    assert result["superseded"] == [{"id": "X", "date": "2026-09-10"}]
+    assert st.query_availability(trip_slug="trip", labels=["asia"], cabin="J") == []
+
+
+def test_zero_row_complete_sweep_supersedes_every_in_scope_row(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    st.ingest(ROWS, sweep=_sweep("asia", FROZEN), complete=True)
+    scope = [
+        {"start": "2026-09-01", "end": "2026-09-14", "constraints": {"dest": "NRT"}},
+        {"start": "2026-09-01", "end": "2026-09-14", "constraints": {"dest": "HND"}},
+    ]
+    result = st.ingest(
+        [], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)), complete=True, scope=scope
+    )
+    assert result["superseded"] == [
+        {"id": "R1", "date": "2026-09-01"},
+        {"id": "R2", "date": "2026-09-05"},
+        {"id": "R3", "date": "2026-09-10"},
+    ]
+    assert st.query_availability(trip_slug="trip", labels=["asia"]) == []
+
+
+def test_first_incomplete_run_never_resurrects_into_interleaved_generation(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    pin = st.pin_generation("trip", "asia")  # no generation exists when the run starts
+    assert pin is store.NO_GENERATION
+    # a complete run interleaves and cuts the first generation holding only R1
+    st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)), complete=True)
+    # the incomplete run, pinned before any generation existed, ingests R2 late
+    late = st.ingest(
+        [ROWS[1]],
+        sweep=_sweep("asia", FROZEN + dt.timedelta(hours=2)),
+        complete=False,
+        base_generation=pin,
+    )
+    assert late["superseded"] == []
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["asia"], cabin="Y")
+    }
+    assert visible == {"R1"}  # R2 never joined the interleaved generation
+    assert st.stats(trip_slug="trip") == {"trip_slug": "trip", "sweeps": 1, "rows": 1}
+
+
+def test_first_incomplete_run_with_no_generation_establishes_the_first(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    pin = st.pin_generation("trip", "asia")
+    assert pin is store.NO_GENERATION
+    result = st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN), complete=False, base_generation=pin)
+    assert result["superseded"] == []
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["asia"], cabin="Y")
+    }
+    assert visible == {"R1"}  # with no generation to interleave, the run establishes the first
+    assert st.stats(trip_slug="trip") == {"trip_slug": "trip", "sweeps": 1, "rows": 1}
+
+
+def test_stale_incomplete_pin_does_not_backdate_a_newer_generations_payload(db_path: Path) -> None:
+    t1, t2, t3 = (FROZEN + dt.timedelta(hours=h) for h in (0, 1, 2))
+    g1_row = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t1)).ingest([g1_row], sweep=_sweep("asia", t1), complete=True)
+    start = store.connect(db_path)  # the incomplete run starts here, before G2 is cut
+    g1 = start.pin_generation("trip", "asia")
+    w = start.global_watermark()  # global watermark captured at the incomplete run's start
+    g2_row = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "90000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t2)).ingest(
+        [g2_row], sweep=_sweep("asia", t2), complete=True, scope=_BASE_SCOPE
+    )
+    stale = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t3)).ingest(
+        [stale], sweep=_sweep("asia", t3), complete=False, base_generation=g1, watermark=w
+    )
+    (row,) = store.connect(db_path, now=_clock(t3)).query_availability(
+        trip_slug="trip", labels=["asia"], cabin="J"
+    )
+    assert row["mileage_cost"] == 90000  # the current generation keeps its own value
+    assert row["fetched_at"] == t2.isoformat()  # and its own freshness, not the stale run's
+
+
+def _region_row(row_id: str, origin_region: str, dest_region: str) -> dict:
+    row = make_row(
+        row_id, "AAA", "BBB", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    row["Route"]["OriginRegion"] = origin_region
+    row["Route"]["DestinationRegion"] = dest_region
+    return row
+
+
+def test_origin_region_scope_spares_a_dest_side_row(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    from_africa = _region_row("AF", origin_region="Africa", dest_region="Europe")
+    from_na = _region_row("NA", origin_region="North America", dest_region="Asia")
+    st.ingest([from_africa, from_na], sweep=_sweep("origins", FROZEN), complete=True)
+    scope = [
+        {"start": "2026-09-01", "end": "2026-09-14", "constraints": {"origin_region": "Africa"}}
+    ]
+    result = st.ingest(
+        [], sweep=_sweep("origins", FROZEN + dt.timedelta(hours=1)), complete=True, scope=scope
+    )
+    assert result["superseded"] == [{"id": "AF", "date": "2026-09-05"}]  # only the searched side
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["origins"], cabin="J")
+    }
+    assert visible == {"NA"}  # a row whose origin is outside the searched region carries forward
+
+
+def test_conjunctive_region_scope_spares_rows_matching_one_side_only(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    from_africa_to_asia = _region_row("HIT", origin_region="Africa", dest_region="Asia")
+    from_na_to_asia = _region_row("NA", origin_region="North America", dest_region="Asia")
+    from_africa_to_europe = _region_row("AE", origin_region="Africa", dest_region="Europe")
+    st.ingest(
+        [from_africa_to_asia, from_na_to_asia, from_africa_to_europe],
+        sweep=_sweep("origins", FROZEN),
+        complete=True,
+    )
+    # one group constraining BOTH directions: the Africa-origins to Asia run
+    scope = [
+        {
+            "start": "2026-09-01",
+            "end": "2026-09-14",
+            "constraints": {"origin_region": "Africa", "dest_region": "Asia"},
+        }
+    ]
+    result = st.ingest(
+        [], sweep=_sweep("origins", FROZEN + dt.timedelta(hours=1)), complete=True, scope=scope
+    )
+    assert result["superseded"] == [{"id": "HIT", "date": "2026-09-05"}]  # only both-sides match
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["origins"], cabin="J")
+    }
+    assert visible == {"NA", "AE"}  # matching one side only is out of scope, carries forward
+
+
+def test_source_scope_spares_a_different_source_row(db_path: Path) -> None:
+    # Finding 1(a): a source-restricted request scopes on its source, so a complete refresh of one
+    # program never supersedes a row from another — _resolve_sweep fetches the source column.
+    st = store.connect(db_path, now=_clock(FROZEN))
+    united = make_row(
+        "U", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    aeroplan = make_row(
+        "A", "SFO", "NRT", "2026-09-05", "aeroplan", {"J": (True, "80000", 2, "AC", False)}
+    )
+    st.ingest([united, aeroplan], sweep=_sweep("asia", FROZEN), complete=True)
+    scope = [{"start": "2026-09-01", "end": "2026-09-14", "constraints": {"source": "aeroplan"}}]
+    result = st.ingest(
+        [], sweep=_sweep("asia", FROZEN + dt.timedelta(hours=1)), complete=True, scope=scope
+    )
+    assert result["superseded"] == [{"id": "A", "date": "2026-09-05"}]  # only the aeroplan row
+    visible = {
+        row["id"] for row in st.query_availability(trip_slug="trip", labels=["asia"], cabin="J")
+    }
+    assert visible == {"U"}  # the united row is outside the source scope, carries forward
+
+
+def test_stale_incomplete_pin_does_not_backdate_across_labels(db_path: Path) -> None:
+    t1, t2, t3 = (FROZEN + dt.timedelta(hours=h) for h in (0, 1, 2))
+    original = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t1)).ingest(
+        [original], sweep=_sweep("asia", t1), complete=True
+    )
+    start = store.connect(db_path)  # the incomplete 'asia' run starts before europe's sweep lands
+    pin = start.pin_generation("trip", "asia")  # the incomplete 'asia' run's base
+    w = start.global_watermark()  # captured before the concurrent cross-label sweep
+    # a concurrent sweep node under a DIFFERENT label refreshes the same global row id
+    fresher = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "90000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t2)).ingest(
+        [fresher], sweep=_sweep("europe", t2), complete=True
+    )
+    stale = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t3)).ingest(
+        [stale], sweep=_sweep("asia", t3), complete=False, base_generation=pin, watermark=w
+    )
+    (row,) = store.connect(db_path, now=_clock(t3)).query_availability(
+        trip_slug="trip", labels=["europe"], cabin="J"
+    )
+    assert row["mileage_cost"] == 90000  # began before europe's sweep: its payload is not backdated
+    assert row["fetched_at"] == t2.isoformat()
+
+
+def test_incomplete_run_may_refresh_a_shared_row_swept_before_it_started(db_path: Path) -> None:
+    # Finding 4's other direction: an incomplete run that began AFTER another label's sweep
+    # completed holds fresher data, so it may refresh the shared row (watermark past that sweep).
+    t1, t2, t3 = (FROZEN + dt.timedelta(hours=h) for h in (0, 1, 2))
+    original = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t1)).ingest(
+        [original], sweep=_sweep("asia", t1), complete=True
+    )
+    cross = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "90000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t2)).ingest(
+        [cross], sweep=_sweep("europe", t2), complete=True
+    )
+    start = store.connect(db_path)  # the incomplete 'asia' run starts AFTER europe's sweep landed
+    pin = start.pin_generation("trip", "asia")
+    w = start.global_watermark()  # watermark now past europe's sweep, so its row is unprotected
+    fresher = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "70000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t3)).ingest(
+        [fresher], sweep=_sweep("asia", t3), complete=False, base_generation=pin, watermark=w
+    )
+    (row,) = store.connect(db_path, now=_clock(t3)).query_availability(
+        trip_slug="trip", labels=["europe"], cabin="J"
+    )
+    assert row["mileage_cost"] == 70000  # began after europe's sweep: fresher data lands
+    assert row["fetched_at"] == t3.isoformat()
+
+
+def test_sweepless_incomplete_ingest_does_not_backdate_a_newer_generation(db_path: Path) -> None:
+    # Finding 3: payload protection applies to EVERY incomplete ingest, sweep=None included.
+    t1, t2 = (FROZEN + dt.timedelta(hours=h) for h in (0, 1))
+    w = store.connect(db_path).global_watermark()  # sweepless run starts before any sweep: 0
+    fresh = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "90000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t1)).ingest([fresh], sweep=_sweep("asia", t1), complete=True)
+    stale = make_row(
+        "R", "SFO", "NRT", "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+    store.connect(db_path, now=_clock(t2)).ingest(
+        [stale], sweep=None, complete=False, watermark=w
+    )
+    (row,) = store.connect(db_path).query_availability(
+        trip_slug="trip", labels=["asia"], cabin="J"
+    )
+    assert row["mileage_cost"] == 90000  # the newer generation's payload is not backdated
+    assert row["fetched_at"] == t1.isoformat()
+
+
+def test_global_watermark_reports_max_sweep_id_or_zero(db_path: Path) -> None:
+    st = store.connect(db_path, now=_clock(FROZEN))
+    assert st.global_watermark() == 0  # no sweeps yet
+    st.ingest([ROWS[0]], sweep=_sweep("asia", FROZEN))
+    st.ingest([ROWS[1]], sweep=_sweep("europe", FROZEN))
+    assert st.global_watermark() == 2  # the max sweep id across every label
+
+
+_WINDOW = [{"start": "2026-09-01", "end": "2026-09-14"}]
+
+
+def _scope_field(scope: list[dict], field: str) -> set[str]:
+    return {entry["constraints"][field] for entry in scope}
+
+
+def _scope_row(row_id: str, origin: str, dest: str) -> dict:
+    return make_row(
+        row_id, origin, dest, "2026-09-05", "united", {"J": (True, "80000", 2, "NH", False)}
+    )
+
+
+def test_search_scope_uses_demonstrated_airports_not_registry_superset() -> None:
+    # ASA's registry list is a superset (KUL/PEK/PNK/…); only NRT is demonstrated this run.
+    scope = store.search_scope(["SFO"], ["ASA"], [_scope_row("r", "SFO", "NRT")], _WINDOW)
+    assert _scope_field(scope, "dest") == {"NRT"}  # unproven ASA members never scoped
+    assert _scope_field(scope, "origin") == {"SFO"}
+
+
+def test_search_scope_keeps_server_superset_and_drops_unproven_registry_floor() -> None:
+    # WST's registry floor lists PDX; this run demonstrates SFO plus ZZZ (outside the floor).
+    rows = [_scope_row("a", "SFO", "NRT"), _scope_row("b", "ZZZ", "NRT")]
+    scope = store.search_scope(["WST"], ["NRT"], rows, _WINDOW)
+    assert _scope_field(scope, "origin") == {"SFO", "ZZZ"}  # server superset kept
+    assert "PDX" not in _scope_field(scope, "origin")  # registry floor not carried silently
+
+
+def test_search_scope_resolves_region_airport_collision_by_demonstration() -> None:
+    # SEA is both Seattle and the Southeast-Asia region code; the row proves Seattle was searched.
+    scope = store.search_scope(["JFK"], ["SEA"], [_scope_row("r", "JFK", "SEA")], _WINDOW)
+    assert _scope_field(scope, "dest") == {"SEA"}  # not expanded to SIN/KUL/BKK/…
+    assert {"SIN", "KUL", "BKK"}.isdisjoint(_scope_field(scope, "dest"))
+
+
+@pytest.mark.parametrize(
+    ("dests", "rows", "expected_dests"),
+    [
+        pytest.param(["NRT"], [], {"NRT"}, id="concrete-zero-rows-still-scopes"),
+        pytest.param(["ASA"], [], set(), id="region-zero-rows-contributes-nothing"),
+    ],
+)
+def test_search_scope_zero_row_behavior(
+    dests: list[str], rows: list[dict], expected_dests: set[str]
+) -> None:
+    scope = store.search_scope(["SFO"], dests, rows, _WINDOW)
+    assert {entry["constraints"]["dest"] for entry in scope} == expected_dests
+
+
+def test_search_scope_pins_each_source_when_restricted() -> None:
+    rows = [_scope_row("r", "SFO", "NRT")]
+    scope = store.search_scope(["SFO"], ["NRT"], rows, _WINDOW, sources=["united", "aeroplan"])
+    assert _scope_field(scope, "source") == {"united", "aeroplan"}  # one entry per source
+    assert _scope_field(scope, "dest") == {"NRT"}
+    assert _scope_field(scope, "origin") == {"SFO"}
+
+
+def test_search_scope_unrestricted_omits_source_constraint() -> None:
+    scope = store.search_scope(["SFO"], ["NRT"], [_scope_row("r", "SFO", "NRT")], _WINDOW)
+    assert all("source" not in entry["constraints"] for entry in scope)
+
+
+@pytest.mark.parametrize(
+    ("origin_region", "dest_region", "expected"),
+    [
+        pytest.param(
+            "Africa",
+            "Asia",
+            {"source": "aeroplan", "origin_region": "Africa", "dest_region": "Asia"},
+            id="both",
+        ),
+        pytest.param(None, "Asia", {"source": "aeroplan", "dest_region": "Asia"}, id="dest-only"),
+        pytest.param(
+            "Africa", None, {"source": "aeroplan", "origin_region": "Africa"}, id="origin-only"
+        ),
+    ],
+)
+def test_availability_scope_carries_source_and_every_constrained_region(
+    origin_region: str | None, dest_region: str | None, expected: dict
+) -> None:
+    scope = store.availability_scope("aeroplan", origin_region, dest_region, _WINDOW)
+    assert scope == [{"start": "2026-09-01", "end": "2026-09-14", "constraints": expected}]
+
+
 def test_trip_detail_roundtrip_and_freshness(db_path: Path) -> None:
     normalized = {"id": "T1", "mileage": 44000, "segments": []}
     st = store.connect(db_path, now=_clock(FROZEN))

@@ -11,6 +11,7 @@ from getaway import prefs, registry
 from getaway.constants import (
     CABIN_PREFIX,
     DISJOINT_DURABLE_PREF_KEYS,
+    GENERATION_CUTTING_COMPLETENESS,
     NODE_QUOTA_COST,
     NODE_ROUTING,
     NODE_TTL_HOURS,
@@ -616,18 +617,51 @@ def _validate_sweep_artifact(doc: object, name: str) -> None:
         f"{name}.provenance",
         optional=frozenset({"superseded_rows"}),
     )
+    if not isinstance(doc["search_states"], dict):
+        raise UsageError(f"{name}.search_states must be an object")
+    for endpoint, state in doc["search_states"].items():
+        if not isinstance(state, dict):
+            raise UsageError(f"{name}.search_states[{endpoint!r}] must be an object")
+    if not isinstance(doc["rows"], list):
+        raise UsageError(f"{name}.rows must be a list")
     if "superseded_rows" in provenance:
         label = f"{name}.provenance.superseded_rows"
         superseded = require_keys(provenance["superseded_rows"], {"count", "ids"}, label)
-        if require_int(superseded["count"], f"{label}.count") <= 0:
+        count = require_int(superseded["count"], f"{label}.count")
+        if count <= 0:
             raise UsageError(f"{label}.count must be at least 1")
-        require_str_list(superseded["ids"], f"{label}.ids")
-        if len(superseded["ids"]) > 50:
-            raise UsageError(f"{label}.ids must contain at most 50 entries")
-    if not isinstance(doc["search_states"], dict):
-        raise UsageError(f"{name}.search_states must be an object")
-    if not isinstance(doc["rows"], list):
-        raise UsageError(f"{name}.rows must be a list")
+        ids = superseded["ids"]
+        require_str_list(ids, f"{label}.ids")
+        if len(set(ids)) != len(ids):
+            raise UsageError(f"{label}.ids must not repeat an id")
+        if len(ids) != min(count, 50):
+            raise UsageError(f"{label}.ids must list min(count, 50) entries")
+        if not isinstance(provenance["searched"], list):
+            raise UsageError(f"{name}.provenance.searched must be a list")
+        if not provenance["searched"]:
+            raise UsageError(f"{label} cannot accompany a sweep that searched nothing")
+        completeness = require_str(
+            provenance["completeness"], f"{name}.provenance.completeness"
+        )
+        if completeness not in GENERATION_CUTTING_COMPLETENESS:
+            raise UsageError(f"{label} requires a complete sweep, not {completeness!r}")
+        for endpoint, state in doc["search_states"].items():
+            endpoint_state = require_str(
+                state.get("state"), f"{name}.search_states[{endpoint!r}].state"
+            )
+            if endpoint_state not in GENERATION_CUTTING_COMPLETENESS:
+                raise UsageError(
+                    f"{label} requires every endpoint fully searched, not "
+                    f"{endpoint!r}={endpoint_state!r}"
+                )
+        row_ids: set[str] = set()
+        for index, row in enumerate(doc["rows"]):
+            row_label = f"{name}.rows[{index}]"
+            if not isinstance(row, dict):
+                raise UsageError(f"{row_label} must be an object")
+            row_ids.add(require_str(row.get("ID"), f"{row_label}.ID"))
+        if row_ids.intersection(ids):
+            raise UsageError(f"{label}.ids must be disjoint from the sweep's own rows")
 
 
 def _validate_shortlist_artifact(doc: object, name: str) -> None:
