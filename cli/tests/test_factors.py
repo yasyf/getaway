@@ -523,12 +523,12 @@ def test_dominated_mixed_journey_sinks_to_a_later_front(biz_trip: str) -> None:
     assert [e["cost_tier"] for e in ranked] == [0, 1]
 
 
-def _cash(cents: int) -> list[dict]:
+def _cash(cents: int, currency: str = "USD") -> list[dict]:
     return [
         {
             "leg_role": "onward",
             "amount_cents": cents,
-            "currency": "USD",
+            "currency": currency,
             "duration_minutes": 180,
             "airline": "Japan Airlines",
         }
@@ -553,6 +553,24 @@ def test_same_program_direct_dominates_costlier_cash_hybrid(biz_trip: str) -> No
     ranked = do_rank(biz_trip, [hybrid, direct])
     assert order(ranked) == ["DIRECT", "HYBRID"]
     assert [e["cost_tier"] for e in ranked] == [0, 1]
+
+
+def test_split_same_currency_cash_legs_sum_onto_one_axis(biz_trip: str) -> None:
+    # Two USD legs read as one summed $cash:USD axis, so the all-award direct still dominates.
+    direct = journey("DIRECT", {"united": 80000})
+    split = journey("SPLIT", {"united": 80000}, cash=_cash(7000) + _cash(5000))
+    ranked = do_rank(biz_trip, [split, direct])
+    assert order(ranked) == ["DIRECT", "SPLIT"]
+    assert [e["cost_tier"] for e in ranked] == [0, 1]
+
+
+def test_cross_currency_cash_axes_are_pareto_incomparable(biz_trip: str) -> None:
+    # Distinct currency axes, no conversion: a collapsed cash axis would sink USD (40000 > 30000).
+    usd = journey("USD", {"united": 80000}, cash=_cash(40000))
+    eur = journey("EUR", {"united": 80000}, cash=_cash(30000, "EUR"))
+    ranked = do_rank(biz_trip, [usd, eur])
+    assert all(e["cost_tier"] == 0 for e in ranked)
+    assert order(ranked) == ["EUR", "USD"]  # tiebreak: $cash:EUR sorts before $cash:USD
 
 
 def test_funded_preferred_outranks_unfunded_soft_avoided(biz_trip: str) -> None:
@@ -1067,6 +1085,83 @@ def test_dominates_with_empty_codes_matches_prior_behavior(
     assert factors._dominates(a, b, frozenset()) is expected
 
 
+@pytest.mark.parametrize(
+    ("cash", "expected"),
+    [
+        pytest.param(None, {"united": 80000}, id="cash-free-no-axis"),
+        pytest.param(_cash(0), {"united": 80000}, id="zero-cash-no-axis"),
+        pytest.param(
+            _cash(7000) + _cash(-7000),
+            {"united": 80000},
+            id="same-currency-sums-to-zero-no-axis",
+        ),
+        pytest.param(_cash(12000), {"united": 80000, "$cash:USD": 12000}, id="single-component"),
+        pytest.param(
+            _cash(7000) + _cash(5000),
+            {"united": 80000, "$cash:USD": 12000},
+            id="same-currency-components-sum",
+        ),
+        pytest.param(
+            _cash(12000) + _cash(30000, "EUR"),
+            {"united": 80000, "$cash:USD": 12000, "$cash:EUR": 30000},
+            id="one-axis-per-currency",
+        ),
+    ],
+)
+def test_cost_vector_keys_cash_per_currency(cash: list | None, expected: dict) -> None:
+    assert factors._cost_vector(_entry(journey("J", {"united": 80000}, cash=cash))) == expected
+
+
+def test_zero_cash_preserves_same_program_band_behavior(biz_trip: str) -> None:
+    zero_cash = [
+        journey("Z80", {"united": 80000}, cash=_cash(0)),
+        journey("Z90", {"united": 90000}, cash=_cash(0)),
+    ]
+    cash_free = [
+        journey("Z80", {"united": 80000}),
+        journey("Z90", {"united": 90000}),
+    ]
+    zero_entries = [_entry(j) for j in zero_cash]
+    cash_free_entries = [_entry(j) for j in cash_free]
+    zero_dominance = [
+        factors._dominates(zero_entries[0], zero_entries[1], frozenset()),
+        factors._dominates(zero_entries[1], zero_entries[0], frozenset()),
+    ]
+    cash_free_dominance = [
+        factors._dominates(cash_free_entries[0], cash_free_entries[1], frozenset()),
+        factors._dominates(cash_free_entries[1], cash_free_entries[0], frozenset()),
+    ]
+    assert zero_dominance == cash_free_dominance == [False, False]
+
+    zero_ranked = do_rank(biz_trip, zero_cash)
+    cash_free_ranked = do_rank(biz_trip, cash_free)
+    assert [e["cost_tier"] for e in zero_ranked] == [
+        e["cost_tier"] for e in cash_free_ranked
+    ] == [0, 0]
+    assert order(zero_ranked) == order(cash_free_ranked) == ["Z80", "Z90"]
+
+
+@pytest.mark.parametrize(
+    ("a_cash", "b_cash", "expected"),
+    [
+        pytest.param(None, _cash(12000), True, id="cash-free-dominates-equal-miles-hybrid"),
+        pytest.param(_cash(12000), None, False, id="cash-bearing-never-dominates-cash-free"),
+        pytest.param(
+            _cash(7000) + _cash(4999), _cash(12000), True, id="split-sum-cheaper-dominates"
+        ),
+        pytest.param(_cash(7000) + _cash(5000), _cash(12000), False, id="split-sum-equal-no-edge"),
+        pytest.param(_cash(40000), _cash(30000, "EUR"), False, id="usd-never-dominates-eur"),
+        pytest.param(_cash(30000, "EUR"), _cash(40000), False, id="eur-never-dominates-usd"),
+    ],
+)
+def test_dominates_across_cash_axes(
+    a_cash: list | None, b_cash: list | None, expected: bool
+) -> None:
+    a = _entry(journey("A", {"united": 80000}, cash=a_cash))
+    b = _entry(journey("B", {"united": 80000}, cash=b_cash))
+    assert factors._dominates(a, b, frozenset()) is expected
+
+
 def test_guard_keeps_clearing_journey_on_the_front() -> None:
     def entries() -> list[dict]:
         return [
@@ -1087,7 +1182,7 @@ def _random_entry(rng: random.Random, jid: str) -> dict:
     programs = rng.sample(["united", "delta", "aeroplan", "avianca"], rng.randint(1, 2))
     miles = [40000, 60000, 80000, 90000, 100000, 115000, 115001, 200000]
     by_program = {p: rng.choice(miles) for p in programs}
-    cash = _cash(rng.choice([12000, 40000])) if rng.random() < 0.4 else None
+    cash = _cash(rng.choice([0, 12000, 40000])) if rng.random() < 0.4 else None
     misses = [miss("cabin")] if rng.random() < 0.4 else []
     return _entry(journey(jid, by_program, cash=cash, misses=misses))
 
@@ -1129,6 +1224,44 @@ def test_assign_cost_tiers_dominance_strictly_lowers_cost(monkeypatch: pytest.Mo
         codes = frozenset({"cabin"}) if rng.random() < 0.5 else frozenset()
         entries = [_random_entry(rng, f"J{i}") for i in range(rng.randint(1, 8))]
         factors._assign_cost_tiers(entries, codes)
+
+
+def _single_cash_axis_cost_vector(entry: dict) -> dict[str, int]:
+    # The pre-per-currency vector: every cash component summed onto one "$cash" axis.
+    journey = entry["journey"]
+    vector = dict(journey["cost"]["mileage"]["by_program"])
+    cash_cents = sum(component["amount_cents"] for component in journey["cost"]["cash"])
+    if cash_cents:
+        vector["$cash"] = cash_cents
+    return vector
+
+
+def test_single_currency_populations_bit_identical_to_single_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Equivalence sweep: on single-currency shapes (all of today's fixtures), per-currency axes
+    # reproduce the single-axis vector's dominance, tier assignments, and order bit-for-bit.
+    rng = random.Random(0x2B2B)
+    for pop in range(5000):
+        codes = frozenset({"cabin"}) if rng.random() < 0.5 else frozenset()
+        entries = [_random_entry(rng, f"J{i}") for i in range(rng.randint(1, 8))]
+        for entry in entries:
+            entry["verdicts"] = []
+        dominance = [
+            factors._dominates(a, b, codes) for a in entries for b in entries if a is not b
+        ]
+        ranked = order(factors._order(entries, {}, set(), codes))
+        tiers = [e["_cost_tier"] for e in entries]
+        with monkeypatch.context() as m:
+            m.setattr(factors, "_cost_vector", _single_cash_axis_cost_vector)
+            head_dominance = [
+                factors._dominates(a, b, codes) for a in entries for b in entries if a is not b
+            ]
+            head_ranked = order(factors._order(entries, {}, set(), codes))
+            head_tiers = [e["_cost_tier"] for e in entries]
+        assert dominance == head_dominance, f"population {pop} dominance diverged"
+        assert tiers == head_tiers, f"population {pop} tiers diverged"
+        assert ranked == head_ranked, f"population {pop} order diverged"
 
 
 @pytest.mark.parametrize(

@@ -3,14 +3,14 @@
 The stays node is agent-shaped: a sequential browser walk of rooms.aero (``command=None``
 like assess, routed opus/xhigh) that the walker preflights for a seeded Pro session. Interval
 derivation and row ingest around that walk are deterministic CLI. ``stays intervals`` reads
-the ranked journeys and derives each presented journey's check-in / check-out / nights from
-its real paired timestamps — a Tuesday return honestly adds the extra hotel night — and
-defers lodging (never guessing a checkout) for unpaired leads, open jaws whose outbound
-destination differs from the return origin without an explicit checkout, and past check-ins.
-The walker walks each walkable interval and pipes normalized rows to ``stays ingest``, which
-validates the row shape and the six rooms.aero hotel slugs, writes ``stays.json`` namespaced by
-journey id with full provenance, and stamps the node. ``factors.finalize`` threads each board
-journey's stay (or its deferral) onto the board.
+the ranked journeys and walks each journey's legs in order, deriving one check-in / check-out /
+nights per stop from its real paired timestamps — a Tuesday return honestly adds the extra hotel
+night — and defers lodging (never guessing a checkout) for unpaired leads, open-jaw boundaries
+without an explicit checkout, and past check-ins. The walker walks each walkable interval and
+pipes normalized rows to ``stays ingest``, which validates the row shape and the six rooms.aero
+hotel slugs, writes ``stays.json`` keyed by journey id to its per-stop interval list with full
+provenance, and stamps the node. ``factors.finalize`` threads each board journey's stays (or its
+deferral) onto the board.
 
 Per the Phase-1 rooms.aero recon: per-night points/cash are source of truth (cash in cents,
 property-local currency) and any stay total is an estimate; ``last_checked_at`` is real UTC;
@@ -93,31 +93,30 @@ def _deferred(reason: str, dest: str, extra: dict | None = None) -> dict:
     }
 
 
-def derive_interval(journey: Journey, plan: dict, today: dt.date) -> dict:
-    """Deterministic lodging interval for one composed journey.
+def _stop_interval(
+    leg: dict, next_leg: dict | None, explicit: str | None, is_final: bool, today: dt.date
+) -> dict | None:
+    """One stop's disposition, or ``None`` for a same-day boundary that is a connection, no stay.
 
-    Check-in is the destination-local arrival date; check-out is the return-departure local
-    date, or an explicit ``plan.lodging.checkout`` override (the only checkout a one-way or an
-    open jaw whose return origin differs from the outbound destination can carry). Returns a
-    ``walk`` disposition with the interval, or a ``deferred`` disposition naming why lodging
-    can't be searched — never a guessed checkout.
+    Check-in is the arrival-local date. Check-out is the next observed departure from the same
+    airport — the next leg's departure for an intermediate stop, the return departure (or an
+    explicit ``plan.lodging.checkout`` override) for the final one. A cross-airport boundary or a
+    missing checkout defers with its reason, never guessing a night; the rooms.aero five-night cap
+    clamps the interval and discloses it.
     """
-    outbound, return_leg = _outbound_and_return(journey)
-    effective = outbound[-1]  # last pre-return leg — the stay's real destination
-    dest = effective["dest"]
-    check_in = effective["arrives_local"][:10]
-    explicit = plan.get("lodging", {}).get("checkout")
-
-    if explicit is not None:
+    dest = leg["dest"]
+    check_in = leg["arrives_local"][:10]
+    same_airport = next_leg is not None and next_leg["origin"] == dest
+    if is_final and explicit is not None:
         check_out = explicit
-    elif return_leg is not None and return_leg["origin"] == dest:
-        check_out = return_leg["departs_local"][:10]
+    elif same_airport:
+        check_out = next_leg["departs_local"][:10]
     else:
-        return _deferred("no_checkout", dest)
+        return _deferred("no_checkout" if is_final else "open_jaw_stop", dest)
 
     nights = (dt.date.fromisoformat(check_out) - dt.date.fromisoformat(check_in)).days
     if nights < 1:
-        return _deferred("invalid_interval", dest)
+        return _deferred("invalid_interval", dest) if is_final else None
     night_clamped = nights > ROOMS_AERO_MAX_NIGHTS
     if night_clamped:
         nights = ROOMS_AERO_MAX_NIGHTS
@@ -134,6 +133,27 @@ def derive_interval(journey: Journey, plan: dict, today: dt.date) -> dict:
             "night_clamped": night_clamped,
         },
     }
+
+
+def derive_intervals(journey: Journey, plan: dict, today: dt.date) -> list[dict]:
+    """Deterministic lodging intervals for one composed journey — one per stop where a stay lands.
+
+    Walk the outbound legs in order: each leg's destination is a stop whose check-out is the next
+    departure from that same airport, so a same-airport boundary with an observed overnight opens
+    an interval and a same-day boundary is a connection, not a stay. The final stop keeps the
+    return-departure (or explicit ``plan.lodging.checkout``) semantics; a cross-airport boundary or
+    an absent checkout defers with its reason. A single-stop journey yields a one-element list.
+    """
+    outbound, return_leg = _outbound_and_return(journey)
+    explicit = plan.get("lodging", {}).get("checkout")
+    results: list[dict] = []
+    for i, leg in enumerate(outbound):
+        is_final = i == len(outbound) - 1
+        next_leg = return_leg if is_final else outbound[i + 1]
+        stop = _stop_interval(leg, next_leg, explicit, is_final, today)
+        if stop is not None:
+            results.append(stop)
+    return results
 
 
 def _worklist_entry(jid: str, derived: dict) -> dict:
@@ -187,8 +207,8 @@ def intervals(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     out: list[dict] = []
     for journey in _board_journeys(rank_doc):
         today = _origin_local_today(_home_origin(journey), now())
-        derived = derive_interval(journey, plan, today)
-        out.append(_worklist_entry(journey["id"], derived))
+        for derived in derive_intervals(journey, plan, today):
+            out.append(_worklist_entry(journey["id"], derived))
     return {
         "slug": slug,
         "generated_at": now().isoformat(),
@@ -200,18 +220,18 @@ def intervals(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
 def board_lodging(
     journey: Journey, plan: dict, stays_doc: dict, now: Callable[[], dt.datetime]
 ) -> dict:
-    """Lodging attachment for one board journey: its walked stay, or the deferral reason.
+    """Lodging attachment for one board journey: its walked stays, or the deferral reason.
 
     A journey the walker skipped for a deferral (no checkout, open jaw, past date) never lands
     in ``stays.json``; one it should have walked but did not surfaces as ``not_walked`` — a
     walk gap named honestly, never masked as no availability.
     """
-    derived = derive_interval(journey, plan, _origin_local_today(_home_origin(journey), now()))
-    if derived["disposition"] == "deferred":
-        return {"lodging_search": {"state": "deferred", "reason": derived["reason"]}}
-    stay = stays_doc["stays"].get(journey["id"])
-    if stay is not None:
-        return {"stays": stay}
+    derived = derive_intervals(journey, plan, _origin_local_today(_home_origin(journey), now()))
+    if not any(stop["disposition"] == "walk" for stop in derived):
+        return {"lodging_search": {"state": "deferred", "reason": derived[0]["reason"]}}
+    stays = stays_doc["stays"].get(journey["id"])
+    if stays is not None:
+        return {"stays": stays}
     return {"lodging_search": {"state": "unavailable", "reason": "not_walked"}}
 
 
@@ -237,7 +257,8 @@ def ingest(
     trips.artifact_write(slug, "stays.json", json.dumps(doc, separators=(",", ":")))
     trips.phase_done(slug, "stays", inputs_fp=inputs_fp, now=now)
     stays = payload["stays"]
-    return {"journeys": len(stays), "rooms": sum(len(entry["rooms"]) for entry in stays.values())}
+    rooms = sum(len(entry["rooms"]) for entries in stays.values() for entry in entries)
+    return {"journeys": len(stays), "rooms": rooms}
 
 
 # --- Write-boundary schema (registered in trips.artifact_write) ----------------------------------
@@ -383,18 +404,22 @@ def _validate_stay_entry(entry: object, valid_programs: frozenset[str], label: s
 
 
 def validate_stays_doc(doc: object, name: str) -> None:
-    """stays.json write-boundary schema: journey-namespaced walk results with provenance, the
-    six rooms.aero hotel slugs, and integer cents. Registered in ``trips.artifact_write``."""
+    """stays.json write-boundary schema: journey id to its per-stop list of walk results with
+    provenance, the six rooms.aero hotel slugs, and integer cents. Registered in
+    ``trips.artifact_write``."""
     doc = require_keys(doc, {"generated_at", "stays"}, name)
     require_str(doc["generated_at"], f"{name}.generated_at")
     stays = doc["stays"]
     if not isinstance(stays, dict):
         raise UsageError(f"{name}.stays must be an object keyed by journey id")
     valid_programs = rooms_aero_programs()
-    for jid, entry in stays.items():
+    for jid, entries in stays.items():
         if not jid:
             raise UsageError(f"{name}.stays has an empty journey id")
-        _validate_stay_entry(entry, valid_programs, f"{name}.stays[{jid!r}]")
+        if not isinstance(entries, list):
+            raise UsageError(f"{name}.stays[{jid!r}] must be a list of per-stop stay intervals")
+        for i, entry in enumerate(entries):
+            _validate_stay_entry(entry, valid_programs, f"{name}.stays[{jid!r}][{i}]")
 
 
 stays_group = click.Group("stays", help="rooms.aero lodging intervals and row ingest.")

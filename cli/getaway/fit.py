@@ -12,6 +12,7 @@ import datetime as dt
 from collections.abc import Callable
 from typing import Any
 
+from getaway import trips
 from getaway.constants import CABIN_PREFIX, cabin_rank
 
 Detail = dict[str, Any]
@@ -168,18 +169,18 @@ def journey_fit(
     departure_days = _resolved_departure_days(trip, prefs_doc)
     now_dt = now()
 
-    outbound_side = [leg for leg in legs if leg["role"] != "return"]
-    return_leg = next((leg for leg in legs if leg["role"] == "return"), None)
+    has_return = trips._trip_type(trip["plan"]) != "one_way"
+    gateway = legs[0]
     leg_facts = [
         _leg_facts(leg, preferred_letter, departure_days, party, now_dt) for leg in legs
     ]
 
     trip_length_days = None
     away_nights = None
-    if return_leg is not None:
+    if has_return:
         # Effective destination is the last pre-return leg — its real arrival clock, whether
         # award or cash.
-        gateway, last_outbound = outbound_side[0], outbound_side[-1]
+        last_outbound, return_leg = legs[-2], legs[-1]
         _, _, ob_dep, _ = _leg_endpoints(gateway["detail"])
         _, _, ret_dep, ret_arr = _leg_endpoints(return_leg["detail"])
         trip_length_days = (_date(ret_arr) - _date(ob_dep)).days
@@ -205,9 +206,10 @@ def _miss(code: str, delta: object, annotation: str) -> dict:
 
 def _preference_misses(fit_facts: dict, plan: dict) -> list[dict]:
     preferences = plan.get("preferences", {})
-    legs = {leg["role"]: leg for leg in fit_facts["legs"]}
-    outbound = legs["outbound"]
-    return_leg = legs.get("return")
+    outbound = fit_facts["legs"][0]
+    return_leg = (
+        fit_facts["legs"][-1] if trips._trip_type(plan) != "one_way" else None
+    )
     misses: list[dict] = []
 
     if "outbound_departure_window" in preferences:

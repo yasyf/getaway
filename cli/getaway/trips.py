@@ -672,7 +672,9 @@ def _validate_bridge_quote(quote: object, label: str) -> None:
     require_str(quote["source"], f"{label}.source")
     if not isinstance(quote["price"], (int, float)) or isinstance(quote["price"], bool):
         raise UsageError(f"{label}.price must be a number")
-    require_str(quote["currency"], f"{label}.currency")
+    currency = require_str(quote["currency"], f"{label}.currency")
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise UsageError(f"{label}.currency must be three uppercase ASCII letters")
     require_int(quote["duration_minutes"], f"{label}.duration_minutes")
     require_int(quote["stops"], f"{label}.stops")
     require_str_list(quote["connections"], f"{label}.connections")

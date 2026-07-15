@@ -32,7 +32,7 @@ from getaway.paths import UsageError, emit, map_errors, utcnow
 VERDICT_RANK = {"promote": -1, "neutral": 0, "demote": 1}
 CREDIT_EXPIRY_DAYS = 90
 _BAND_NUM = 100 + round(MILEAGE_BAND * 100)
-_CASH_AXIS = "$cash"  # a hybrid's cash cost is its own Pareto dimension, never fungible with miles
+_CASH_AXIS = "$cash"  # axis prefix: each cash currency is its own Pareto dimension, never converted
 
 # Fit factor id → the deterministic preference-miss codes fit.py records for it. Non-fit
 # judgment factors have no deterministic codes and never participate in the clears guard.
@@ -311,9 +311,13 @@ def _deterministic_verdicts(journey: dict, facts: dict, active: set[str]) -> lis
 def _cost_vector(entry: dict) -> dict[str, int]:
     journey = entry["journey"]
     vector = dict(journey["cost"]["mileage"]["by_program"])
-    cash_cents = sum(component["amount_cents"] for component in journey["cost"]["cash"])
-    if cash_cents:
-        vector[_CASH_AXIS] = cash_cents
+    cash_by_currency: dict[str, int] = {}
+    for component in journey["cost"]["cash"]:
+        currency = component["currency"]
+        cash_by_currency[currency] = cash_by_currency.get(currency, 0) + component["amount_cents"]
+    for currency, amount_cents in cash_by_currency.items():
+        if amount_cents:
+            vector[f"{_CASH_AXIS}:{currency}"] = amount_cents
     return vector
 
 
@@ -360,9 +364,10 @@ def _dominates(a: dict, b: dict, primary_codes: frozenset[str]) -> bool:
     ``b`` if it clears every primary preference ``b`` clears — a structural set-difference test
     over deterministic preference misses, never a score. Same single program: ``a`` is cheaper
     beyond the band. Otherwise strict Pareto over the union of dimensions — per-program miles
-    plus a hybrid's cash cents, each axis compared within itself (a dimension a journey doesn't
-    use costs it zero) — so mixed-program, cross-program, and cash-bearing journeys stay
-    incomparable and both surface on the front."""
+    plus per-currency cash cents (same-currency components sum onto one ``$cash:<CCY>`` axis,
+    never converted across currencies), each axis compared within itself (a dimension a journey
+    doesn't use costs it zero) — so mixed-program, cross-program, cross-currency, and
+    cash-bearing journeys stay incomparable and both surface on the front."""
     return _dominates_cleared(a, b, _clears(a, primary_codes), _clears(b, primary_codes))
 
 

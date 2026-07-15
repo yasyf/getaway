@@ -476,6 +476,43 @@ def test_bridge_artifact_rejects_clockless_quote(ready: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("currency", "accepted"),
+    [
+        pytest.param("USD", True, id="uppercase-iso-code"),
+        pytest.param("usd", False, id="lowercase"),
+        pytest.param("US", False, id="too-short"),
+        pytest.param("USDD", False, id="too-long"),
+        pytest.param("U5D", False, id="non-letter"),
+    ],
+)
+def test_bridge_artifact_currency_code(ready: Path, currency: str, accepted: bool) -> None:
+    trips.new(SLUG)
+    quote = {
+        "gateway": "NRT",
+        "onward_dest": "OKA",
+        "date": "2026-09-08",
+        "cabin": "economy",
+        "source": "fli",
+        "price": 120.0,
+        "currency": currency,
+        "duration_minutes": 180,
+        "stops": 0,
+        "connections": [],
+        "airline": "JL",
+        "flight_number": "JL1",
+        "departs_local": "2026-09-08T09:00",
+        "arrives_local": "2026-09-08T12:00",
+    }
+    content = json.dumps({"quotes": [quote], "failures": []})
+
+    if accepted:
+        trips.artifact_write(SLUG, "legs/outbound/bridge.json", content)
+    else:
+        with pytest.raises(UsageError):
+            trips.artifact_write(SLUG, "legs/outbound/bridge.json", content)
+
+
+@pytest.mark.parametrize(
     ("count", "accepted"),
     [
         pytest.param(NOTABLE_PREFERENCE_STRETCH_LIMIT, True, id="exactly-at-limit"),

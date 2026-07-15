@@ -61,12 +61,13 @@ def trip(
     cabin: str = "business",
     window: dict | None = None,
     party: int = 1,
+    trip_type: str = "round_trip",
 ) -> dict:
     return {
         "cabin": cabin,
         "party": party,
         "window": window or WINDOW,
-        "plan": {"preferences": preferences or {}},
+        "plan": {"trip_type": trip_type, "preferences": preferences or {}},
     }
 
 
@@ -98,7 +99,9 @@ def _return(
 
 
 def test_cross_timezone_elapsed_uses_total_duration() -> None:
-    facts = fit.journey_fit(trip(), PREFS, [_outbound(total_duration=660)], clock())["fit_facts"]
+    facts = fit.journey_fit(
+        trip(trip_type="one_way"), PREFS, [_outbound(total_duration=660)], clock()
+    )["fit_facts"]
     ob = facts["legs"][0]
     # naive arrival-minus-departure would read ~28h across the dateline; elapsed is TotalDuration
     assert ob["elapsed_minutes"] == 660
@@ -114,7 +117,9 @@ def test_trip_length_and_away_nights_are_calendar_spans() -> None:
 
 
 def test_one_way_has_no_round_trip_spans() -> None:
-    facts = fit.journey_fit(trip(), PREFS, [_outbound()], clock())["fit_facts"]
+    facts = fit.journey_fit(trip(trip_type="one_way"), PREFS, [_outbound()], clock())[
+        "fit_facts"
+    ]
     assert facts["trip_length_days"] is None
     assert facts["away_nights"] is None
 
@@ -143,9 +148,76 @@ def _cash_onward(
     }
 
 
+@pytest.mark.parametrize(
+    (
+        "legs",
+        "trip_type",
+        "expected_misses",
+        "expected_trip_length_days",
+        "expected_away_nights",
+    ),
+    [
+        pytest.param(
+            [_outbound(), _return()],
+            "round_trip",
+            [("return_arrival_by", 1)],
+            10,
+            8,
+            id="round-trip-first-outbound-last-return",
+        ),
+        pytest.param(
+            [_outbound()],
+            "one_way",
+            [],
+            None,
+            None,
+            id="one-way-no-return",
+        ),
+        pytest.param(
+            [_outbound(), _cash_onward()],
+            "one_way",
+            [],
+            None,
+            None,
+            id="one-way-hybrid-onward-is-not-return",
+        ),
+        pytest.param(
+            [_outbound(), _cash_onward(), _return()],
+            "round_trip",
+            [("return_arrival_by", 1)],
+            10,
+            6,
+            id="three-leg-round-trip-last-pre-return-is-destination",
+        ),
+    ],
+)
+def test_journey_spans_and_return_misses_use_plan_type_and_leg_positions(
+    legs: list[dict],
+    trip_type: str,
+    expected_misses: list[tuple[str, int]],
+    expected_trip_length_days: int | None,
+    expected_away_nights: int | None,
+) -> None:
+    preferences = {
+        "return_arrival_by": {
+            "value": {"latest_local_date": "2026-09-14"},
+            "priority": "primary",
+        }
+    }
+    result = fit.journey_fit(
+        trip(preferences, trip_type=trip_type), PREFS, legs, clock()
+    )
+    fit_facts = result["fit_facts"]
+    assert fit_facts["trip_length_days"] == expected_trip_length_days
+    assert fit_facts["away_nights"] == expected_away_nights
+    assert [(miss["code"], miss["delta"]) for miss in result["preference_misses"]] == (
+        expected_misses
+    )
+
+
 def test_cash_leg_facts_expose_connections_per_airport() -> None:
     legs = [_outbound(), _cash_onward(connections=["FUK"])]
-    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    facts = fit.journey_fit(trip(trip_type="one_way"), PREFS, legs, clock())["fit_facts"]
     cash_facts = facts["legs"][-1]
     assert cash_facts["mode"] == "cash"
     assert cash_facts["stops"] == 1
@@ -196,7 +268,10 @@ def test_cabin_below_minutes(
     ]
     preferences = {"cabin": {"value": "business", "priority": "note"}}
     result = fit.journey_fit(
-        trip(preferences), PREFS, [leg("outbound", segments, layovers=[120])], clock()
+        trip(preferences, trip_type="one_way"),
+        PREFS,
+        [leg("outbound", segments, layovers=[120])],
+        clock(),
     )
     cabin = result["fit_facts"]["legs"][0]["cabin"]
     assert cabin["matched"] is False
@@ -209,7 +284,12 @@ def test_connections_flags_airport_change() -> None:
         seg("SFO", "NRT", "2026-09-05T11:00:00", "2026-09-06T14:00:00", 660),
         seg("HND", "OKA", "2026-09-06T18:00:00", "2026-09-06T20:30:00", 150),
     ]
-    conn = fit.journey_fit(trip(), PREFS, [leg("outbound", segments, layovers=[240])], clock())
+    conn = fit.journey_fit(
+        trip(trip_type="one_way"),
+        PREFS,
+        [leg("outbound", segments, layovers=[240])],
+        clock(),
+    )
     facts = conn["fit_facts"]["legs"][0]["connections"]
     assert facts["stops"] == 1
     assert facts["airports"] == ["NRT"]
@@ -220,7 +300,9 @@ def test_connections_flags_airport_change() -> None:
 def test_seat_sufficiency_states() -> None:
     def state(seats: int, party: int) -> str:
         legs = [_outbound(seats=seats)]
-        facts = fit.journey_fit(trip(party=party), PREFS, legs, clock())["fit_facts"]
+        facts = fit.journey_fit(
+            trip(party=party, trip_type="one_way"), PREFS, legs, clock()
+        )["fit_facts"]
         return facts["legs"][0]["seat_sufficiency"]["state"]
 
     assert state(2, 1) == "sufficient"
@@ -245,18 +327,69 @@ def test_mileage_single_vs_mixed_program() -> None:
 
 def test_cache_age_from_fetched_at() -> None:
     legs = [_outbound(fetched_at="2026-07-13T06:00:00+00:00")]
-    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    facts = fit.journey_fit(trip(trip_type="one_way"), PREFS, legs, clock())["fit_facts"]
     assert facts["legs"][0]["cache_age_hours"] == 6.0
 
 
 def test_preferred_cabin_resolves_from_preference_over_trip() -> None:
     prefs_pref = {"cabin": {"value": "economy", "priority": "note"}}
     segments = [seg("SFO", "NRT", "2026-09-05T11:00:00", "2026-09-06T15:00:00", 660, cabin="Y")]
-    facts = fit.journey_fit(trip(prefs_pref), PREFS, [leg("outbound", segments)], clock())
+    facts = fit.journey_fit(
+        trip(prefs_pref, trip_type="one_way"),
+        PREFS,
+        [leg("outbound", segments)],
+        clock(),
+    )
     assert facts["fit_facts"]["legs"][0]["cabin"]["matched"] is True  # economy preference honored
 
 
 # --- preference misses (the renderer always shows these) ---
+
+
+def test_preference_misses_use_first_outbound_and_last_return_positions() -> None:
+    plan = {
+        "trip_type": "round_trip",
+        "preferences": {
+            "return_arrival_by": {
+                "value": {"latest_local_date": "2026-09-14"},
+                "priority": "primary",
+            },
+            "departure_days": {"value": ["Mon"], "priority": "note"},
+        },
+    }
+    fit_facts = {
+        "legs": [
+            {
+                "role": "onward",
+                "departs_local": "2026-09-05T11:00:00",
+                "departure_day": {"token": "Sat", "match": False},
+            },
+            {
+                "role": "return",
+                "arrives_local": "2026-09-14T09:00:00",
+            },
+            {
+                "role": "outbound",
+                "arrives_local": "2026-09-16T09:00:00",
+                "departure_day": {"token": "Mon", "match": True},
+            },
+        ],
+        "trip_length_days": None,
+        "mileage": {"by_program": {}},
+    }
+
+    assert fit._preference_misses(fit_facts, plan) == [
+        {
+            "code": "return_arrival_by",
+            "delta": 2,
+            "annotation": "returns 2 day(s) past your 2026-09-14 preference",
+        },
+        {
+            "code": "departure_days",
+            "delta": "Sat",
+            "annotation": "departs Sat, not your preferred ['Mon']",
+        },
+    ]
 
 
 def test_return_arrival_miss_named() -> None:
@@ -304,7 +437,9 @@ def test_no_misses_when_within_preferences() -> None:
 
 def test_departure_day_miss_uses_trip_preference() -> None:
     prefs_pref = {"departure_days": {"value": ["Mon"], "priority": "note"}}
-    result = fit.journey_fit(trip(prefs_pref), PREFS, [_outbound()], clock())
+    result = fit.journey_fit(
+        trip(prefs_pref, trip_type="one_way"), PREFS, [_outbound()], clock()
+    )
     misses = {m["code"]: m for m in result["preference_misses"]}
     assert "departure_days" in misses  # 2026-09-05 is a Saturday, not Monday
 
@@ -356,10 +491,14 @@ def test_outbound_window_miss_is_preference_relative_both_sides(
     # The preference window, not trip["window"], drives the miss — and both the early and late
     # sides read against the preference's own start/end. Outbound departs 2026-09-05.
     prefs_pref = {"outbound_departure_window": {"value": window, "priority": "primary"}}
-    result = fit.journey_fit(trip(prefs_pref), PREFS, [_outbound()], clock())
+    result = fit.journey_fit(
+        trip(prefs_pref, trip_type="one_way"), PREFS, [_outbound()], clock()
+    )
     assert result["preference_misses"] == expected
 
 
 def test_no_outbound_window_miss_without_preference() -> None:
-    result = fit.journey_fit(trip({}), PREFS, [_outbound()], clock())
+    result = fit.journey_fit(
+        trip({}, trip_type="one_way"), PREFS, [_outbound()], clock()
+    )
     assert result["preference_misses"] == []

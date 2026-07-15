@@ -177,18 +177,26 @@ def test_stays_node_spends_zero_quota_and_is_absent_from_the_budget(getaway_home
 # --- Interval derivation (deliverable 2) ---------------------------------------------------------
 
 
+def derive_one(jrny: dict, plan: dict, today: dt.date) -> dict:
+    """A single-stop journey derives one interval; unpack it, pinning the one-element list."""
+    (stop,) = stays.derive_intervals(jrny, plan, today)
+    return stop
+
+
 def test_round_trip_interval_from_paired_timestamps(getaway_home: Path) -> None:
-    result = stays.derive_interval(journey("J"), {"lodging": {}}, TODAY)
-    assert result == {
-        "disposition": "walk",
-        "destination_airport": "CUN",
-        "interval": {
-            "check_in": "2026-09-10",
-            "check_out": "2026-09-14",
-            "nights": 4,
-            "night_clamped": False,
-        },
-    }
+    result = stays.derive_intervals(journey("J"), {"lodging": {}}, TODAY)
+    assert result == [
+        {
+            "disposition": "walk",
+            "destination_airport": "CUN",
+            "interval": {
+                "check_in": "2026-09-10",
+                "check_out": "2026-09-14",
+                "nights": 4,
+                "night_clamped": False,
+            },
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -201,13 +209,13 @@ def test_round_trip_interval_from_paired_timestamps(getaway_home: Path) -> None:
 def test_return_day_sets_the_night_count(
     getaway_home: Path, ret_dep: str, expected_nights: int
 ) -> None:
-    result = stays.derive_interval(journey("J", ret_dep=ret_dep), {"lodging": {}}, TODAY)
+    result = derive_one(journey("J", ret_dep=ret_dep), {"lodging": {}}, TODAY)
     assert result["interval"]["nights"] == expected_nights
     assert result["interval"]["check_out"] == ret_dep[:10]
 
 
 def test_stays_over_five_nights_clamp_to_five_and_disclose(getaway_home: Path) -> None:
-    result = stays.derive_interval(journey("J", ret_dep="2026-09-20T10:00"), {"lodging": {}}, TODAY)
+    result = derive_one(journey("J", ret_dep="2026-09-20T10:00"), {"lodging": {}}, TODAY)
     assert result["interval"]["nights"] == 5  # rooms.aero hard block cap
     assert result["interval"]["check_out"] == "2026-09-15"  # check_in + 5
     assert result["interval"]["night_clamped"] is True
@@ -215,15 +223,16 @@ def test_stays_over_five_nights_clamp_to_five_and_disclose(getaway_home: Path) -
 
 def test_check_in_before_today_defers_date_in_past(getaway_home: Path) -> None:
     past = journey("J", ob_arr="2026-07-01T14:00", ret_dep="2026-07-05T10:00")
-    result = stays.derive_interval(past, {"lodging": {}}, TODAY)
+    result = derive_one(past, {"lodging": {}}, TODAY)
     assert result["disposition"] == "deferred"
     assert result["reason"] == "date_in_past"
     assert result["check_in"] == "2026-07-01"
 
 
 def test_hybrid_stay_uses_the_onward_leg_not_the_gateway(getaway_home: Path) -> None:
-    # A gateway award + cash onward before the return: the stay sits at the onward destination.
-    result = stays.derive_interval(
+    # A gateway award + cash onward before the return: the gateway is a same-day connection (no
+    # stay), so the sole derived interval sits at the onward destination.
+    result = derive_one(
         hybrid_journey("H", gateway="NRT", onward="OKA"), {"lodging": {}}, TODAY
     )
     assert result["disposition"] == "walk"
@@ -235,7 +244,7 @@ def test_hybrid_stay_uses_the_onward_leg_not_the_gateway(getaway_home: Path) -> 
 def test_open_jaw_without_checkout_defers_no_checkout(getaway_home: Path) -> None:
     # Outbound lands CUN, return departs a different city — no surface itinerary, no checkout.
     open_jaw = journey("J", dest="CUN", ret_origin="MEX")
-    result = stays.derive_interval(open_jaw, {"lodging": {}}, TODAY)
+    result = derive_one(open_jaw, {"lodging": {}}, TODAY)
     assert result == {
         "disposition": "deferred",
         "reason": "no_checkout",
@@ -244,7 +253,7 @@ def test_open_jaw_without_checkout_defers_no_checkout(getaway_home: Path) -> Non
 
 
 def test_one_way_without_checkout_defers_no_checkout(getaway_home: Path) -> None:
-    result = stays.derive_interval(journey("J", ret_dep=None), {"lodging": {}}, TODAY)
+    result = derive_one(journey("J", ret_dep=None), {"lodging": {}}, TODAY)
     assert result == {
         "disposition": "deferred",
         "reason": "no_checkout",
@@ -253,7 +262,7 @@ def test_one_way_without_checkout_defers_no_checkout(getaway_home: Path) -> None
 
 
 def test_explicit_checkout_overrides_a_missing_return(getaway_home: Path) -> None:
-    result = stays.derive_interval(
+    result = derive_one(
         journey("J", ret_dep=None), {"lodging": {"checkout": "2026-09-13"}}, TODAY
     )
     assert result["disposition"] == "walk"
@@ -263,6 +272,48 @@ def test_explicit_checkout_overrides_a_missing_return(getaway_home: Path) -> Non
         "nights": 3,
         "night_clamped": False,
     }
+
+
+def _three_leg(onward_origin: str) -> dict:
+    """A synthetic three-leg journey: SFO→CUN, CUN/<onward_origin>→LAX, LAX→SFO — two stops, built
+    directly so the walk faces two same-airport boundaries (or an intermediate open jaw)."""
+    legs = [
+        _leg("outbound", "SFO", "CUN", arr="2026-09-10T14:00", dep="2026-09-10T00:00"),
+        _leg("onward", onward_origin, "LAX", arr="2026-09-13T12:00", dep="2026-09-13T10:00"),
+        _leg("return", "LAX", "SFO", arr="2026-09-16T23:00", dep="2026-09-16T10:00"),
+    ]
+    return {"id": "THREE", "fit_facts": {"legs": legs}}
+
+
+def test_two_same_airport_stops_derive_two_intervals(getaway_home: Path) -> None:
+    stops = stays.derive_intervals(_three_leg("CUN"), {"lodging": {}}, TODAY)
+    assert [s["disposition"] for s in stops] == ["walk", "walk"]
+    assert [s["destination_airport"] for s in stops] == ["CUN", "LAX"]
+    assert stops[0]["interval"] == {
+        "check_in": "2026-09-10",  # CUN arrival
+        "check_out": "2026-09-13",  # next departure from CUN
+        "nights": 3,
+        "night_clamped": False,
+    }
+    assert stops[1]["interval"] == {
+        "check_in": "2026-09-13",  # LAX arrival
+        "check_out": "2026-09-16",  # return departure from LAX
+        "nights": 3,
+        "night_clamped": False,
+    }
+
+
+def test_intermediate_open_jaw_boundary_defers_open_jaw_stop(getaway_home: Path) -> None:
+    # The onward leg departs MEX, not the CUN it followed — an intermediate open jaw with no known
+    # checkout at CUN. The final LAX stop still walks.
+    stops = stays.derive_intervals(_three_leg("MEX"), {"lodging": {}}, TODAY)
+    assert stops[0] == {
+        "disposition": "deferred",
+        "reason": "open_jaw_stop",
+        "destination_airport": "CUN",
+    }
+    assert stops[1]["disposition"] == "walk"
+    assert stops[1]["destination_airport"] == "LAX"
 
 
 # --- stays intervals command ---------------------------------------------------------------------
@@ -305,32 +356,46 @@ def ingestable(getaway_home: Path) -> str:
 
 
 def test_ingest_writes_journey_namespaced_stays_and_stamps_the_node(ingestable: str) -> None:
-    result = _ingest(ingestable, {"J-CUN": stay_entry()})
+    result = _ingest(ingestable, {"J-CUN": [stay_entry()]})
     assert result == {"journeys": 1, "rooms": 1}
     doc = json.loads(trips.artifact_read(ingestable, "stays.json"))
     assert set(doc["stays"]) == {"J-CUN"}
-    assert doc["stays"]["J-CUN"]["provenance"]["session"] == "pro"
+    assert doc["stays"]["J-CUN"][0]["provenance"]["session"] == "pro"
     assert doc["generated_at"] == FROZEN.isoformat()
     assert trips.phase_fresh(ingestable, "stays", now=clock())
 
 
+def test_ingest_counts_rooms_across_every_interval_of_a_journey(ingestable: str) -> None:
+    # A journey with two stops writes a two-element list; the room tally spans both intervals.
+    result = _ingest(ingestable, {"J-CUN": [stay_entry(), stay_entry(rooms=[room(), room()])]})
+    assert result == {"journeys": 1, "rooms": 3}
+    doc = json.loads(trips.artifact_read(ingestable, "stays.json"))
+    assert len(doc["stays"]["J-CUN"]) == 2
+
+
 def test_ingest_namespaces_multiple_journeys(ingestable: str) -> None:
     write_rank(ingestable, [journey("J-CUN"), journey("J-CUN-2")])
-    _ingest(ingestable, {"J-CUN": stay_entry(), "J-CUN-2": stay_entry(rooms=[])})
+    _ingest(ingestable, {"J-CUN": [stay_entry()], "J-CUN-2": [stay_entry(rooms=[])]})
     doc = json.loads(trips.artifact_read(ingestable, "stays.json"))
     assert set(doc["stays"]) == {"J-CUN", "J-CUN-2"}
 
 
 def test_ingest_forwards_inputs_fp_for_freshness(ingestable: str) -> None:
     fp = stays.intervals(ingestable, now=clock())["inputs_fp"]
-    _ingest(ingestable, {"J-CUN": stay_entry()}, inputs_fp=fp)
+    _ingest(ingestable, {"J-CUN": [stay_entry()]}, inputs_fp=fp)
     _, record = trips.phase_check(ingestable, "stays", now=clock())
     assert record is not None
     assert record["inputs_fp"] == fp
 
 
+def test_ingest_rejects_a_scalar_journey_entry(ingestable: str) -> None:
+    # The new shape is a per-stop list; a bare entry object is rejected strictly.
+    with pytest.raises(UsageError, match="must be a list of per-stop stay intervals"):
+        _ingest(ingestable, {"J-CUN": stay_entry()})
+
+
 def test_ingest_rejects_unknown_program_slug_naming_the_received_slug(ingestable: str) -> None:
-    entries = {"J-CUN": stay_entry(rooms=[room(program="wyndham-rewards")])}
+    entries = {"J-CUN": [stay_entry(rooms=[room(program="wyndham-rewards")])]}
     with pytest.raises(UsageError, match="wyndham-rewards"):
         _ingest(ingestable, entries)
 
@@ -339,13 +404,13 @@ def test_ingest_rejects_unknown_program_slug_naming_the_received_slug(ingestable
     "slug", sorted({"hyatt", "hilton", "marriott", "ihg", "choice", "wyndham"})
 )
 def test_ingest_accepts_every_rooms_aero_hotel_slug(ingestable: str, slug: str) -> None:
-    _ingest(ingestable, {"J-CUN": stay_entry(rooms=[room(program=slug)])})
+    _ingest(ingestable, {"J-CUN": [stay_entry(rooms=[room(program=slug)])]})
     doc = json.loads(trips.artifact_read(ingestable, "stays.json"))
-    assert doc["stays"]["J-CUN"]["rooms"][0]["program"] == slug
+    assert doc["stays"]["J-CUN"][0]["rooms"][0]["program"] == slug
 
 
 def test_ingest_rejects_non_integer_cash_cents(ingestable: str) -> None:
-    bad = {"J-CUN": stay_entry(rooms=[room(offers=[offer(cents=168.46)])])}
+    bad = {"J-CUN": [stay_entry(rooms=[room(offers=[offer(cents=168.46)])])]}
     with pytest.raises(UsageError, match="cash_per_night_cents"):
         _ingest(ingestable, bad)
 
@@ -354,13 +419,13 @@ def test_ingest_rejects_a_missing_provenance_block(ingestable: str) -> None:
     entry = stay_entry()
     del entry["provenance"]
     with pytest.raises(UsageError, match="provenance"):
-        _ingest(ingestable, {"J-CUN": entry})
+        _ingest(ingestable, {"J-CUN": [entry]})
 
 
 def test_ingest_rejects_an_out_of_enum_search_state(ingestable: str) -> None:
     entry = {**stay_entry(), "search_state": "no_space"}
     with pytest.raises(UsageError, match="search_state"):
-        _ingest(ingestable, {"J-CUN": entry})
+        _ingest(ingestable, {"J-CUN": [entry]})
 
 
 def test_ingest_rejects_a_non_object_payload(ingestable: str) -> None:
@@ -395,11 +460,11 @@ def test_finalize_attaches_the_walked_stay_and_defers_open_jaws(getaway_home: Pa
     trips.artifact_write(
         slug,
         "stays.json",
-        json.dumps({"generated_at": FROZEN.isoformat(), "stays": {"J-CUN": stay_entry()}}),
+        json.dumps({"generated_at": FROZEN.isoformat(), "stays": {"J-CUN": [stay_entry()]}}),
     )
     doc = factors.finalize(slug, now=clock())
     walked, open_jaw = doc["journeys"]
-    assert walked["stays"]["rooms"][0]["program"] == "hyatt"
+    assert walked["stays"][0]["rooms"][0]["program"] == "hyatt"
     assert "lodging_search" not in walked
     assert open_jaw["lodging_search"] == {"state": "deferred", "reason": "no_checkout"}
     assert doc["unpaired_leads"][0]["lodging_search"] == {
@@ -427,10 +492,10 @@ def test_finalize_walks_a_cash_hybrid_with_observed_arrival(getaway_home: Path) 
     trips.artifact_write(
         slug,
         "stays.json",
-        json.dumps({"generated_at": FROZEN.isoformat(), "stays": {"H-OKA": stay_entry()}}),
+        json.dumps({"generated_at": FROZEN.isoformat(), "stays": {"H-OKA": [stay_entry()]}}),
     )
     (entry,) = factors.finalize(slug, now=clock())["journeys"]
-    assert entry["stays"]["rooms"][0]["program"] == "hyatt"
+    assert entry["stays"][0]["rooms"][0]["program"] == "hyatt"
 
 
 def test_finalize_without_lodging_threads_no_lodging_fields(getaway_home: Path) -> None:

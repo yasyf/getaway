@@ -13,6 +13,16 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Added
+- Shape-agnostic downstream engine, groundwork for arbitrary leg chains
+  (bit-identical on today's shapes, pinned by equivalence sweeps): fit
+  facts anchor positionally — first leg carries the departure-side
+  misses, last leg the return side, gated on the plan-level trip type
+  rather than leg-role lookups; stays derive one interval per
+  same-airport stop from observed clocks (per-stop lists in
+  `stays.json`, deferrals per stop); the ranking cost vector keys cash
+  per currency (`$cash:<CCY>`, same-currency components sum, no
+  conversion, zero totals carry no axis) with quote currencies
+  validated as three uppercase letters at the bridge boundary.
 - Retrieval honesty (the missed-booking postmortem fixes): region sweeps
   order by lowest mileage and page through the cursor under
   `SWEEP_PAGE_BUDGET`, so a hot region no longer truncates at one
