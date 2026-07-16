@@ -2,3 +2,4 @@ name = "getaway"
 version = "0.5.0"
 description = "getaway guardrails: first-run onboarding nudge (points unconfigured sessions at the getaway:onboard skill) and stop-time reflection folding session learnings into ~/.getaway preferences, the active trip plan, or the skill docs"
 hooks = "hooks"
+marketplaces = ["yasyf/cc-present"]

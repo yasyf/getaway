@@ -12,6 +12,13 @@ annotated outbounds. This is a clean cutover: a pre-v2
 `preferences.json` is rejected loudly and regenerates through
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
+### Changed
+- One-line install. getaway's `captain-hook` and `cc-present` dependencies
+  register their own marketplaces on the first session — capt-hook 9.22.0
+  self-bootstraps every marketplace a pack declares — so install and upgrade are
+  just `/plugin marketplace add yasyf/getaway` then `/plugin install
+  getaway@getaway`, no dependency marketplaces to add by hand.
+
 ### Added
 - Sweep generations: only a complete, filter-honest run supersedes.
   A sweep that fully searched its scope cuts a new generation and

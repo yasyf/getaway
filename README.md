@@ -8,18 +8,14 @@
 ## Get started
 
 ```text
-/plugin marketplace add yasyf/captain-hook
-/plugin marketplace add yasyf/cc-present
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```
 
-Add the dependency marketplaces first: getaway's hooks ride the
-`captain-hook` plugin and its live boards ride `cc-present`, and Claude
-Code auto-installs those dependencies only when their marketplaces are
-already added. Upgrading an existing install needs the same order —
-marketplaces, then `claude plugin install` again, since
-`claude plugin update` resolves only plugins it already knows.
+getaway's hooks ride the `captain-hook` plugin and its live boards ride
+`cc-present`. Both install themselves — the first session registers their
+marketplaces and Claude Code resolves the dependencies — so you add only
+getaway's own marketplace, on install and on upgrade alike.
 
 You need [uv](https://docs.astral.sh/uv/) on PATH — the planning engine is
 a bundled Python CLI — and a seats.aero Pro API key, generated on the
@@ -51,8 +47,6 @@ factor:
 Driving with an agent? Paste this:
 
 ```text
-/plugin marketplace add yasyf/captain-hook
-/plugin marketplace add yasyf/cc-present
 /plugin marketplace add yasyf/getaway
 /plugin install getaway@getaway
 ```
