@@ -26,7 +26,10 @@ if (typeof args === 'string') {
 const ABS_PATH = /^\/[^\s"`$;|&\n<>()\\]*$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const CMD_TOKEN = /^[A-Za-z0-9:._-]+$/;
-const LEG_SPEC = /^(outbound:[a-z0-9][a-z0-9-]*|return)$/;
+// Sweep spec is <leg-id>[:<label>]; bare <leg-id> for per-leg commands. Label max = source(≤32) +
+// "-from-" + slugged continent(≤13) = 51 (sweeps.derive_specs / trips._leg_sweep_labels).
+const LEG_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const LEG_SPEC = /^[a-z0-9][a-z0-9-]{0,31}(:[a-z0-9][a-z0-9-]{0,50})?$/;
 const IATA = /^[A-Z]{3}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const JOURNEY_ID = /^[A-Za-z0-9:|._-]+$/;
@@ -143,13 +146,9 @@ const gArgv = (argv) => {
 // slug positions pinned to this walker's own slug.
 const KIND_COMMANDS = {
   sweep: [['sweep', 'run', slug, LEG_SPEC]],
-  shortlist: [
-    ['shortlist', 'run', slug, '--leg', 'outbound'],
-    ['shortlist', 'run', slug, '--leg', 'outbound', '--gateway'],
-    ['shortlist', 'run', slug, '--leg', 'return'],
-  ],
-  onward: [['shortlist', 'onward', slug]],
-  bridge: [['bridge', slug]],
+  shortlist: [['shortlist', 'run', slug, '--leg', LEG_ID]],
+  onward: [['shortlist', 'onward', slug, '--leg', LEG_ID]],
+  bridge: [['bridge', slug, '--leg', LEG_ID]],
   expand: [['expand', 'run', slug]],
   rank: [['rank', slug]],
   finalize: [['trip', 'finalize', slug]],
@@ -220,7 +219,7 @@ const COLLECTOR_PROMPTS = {
   context:
     `Add destination context for each journey's effective destination — WebSearch only, zero seats.aero quota, plus the getaway commands named here.\n` +
     `Read the composed journeys:\n${CLI} trip artifact read ${slug} expand.json\n` +
-    `The effective destination is the last pre-return leg's dest — the onward destination on a hybrid, never the gateway. For each unique one, research the trip window: typical weather and season, a short entry/visa note, how the place fits the trip vibe, and notable events in the window.\n` +
+    `The effective destination is the arrival airport of the last leg before the homeward ($origins-directed) leg — where the trip actually lands, past any intermediate connection; when no leg heads home, it is the final leg's arrival. For each unique effective destination across the composed journeys, research the trip window: typical weather and season, a short entry/visa note, how the place fits the trip vibe, and notable events in the window.\n` +
     `Shape context: an array of {dest, weather, visa, appeal, events}.\n` +
     `Write it as {"context": [...]} via this command, feeding the JSON on standard input:\n${CLI} trip artifact write ${slug} evidence-context.json\n` +
     `Return {"ok": true, "count": <entries written>}.`,
@@ -228,7 +227,7 @@ const COLLECTOR_PROMPTS = {
     `Flag transit-visa and entry risk against the traveler's documents — WebSearch only, zero seats.aero quota, plus the getaway commands named here.\n` +
     `Read the traveler documents (passports, residency, standing visas):\n${CLI} prefs show\n` +
     `Read the composed journeys:\n${CLI} trip artifact read ${slug} expand.json\n` +
-    `Within one award leg, the origin of every segment after the first is a same-ticket airside connection; a cash onward leg carries its own airside connection airports in its connections list. Check every cash-leg connection airport individually — never a single generic flag for a multi-stop hop. Where consecutive legs meet — an award gateway feeding a cash or separate-award onward leg — the meeting airport is a landside self-transfer, an entry rather than airside transit.\n` +
+    `Within one award leg, the origin of every segment after the first is a same-ticket airside connection; a cash leg carries its own airside connection airports in its connections list. Check every cash-leg connection airport individually — never a single generic flag for a multi-stop hop. Where two consecutive legs meet, the airport where one leg arrives and the next departs is a landside self-transfer, an entry rather than airside transit.\n` +
     `For each unique connection airport determine transit (airside) visa risk; for each self-transfer airport determine entry risk. Prefer official government and airport sources.\n` +
     `Shape transit: an array of {airport, kind ("transit" or "entry"), risk ("none", "possible", or "required"), note}.\n` +
     `Write it as {"transit": [...]} via this command, feeding the JSON on standard input:\n${CLI} trip artifact write ${slug} evidence-transit.json\n` +
@@ -389,7 +388,7 @@ const runAssess = async (node, title, prefix) => {
     `Read the composed journeys:\n${CLI} trip artifact read ${slug} expand.json\n` +
     (evidenceReads ? `Read the collected evidence:\n${evidenceReads}\n` : ``) +
     `\nJourneys carry typed legs: an "award" leg has expanded seat detail; a "cash" leg carries elapsed time and cost only, so a factor that needs cabin or seat detail has nothing to judge on it — that is neutral, never a demotion. Each journey already carries CLI-computed fit_facts and preference_misses: weigh them, never recompute them, and never let a preference gate — a miss orders and annotates.\n` +
-    `Judge each factor per leg where it applies, returns symmetrically with outbounds. The layovers factor follows the layover doctrine: judge each journey's layovers on their own merits. Under the traveler's comfortable-connection floor is risky-short (demote and name the margin). Floor to ~3h is comfortable (neutral). ~3-6h is dead time (mild demote, softened at airports that pass hours well like DOH, SIN, ICN). Over ~6h forks on style and city: an explore-style traveler with a city worth leaving the airport for is a promote; a minimize-style traveler, an avoid-listed city, or no feasible exit is a harder demote. Overnight gaps are dead-long unless explore-style and the city warrants it. A nonstop is neutral — never demote for having no layover.\n` +
+    `Judge each factor per leg where it applies, weighing every leg symmetrically regardless of its position in the chain. The layovers factor follows the layover doctrine: judge each journey's layovers on their own merits. Under the traveler's comfortable-connection floor is risky-short (demote and name the margin). Floor to ~3h is comfortable (neutral). ~3-6h is dead time (mild demote, softened at airports that pass hours well like DOH, SIN, ICN). Over ~6h forks on style and city: an explore-style traveler with a city worth leaving the airport for is a promote; a minimize-style traveler, an avoid-listed city, or no feasible exit is a harder demote. Overnight gaps are dead-long unless explore-style and the city warrants it. A nonstop is neutral — never demote for having no layover.\n` +
     `Verdicts are "promote", "neutral", or "demote", each with one evidence sentence. Unknown is neutral — never demote what the evidence does not condemn.\n` +
     `Also select notable stretches: up to 2 journeys whose excellence outweighs a named preference miss ("back Tuesday, but perfect"), each {journey_id, why} with the miss named in why — rank surfaces the ones that fall beyond the presentation cut. [] when none stand out.\n` +
     `Assemble {"journeys": {<journey id>: {"verdicts": [{"factor", "leg", "verdict", "evidence"}]}}, "notable_stretches": [...]} and write it via this command, feeding the JSON on standard input:\n` +

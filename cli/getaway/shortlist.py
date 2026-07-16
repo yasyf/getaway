@@ -11,18 +11,12 @@ from getaway.constants import (
     EXPANSION_BUDGET_PER_ENDPOINT,
     RETURN_EXPANSION_BUDGET_PER_ENDPOINT,
 )
-from getaway.paths import cache_db, emit, map_errors, utcnow
-from getaway.store import connect
+from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
+from getaway.store import NoData, connect
 
 DAY_TOKENS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 Row = dict[str, Any]
-
-_NODE_IDS = {
-    "legs/outbound/shortlist.json": "shortlist:outbound",
-    "legs/outbound/shortlist-gateway.json": "shortlist:outbound:gateway",
-    "legs/return/shortlist.json": "shortlist:return",
-}
 
 
 def _weekday_token(date_str: str) -> str:
@@ -80,54 +74,50 @@ def _cohort_select(cands: list[Row], budget: int) -> list[Row]:
     return selected
 
 
-def _leg_spec(leg: str, gateway: bool, trip: dict, prefs_doc: dict) -> dict:
-    if leg == "return":
-        return {
-            "labels": ["return"],
-            "endpoint_field": "origin",
-            "sweeps": ["legs/return/sweep.json"],
-            "search_sweeps": ["legs/return/sweep.json"],
-            "veto": set(),  # return destinations are home, exempt from the veto
-            "budget": RETURN_EXPANSION_BUDGET_PER_ENDPOINT,
-            "name": "legs/return/shortlist.json",
-            "label": "return",
-        }
-    if gateway:
-        return {
-            "labels": ["outbound:gateways"],
-            "endpoint_field": "dest",
-            "sweeps": ["legs/outbound/sweep-gateways.json"],
-            "search_sweeps": ["legs/outbound/sweep-gateways.json"],
-            "veto": set(),  # gateways are waypoints, not final destinations
-            "budget": EXPANSION_BUDGET_PER_ENDPOINT,
-            "name": "legs/outbound/shortlist-gateway.json",
-            "label": "outbound:gateway",
-        }
+def _leg_intent(plan: dict, leg_id: str) -> dict:
+    leg = next((entry for entry in plan["legs"] if entry["id"] == leg_id), None)
+    if leg is None:
+        raise UsageError(f"unknown shortlist leg: {leg_id!r}")
+    return leg
+
+
+def _sweep_name(leg_id: str, label: str | None) -> str:
+    return f"legs/{leg_id}/sweep.json" if label is None else f"legs/{leg_id}/sweep-{label}.json"
+
+
+def _leg_spec(leg_id: str, trip: dict, prefs_doc: dict) -> dict:
     from getaway.sweeps import derive_specs
 
-    specs = [s for s in derive_specs(trip, prefs_doc) if s["label"] != "gateways"]
+    leg = _leg_intent(trip["plan"], leg_id)
+    specs = derive_specs(leg)
+    labels = [leg_id if s["label"] is None else f"{leg_id}:{s['label']}" for s in specs]
+    sweeps = [_sweep_name(leg_id, s["label"]) for s in specs]
+    search = [name for name, s in zip(sweeps, specs) if s["kind"] == "search"]
+    if leg.get("dests") == trips.ORIGINS_MARKER:  # flying home: partition by origin, home exempt
+        field, veto, budget = "origin", set(), RETURN_EXPANSION_BUDGET_PER_ENDPOINT
+    else:
+        field = "dest"
+        veto = set(prefs_doc["avoid_destinations"]) | set(trip["avoid_final_destinations"])
+        budget = EXPANSION_BUDGET_PER_ENDPOINT
     return {
-        "labels": [f"outbound:{s['label']}" for s in specs],
-        "endpoint_field": "dest",
-        "sweeps": [f"legs/outbound/sweep-{s['label']}.json" for s in specs],
-        "search_sweeps": [
-            f"legs/outbound/sweep-{s['label']}.json" for s in specs if s["kind"] == "search"
-        ],
-        "veto": set(prefs_doc["avoid_destinations"]) | set(trip["avoid_final_destinations"]),
-        "budget": EXPANSION_BUDGET_PER_ENDPOINT,
-        "name": "legs/outbound/shortlist.json",
-        "label": "outbound",
+        "labels": labels,
+        "endpoint_field": field,
+        "sweeps": sweeps,
+        "search_sweeps": search,
+        "veto": veto,
+        "budget": budget,
+        "name": f"legs/{leg_id}/shortlist.json",
+        "label": leg_id,
     }
 
 
-def shortlist(
-    slug: str, leg: str = "outbound", gateway: bool = False, now: Callable[[], dt.datetime] = utcnow
-) -> dict:
+def shortlist(slug: str, leg: str = "outbound", now: Callable[[], dt.datetime] = utcnow) -> dict:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
-    spec = _leg_spec(leg, gateway, trip, prefs_doc)
-    node_id = _NODE_IDS[spec["name"]]
+    spec = _leg_spec(leg, trip, prefs_doc)
+    leg_intent = _leg_intent(plan, leg)
+    node_id = f"shortlist:{leg}"
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node_id)
 
     search_states: dict = {}
@@ -147,17 +137,18 @@ def shortlist(
     rows = store.query_availability(trip_slug=slug, labels=spec["labels"])
     considered = len({row["id"] for row in rows})
 
-    feasible_origins = _expanded_origins(plan["origins"]) | observed
+    feasible_origins = _expanded_origins(leg_intent.get("origins", [])) | observed
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
     soft = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "soft"}
     sources = set(plan["sources"]) if plan.get("sources") else None
     departure_days = set(prefs_doc["departure_days"])
+    chained = spec["endpoint_field"] == "origin"  # a leg flying home draws origins from its chain
 
     candidates: list[Row] = []
     for row in rows:
         if not row["available"]:
             continue
-        if leg != "return" and row["origin"] not in feasible_origins:
+        if not chained and row["origin"] not in feasible_origins:
             continue  # feasibility: departs a planned (server-expanded) origin
         if sources is not None and row["source"] not in sources:
             continue
@@ -230,55 +221,151 @@ def shortlist(
     return doc
 
 
-def onward_minima(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
+def _pairs_node(slug: str, leg_id: str) -> dict:
+    node_id = f"pairs:{leg_id}"
+    node = next((n for n in trips.compile_graph(slug)["nodes"] if n["id"] == node_id), None)
+    if node is None:
+        raise UsageError(f"no pairs node {node_id!r} in the compiled graph")
+    return node
+
+
+def _onward_dests(leg: dict, home_origins: list[str]) -> list[str]:
+    """The concrete landings a cash/either leg forwards to bridge: its declared dests, home when it
+    targets ``$origins``, or its bucket landings."""
+    dests = leg.get("dests")
+    if dests == trips.ORIGINS_MARKER:
+        return list(home_origins)
+    if isinstance(dests, list):
+        return [d for d in dests if isinstance(d, str)]
+    landings: list[str] = []
+    for bucket in leg.get("buckets", []):
+        for dest in bucket["dests"]:
+            if dest not in landings:
+                landings.append(dest)
+    return landings
+
+
+def _window_dates(trip: dict, leg: dict) -> set[str]:
+    """Every date in the leg's own window (its absolute ``window`` or the trip window) — the
+    candidate departure dates for a gateway with no observed predecessor arrival: a first-position
+    cash leg, or a concrete airport carried forward from a prior cash leg."""
+    window = leg["window"] if "window" in leg else trip["window"]
+    start = dt.date.fromisoformat(window["start"])
+    span = (dt.date.fromisoformat(window["end"]) - start).days
+    return {(start + dt.timedelta(days=offset)).isoformat() for offset in range(span + 1)}
+
+
+def _gateway_dates(
+    slug: str, node: dict, leg: dict, trip: dict, predecessor: dict | None
+) -> dict[str, set[str]]:
+    """A cash/either leg's departure gateways keyed to their candidate departure dates.
+
+    Gateways resolve in one fixed order from the compiled pairs node's ``endpoint_source``:
+
+    1. explicit ``override`` origins REPLACE the chain — exactly that list over the leg's own window
+       (an open jaw departs where the chain didn't land);
+    2. a chained award predecessor (``from``) yields its shortlist's reached endpoints on their
+       observed arrival dates (stay-shifted when the predecessor marks a stop), unioned with any
+       carried cash-reachable dests (``union``) departing across the leg's own window;
+    3. ``union`` alone — a pure-cash/either predecessor with no shortlist rows — departs those dests
+       over the leg's window;
+    4. no ``endpoint_source`` (a first-position cash leg) departs its own materialized origins over
+       that window.
+
+    An empty chained resolution is a data condition raised loud — bridge prices nothing on no
+    gateways — mirroring the sweep lane's empty-gateway guard."""
+    from getaway.sweeps import _stay_shift
+
+    endpoint_source = node["endpoint_source"]
+    stay = predecessor.get("stay_nights") if predecessor is not None else None
+    dates: dict[str, set[str]] = {}
+    if endpoint_source is not None:
+        override = endpoint_source.get("override") or {}
+        if override.get("origins"):  # open jaw: override REPLACES the chain, departs the leg window
+            window = _window_dates(trip, leg)
+            return {airport: set(window) for airport in override["origins"]}
+        if "from" in endpoint_source:
+            prior = json.loads(trips.artifact_read(slug, endpoint_source["from"]))
+            for cand in prior["candidates"]:
+                dates.setdefault(cand[endpoint_source["field"]], set()).update(
+                    _stay_shift({cand["date"]}, stay)
+                )
+        union = endpoint_source.get("union", [])
+        if union:
+            window = _window_dates(trip, leg)
+            for airport in union:
+                dates.setdefault(airport, set()).update(window)
+        if not dates:
+            source = endpoint_source.get("from") or "carried union"
+            raise NoData(f"cash pairs {node['id']!r} in {slug!r} has no gateways: {source} empty")
+        return dates
+    window = _window_dates(trip, leg)  # first-position cash leg: its own materialized origins
+    for airport in leg["origins"]:
+        dates.setdefault(airport, set()).update(window)
+    return dates
+
+
+def onward_minima(
+    slug: str, leg: str = "outbound", now: Callable[[], dt.datetime] = utcnow
+) -> dict:
+    from getaway.sweeps import _predecessor
+
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
-    hybrid = plan["hybrid"]
-    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "onward")
-    gateway_doc = json.loads(trips.artifact_read(slug, "legs/outbound/shortlist-gateway.json"))
-    gateway_dates: dict[str, set[str]] = {}
-    for cand in gateway_doc["candidates"]:
-        gateway_dates.setdefault(cand["dest"], set()).add(cand["date"])
-    onward_dests = hybrid["onward_dests"]
+    leg_intent = _leg_intent(plan, leg)
+    node = _pairs_node(slug, leg)
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node["id"])
+    gateway_dates = _gateway_dates(slug, node, leg_intent, trip, _predecessor(plan, leg))
+    onward_dests = _onward_dests(leg_intent, plan["legs"][0]["origins"])
     letter_to_cabin = {letter: name for name, letter in CABIN_PREFIX.items()}
     hard = {a["code"] for a in prefs_doc["avoid_airlines"] if a["strength"] == "hard"}
 
-    store = connect(cache_db(), now=now)
-    rows = store.query_availability(trip_slug=slug, labels=["outbound:onward"])
     minima: dict[tuple[str, str, str, str], Row] = {}
-    for row in rows:
-        if not row["available"]:
-            continue
-        if row["origin"] not in gateway_dates or row["dest"] not in onward_dests:
-            continue
-        if row["date"] < min(gateway_dates[row["origin"]]):
-            continue  # structural: departs before the earliest feasible gateway arrival
-        airlines = _airlines(row)
-        if airlines and all(a in hard for a in airlines):
-            continue
-        cabin = letter_to_cabin[row["cabin"]]
-        key = (row["origin"], row["dest"], cabin, row["date"])
-        current = minima.get(key)
-        if current is None or row["mileage_cost"] < current["mileage"]:
-            minima[key] = {
-                "gateway": row["origin"],
-                "onward_dest": row["dest"],
-                "cabin": cabin,
-                "id": row["id"],
-                "date": row["date"],
-                "source": row["source"],
-                "mileage": row["mileage_cost"],
-                "seats": row["remaining_seats"],
-                "airlines": row["airlines"],
-                "direct": row["direct"],
-            }
+    if leg_intent["mode"] != "cash":  # an award/either leg's own availability is the award option
+        labels = _leg_spec(leg, trip, prefs_doc)["labels"]
+        store = connect(cache_db(), now=now)
+        for row in store.query_availability(trip_slug=slug, labels=labels):
+            if not row["available"]:
+                continue
+            if row["origin"] not in gateway_dates or row["dest"] not in onward_dests:
+                continue
+            if row["date"] < min(gateway_dates[row["origin"]]):
+                continue  # structural: departs before the earliest feasible gateway arrival
+            airlines = _airlines(row)
+            if airlines and all(a in hard for a in airlines):
+                continue
+            cabin = letter_to_cabin[row["cabin"]]
+            key = (row["origin"], row["dest"], cabin, row["date"])
+            current = minima.get(key)
+            if current is None or row["mileage_cost"] < current["mileage"]:
+                minima[key] = {
+                    "gateway": row["origin"],
+                    "onward_dest": row["dest"],
+                    "cabin": cabin,
+                    "id": row["id"],
+                    "date": row["date"],
+                    "source": row["source"],
+                    "mileage": row["mileage_cost"],
+                    "seats": row["remaining_seats"],
+                    "airlines": row["airlines"],
+                    "direct": row["direct"],
+                }
 
-    pair_dates = sorted({(m["gateway"], m["onward_dest"], m["date"]) for m in minima.values()})
-    bridge_pairs = [{"gateway": g, "onward_dest": d, "date": date} for g, d, date in pair_dates]
+    # Cross the reached gateways with the leg's onward dests on each gateway's arrival dates: the
+    # cash lane prices every reachable pair, never gated on award availability (which double-gates).
+    pair_keys = sorted(
+        {
+            (gateway, dest, date)
+            for gateway, dates in gateway_dates.items()
+            for dest in onward_dests
+            for date in dates
+        }
+    )
+    bridge_pairs = [{"gateway": g, "onward_dest": d, "date": date} for g, d, date in pair_keys]
     doc = {"minima": list(minima.values()), "bridge_pairs": bridge_pairs}
-    trips.artifact_write(slug, "legs/outbound/onward.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "onward", inputs_fp=inputs_fp, now=now)
+    trips.artifact_write(slug, node["outputs"][0], json.dumps(doc, separators=(",", ":")))
+    trips.phase_done(slug, node["id"], inputs_fp=inputs_fp, now=now)
     return doc
 
 
@@ -287,15 +374,21 @@ shortlist_group = click.Group("shortlist", help="Select leg candidates from swep
 
 @shortlist_group.command("run")
 @click.argument("slug")
-@click.option("--leg", default="outbound", type=click.Choice(["outbound", "return"]))
-@click.option("--gateway", is_flag=True)
+@click.option("--leg", default="outbound")
 @map_errors
-def _run_cmd(slug: str, leg: str, gateway: bool) -> None:
-    emit(shortlist(slug, leg=leg, gateway=gateway))
+def _run_cmd(slug: str, leg: str) -> None:
+    emit(shortlist(slug, leg=leg))
 
 
 @shortlist_group.command("onward")
 @click.argument("slug")
+@click.option("--leg", required=True)
 @map_errors
-def _onward_cmd(slug: str) -> None:
-    emit(onward_minima(slug))
+def _onward_cmd(slug: str, leg: str) -> None:
+    from getaway.constants import EXIT_NO_DATA
+
+    try:
+        emit(onward_minima(slug, leg))
+    except NoData as err:  # empty chained gateways: no pairs to price, exit for walker backoff
+        click.echo(str(err), err=True)
+        raise SystemExit(EXIT_NO_DATA) from err

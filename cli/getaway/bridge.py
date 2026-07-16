@@ -219,13 +219,15 @@ def _price_pair(pair: Row, now: Callable[[], dt.datetime], search: Callable) -> 
 
 def run(
     slug: str,
+    leg: str,
     now: Callable[[], dt.datetime] = utcnow,
     search: Callable = _search_with_fallback,
 ) -> dict:
     trip = trips.show(slug)
     prefs_doc = prefs.show()
-    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "bridge")
-    onward = json.loads(trips.artifact_read(slug, "legs/outbound/onward.json"))
+    node_id = f"bridge:{leg}"
+    inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node_id)
+    onward = json.loads(trips.artifact_read(slug, f"legs/{leg}/onward.json"))
     quotes: list[dict] = []
     failures: list[dict] = []
     for pair in onward["bridge_pairs"]:
@@ -235,13 +237,14 @@ def run(
         else:
             failures.append({k: v for k, v in priced.items() if k != "state"})
     doc = {"quotes": quotes, "failures": failures}
-    trips.artifact_write(slug, "legs/outbound/bridge.json", json.dumps(doc, separators=(",", ":")))
-    trips.phase_done(slug, "bridge", inputs_fp=inputs_fp, now=now)
+    trips.artifact_write(slug, f"legs/{leg}/bridge.json", json.dumps(doc, separators=(",", ":")))
+    trips.phase_done(slug, node_id, inputs_fp=inputs_fp, now=now)
     return {"quotes": len(quotes), "failures": len(failures)}
 
 
 @click.command("bridge")
 @click.argument("slug")
+@click.option("--leg", required=True)
 @map_errors
-def bridge_cmd(slug: str) -> None:
-    emit(run(slug))
+def bridge_cmd(slug: str, leg: str) -> None:
+    emit(run(slug, leg))

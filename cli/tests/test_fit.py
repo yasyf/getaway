@@ -56,6 +56,15 @@ def leg(
     }
 
 
+def plan_legs(*, returns: bool) -> list[dict]:
+    """The plan's leg intents — only the return-side gate (last leg targets ``$origins``) matters to
+    the fit engine, which anchors facts by the typed-leg positions passed to ``journey_fit``."""
+    outbound = {"id": "outbound", "origins": ["SFO"], "dests": ["NRT"]}
+    if returns:
+        return [outbound, {"id": "return", "dests": "$origins"}]
+    return [outbound]
+
+
 def trip(
     preferences: dict | None = None,
     cabin: str = "business",
@@ -63,11 +72,12 @@ def trip(
     party: int = 1,
     trip_type: str = "round_trip",
 ) -> dict:
+    legs = plan_legs(returns=trip_type != "one_way")
     return {
         "cabin": cabin,
         "party": party,
         "window": window or WINDOW,
-        "plan": {"trip_type": trip_type, "preferences": preferences or {}},
+        "plan": {"legs": legs, "preferences": preferences or {}},
     }
 
 
@@ -234,6 +244,86 @@ def test_away_nights_uses_cash_leg_real_arrival_clock() -> None:
     assert facts["away_nights"] == 4  # 09-08 cash arrival -> 09-12 return departure
 
 
+def _cash_leg(
+    role: str,
+    origin: str,
+    dest: str,
+    dep: str,
+    arr: str,
+    *,
+    duration: int = 180,
+    connections: list[str] | None = None,
+) -> dict:
+    conns = connections or []
+    return {
+        "role": role,
+        "mode": "cash",
+        "origin": origin,
+        "dest": dest,
+        "cash": {
+            "duration_minutes": duration,
+            "stops": len(conns),
+            "connections": conns,
+            "airline": "JL",
+            "departs_local": dep,
+            "arrives_local": arr,
+        },
+    }
+
+
+def test_cash_first_positioning_leg_reads_its_clocks_without_crash() -> None:
+    # legs[0] is cash: journey_fit reads its quote clocks for the door-to-door span, no KeyError.
+    legs = [
+        _cash_leg("positioning", "SFO", "LAX", "2026-09-03T08:00:00", "2026-09-03T11:00:00"),
+        leg("outbound", [seg("LAX", "NRT", "2026-09-05T11:00:00", "2026-09-06T15:00:00", 660)]),
+        _return(),
+    ]
+    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    assert facts["trip_length_days"] == 12  # cash departure 09-03 -> return arrival 09-15
+    assert facts["away_nights"] == 8  # NRT arrival 09-06 -> return departure 09-14
+    assert facts["legs"][0]["mode"] == "cash"
+
+
+def test_cash_last_home_hop_reads_its_clocks_without_crash() -> None:
+    # legs[-1] is a cash home hop: the return-side spans read its quote clocks, no KeyError.
+    legs = [
+        _outbound(),
+        _cash_leg(
+            "return", "NRT", "SFO", "2026-09-14T18:00:00", "2026-09-15T09:00:00", duration=600
+        ),
+    ]
+    facts = fit.journey_fit(trip(), PREFS, legs, clock())["fit_facts"]
+    assert facts["trip_length_days"] == 10  # award departure 09-05 -> cash home arrival 09-15
+    assert facts["away_nights"] == 8
+    assert facts["legs"][-1]["mode"] == "cash"
+
+
+def test_cash_last_home_hop_carries_return_arrival_miss() -> None:
+    prefs_pref = {
+        "return_arrival_by": {"value": {"latest_local_date": "2026-09-14"}, "priority": "primary"}
+    }
+    legs = [
+        _outbound(),
+        _cash_leg(
+            "return", "NRT", "SFO", "2026-09-14T18:00:00", "2026-09-15T09:00:00", duration=600
+        ),
+    ]
+    result = fit.journey_fit(trip(prefs_pref), PREFS, legs, clock())
+    misses = {m["code"]: m for m in result["preference_misses"]}
+    assert misses["return_arrival_by"]["delta"] == 1  # cash home arrives 09-15, one day past
+
+
+def test_departure_days_pref_skips_cash_first_leg() -> None:
+    # A cash first leg carries no weekday fact — the departure_days miss stays neutral, not a crash.
+    prefs_pref = {"departure_days": {"value": ["Mon"], "priority": "note"}}
+    legs = [
+        _cash_leg("positioning", "SFO", "LAX", "2026-09-03T08:00:00", "2026-09-03T11:00:00"),
+        _outbound(),
+    ]
+    result = fit.journey_fit(trip(prefs_pref, trip_type="one_way"), PREFS, legs, clock())
+    assert all(m["code"] != "departure_days" for m in result["preference_misses"])
+
+
 @pytest.mark.parametrize(
     ("segment_cabin", "expected_below_minutes", "expected_misses"),
     [
@@ -348,7 +438,7 @@ def test_preferred_cabin_resolves_from_preference_over_trip() -> None:
 
 def test_preference_misses_use_first_outbound_and_last_return_positions() -> None:
     plan = {
-        "trip_type": "round_trip",
+        "legs": plan_legs(returns=True),
         "preferences": {
             "return_arrival_by": {
                 "value": {"latest_local_date": "2026-09-14"},

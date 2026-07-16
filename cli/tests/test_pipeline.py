@@ -19,9 +19,10 @@ SEARCH_URL = "https://seats.aero/partnerapi/search"
 FROZEN = dt.datetime(2026, 9, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
 
 PLAN = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+    ]
 }
 
 OUTBOUND_ROWS = [

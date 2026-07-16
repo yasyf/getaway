@@ -10,6 +10,7 @@ import click
 from getaway import prefs, registry
 from getaway.constants import (
     CABIN_PREFIX,
+    CONTINENTS,
     DISJOINT_DURABLE_PREF_KEYS,
     GENERATION_CUTTING_COMPLETENESS,
     NODE_QUOTA_COST,
@@ -42,25 +43,37 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 ARTIFACT_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 ARTIFACT_LEAF_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.(json|jsonl)$")
 BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 RESERVED_BUCKET_NAMES = frozenset({"gateways", "onward"})
 RESERVED_KEYS = frozenset({"slug", "created"})
-TRIP_TYPES = frozenset({"one_way", "round_trip"})
 PLAN_KEYS = frozenset(
     {
-        "trip_type",
-        "origins",
-        "buckets",
-        "program_sweeps",
-        "hybrid",
+        "legs",
         "sources",
         "preferences",
         "constraints",
-        "return",
         "lodging",
     }
 )
-HYBRID_KEYS = frozenset({"gateways", "onward_dests", "max_hybrids"})
-RETURN_KEYS = frozenset({"origins", "dests"})
+LEG_KEYS = frozenset(
+    {
+        "id",
+        "origins",
+        "dests",
+        "mode",
+        "window",
+        "stay_nights",
+        "cabin",
+        "optional",
+        "buckets",
+        "program_sweeps",
+        "role",
+    }
+)
+LEG_MODES = frozenset({"award", "cash", "either"})
+LEG_ID_RE = ARTIFACT_SEGMENT_RE  # leg ids become artifact path segments (legs/<id>/…)
+ORIGINS_MARKER = "$origins"
+V2_PLAN_KEYS = frozenset({"trip_type", "hybrid", "return", "origins", "buckets", "program_sweeps"})
 LODGING_KEYS = frozenset({"checkout"})
 JUDGMENT_KEYS = frozenset({"guidance", "factors"})
 FACTOR_PRIORITIES = frozenset({"primary", "secondary", "note"})
@@ -187,14 +200,28 @@ def _validate_bucket(bucket: object) -> None:
     if name in RESERVED_BUCKET_NAMES:
         raise UsageError(f"plan.buckets.name is a reserved label: {name!r}")
     require_str_list(bucket["dests"], "plan.buckets.dests")
+    if not bucket["dests"]:
+        raise UsageError("plan.buckets.dests must be a non-empty list")
 
 
 def _iso_date(value: object, label: str) -> None:
+    # DATE-ONLY: datetime/tz forms would poison window comparisons with a naive-vs-aware TypeError.
+    text = require_str(value, label)
+    if not ISO_DATE_RE.match(text):
+        raise UsageError(f"{label} must be a YYYY-MM-DD ISO date: {value!r}")
+    try:
+        datetime.fromisoformat(text)
+    except ValueError as err:
+        raise UsageError(f"{label} is not a valid ISO date: {value!r}") from err
+
+
+def _iso_local_datetime(value: object, label: str) -> None:
+    # Bridge quote clocks are local wall-clock datetimes (YYYY-MM-DDThh:mm), not bare dates.
     text = require_str(value, label)
     try:
         datetime.fromisoformat(text)
     except ValueError as err:
-        raise UsageError(f"{label} is not an ISO date: {value!r}") from err
+        raise UsageError(f"{label} is not an ISO datetime: {value!r}") from err
 
 
 def _str_list(value: object, label: str) -> list[str]:
@@ -296,40 +323,207 @@ def _validate_constraints(branch: object) -> None:
         _validate_constraint_value(key, value, f"plan.constraints[{key!r}]")
 
 
-def _validate_return(return_spec: object, merged: dict) -> None:
-    ret = require_keys(return_spec, set(), "plan.return", optional=frozenset(RETURN_KEYS))
-    if "dests" in ret:  # home endpoints — exempt from the destination veto
-        require_str_list(ret["dests"], "plan.return.dests")
-    if "origins" in ret:
-        require_str_list(ret["origins"], "plan.return.origins")
-        bad = sorted({a for a in ret["origins"] if a in _vetoed_dests(merged)})
-        if bad:
-            raise UsageError(f"plan.return.origins vetoed by avoid lists: {bad}")
+def _conventional_leg_ids(legs: list) -> list[str]:
+    """Effective ids for an ordered leg list: explicit ``id``, else the conventional default.
+
+    First leg defaults to ``outbound`` and a two-leg plan's second to ``return``; every other
+    leg names itself. Ids are convention, never logic — only position and ``$origins``-direction
+    are structural (doc 49100ad).
+    """
+    n = len(legs)
+    ids: list[str] = []
+    for index, leg in enumerate(legs):
+        explicit = leg.get("id")
+        if explicit is not None:
+            if not isinstance(explicit, str):
+                raise UsageError(f"plan.legs[{index}].id must be a string")
+            ids.append(explicit)
+        elif index == 0:
+            ids.append("outbound")
+        elif index == n - 1 and n == 2:
+            ids.append("return")
+        else:
+            raise UsageError(f"plan.legs[{index}] requires an explicit id")
+    return ids
+
+
+def _require_label_component(value: object, label: str) -> str:
+    """A component that folds into a sweep label (node id, artifact leaf, command token) must
+    match the leaf grammar bucket names already enforce — lowercase alnum + hyphen — so nothing
+    can escape into a path segment or corrupt the ``leg:label`` spec. Non-empty by construction."""
+    text = require_str(value, label)
+    if not BUCKET_NAME_RE.match(text):
+        raise UsageError(f"{label} must match {BUCKET_NAME_RE.pattern!r}: {text!r}")
+    return text
+
+
+def _require_continent(value: object, label: str) -> str:
+    """A program-sweep region is a seats.aero API operand, not a free label: one of the six
+    continent names (docs/seats-aero-api.md). It is sent verbatim to /availability and slugified
+    only when it folds into a sweep label."""
+    text = require_str(value, label)
+    if text not in CONTINENTS:
+        raise UsageError(f"{label} must be one of {sorted(CONTINENTS)}: {text!r}")
+    return text
+
+
+def _validate_program_sweep(sweep: object, label: str) -> None:
+    optional = frozenset({"dest_region", "origin_region"})
+    sweep = require_keys(sweep, {"source"}, label, optional=optional)
+    _require_label_component(sweep["source"], f"{label}.source")
+    regions = [key for key in ("dest_region", "origin_region") if key in sweep]
+    if not regions:
+        raise UsageError(f"{label} needs dest_region or origin_region")
+    for key in regions:
+        _require_continent(sweep[key], f"{label}.{key}")
+
+
+def _validate_leg(leg: object, index: int, leg_id: str, merged: dict) -> None:
+    label = f"plan.legs[{index}]"
+    leg = require_keys(leg, set(), label, optional=LEG_KEYS)
+    if not LEG_ID_RE.match(leg_id):
+        raise UsageError(f"{label}.id must match {LEG_ID_RE.pattern!r}: {leg_id!r}")
+    mode = leg.get("mode", "award")
+    if mode not in LEG_MODES:
+        raise UsageError(f"{label}.mode must be one of {sorted(LEG_MODES)}")
+    if mode == "cash" and ("buckets" in leg or "program_sweeps" in leg):
+        raise UsageError(
+            f"{label} is cash-only; buckets/program_sweeps are award-lane groupings, "
+            f"not valid on a cash leg"
+        )
+    is_first = index == 0
+    if "origins" in leg:
+        require_str_list(leg["origins"], f"{label}.origins")
+        if not leg["origins"]:
+            raise UsageError(f"{label}.origins must be a non-empty list")
+        if not is_first:  # an explicit later-leg origin is a place reached — veto it
+            bad = sorted({a for a in leg["origins"] if a in _vetoed_dests(merged)})
+            if bad:
+                raise UsageError(f"{label}.origins vetoed by avoid lists: {bad}")
+    _validate_leg_dests(leg, is_first, mode, label, merged)
+    if "window" in leg:
+        win = require_keys(leg["window"], {"start", "end"}, f"{label}.window")
+        _iso_date(win["start"], f"{label}.window.start")
+        _iso_date(win["end"], f"{label}.window.end")
+        if datetime.fromisoformat(win["start"]) > datetime.fromisoformat(win["end"]):
+            raise UsageError(f"{label}.window.start must be <= end")
+    if "stay_nights" in leg:
+        stay = require_keys(leg["stay_nights"], {"min", "max"}, f"{label}.stay_nights")
+        low = require_int(stay["min"], f"{label}.stay_nights.min")
+        high = require_int(stay["max"], f"{label}.stay_nights.max")
+        if low < 1 or high < 1:
+            raise UsageError(f"{label}.stay_nights must be positive")
+        if low > high:
+            raise UsageError(f"{label}.stay_nights.min must be <= max")
+    if "cabin" in leg and leg["cabin"] not in CABIN_PREFIX:
+        raise UsageError(f"{label}.cabin must be one of {sorted(CABIN_PREFIX)}")
+    if "optional" in leg and not isinstance(leg["optional"], bool):
+        raise UsageError(f"{label}.optional must be a boolean")
+    if "buckets" in leg:
+        if not isinstance(leg["buckets"], list):
+            raise UsageError(f"{label}.buckets must be a list")
+        for bucket in leg["buckets"]:
+            _validate_bucket(bucket)
+    if "program_sweeps" in leg:
+        if not isinstance(leg["program_sweeps"], list):
+            raise UsageError(f"{label}.program_sweeps must be a list")
+        for i, sweep in enumerate(leg["program_sweeps"]):
+            _validate_program_sweep(sweep, f"{label}.program_sweeps[{i}]")
+    if "role" in leg:
+        require_str(leg["role"], f"{label}.role")
+
+
+def _validate_concrete_dests(dests: list, label: str, merged: dict) -> None:
+    require_str_list(dests, f"{label}.dests")
+    if not dests:
+        raise UsageError(f"{label}.dests must be a non-empty list")
+    if ORIGINS_MARKER in dests:
+        raise UsageError(
+            f"{label}.dests: {ORIGINS_MARKER!r} is a whole-value marker, not a list member"
+        )
+    bad = sorted({a for a in dests if a in _vetoed_dests(merged)})
+    if bad:
+        raise UsageError(f"{label}.dests vetoed by avoid lists: {bad}")
+
+
+def _validate_leg_dests(leg: dict, is_first: bool, mode: str, label: str, merged: dict) -> None:
+    dests = leg.get("dests")
+    if mode == "cash":
+        # A cash leg must anchor its successor concretely: a non-empty IATA list or whole-value
+        # $origins. No discover dests; groupings already rejected in _validate_leg.
+        if dests == ORIGINS_MARKER:
+            if is_first:
+                raise UsageError(
+                    f"{label}.dests {ORIGINS_MARKER!r} is only valid on a non-first leg"
+                )
+            return
+        if not isinstance(dests, list) or not dests:
+            raise UsageError(
+                f"{label} is cash-only and needs a non-empty dests list or {ORIGINS_MARKER!r}"
+            )
+        _validate_concrete_dests(dests, label, merged)
+        return
+    has_groupings = bool(leg.get("buckets")) or bool(leg.get("program_sweeps"))
+    if dests is None:
+        if not has_groupings:
+            raise UsageError(f"{label} needs dests, buckets, or program_sweeps")
+    elif dests == ORIGINS_MARKER:
+        if is_first:
+            raise UsageError(f"{label}.dests {ORIGINS_MARKER!r} is only valid on a non-first leg")
+    elif isinstance(dests, dict):  # discover — validated but inert until P3
+        discover = require_keys(dests, {"discover"}, f"{label}.dests")
+        if not isinstance(discover["discover"], dict):
+            raise UsageError(f"{label}.dests.discover must be an object")
+    else:
+        _validate_concrete_dests(dests, label, merged)
+
+
+def _validate_legs(legs: object, merged: dict) -> None:
+    if not isinstance(legs, list) or not legs:
+        raise UsageError("plan.legs must be a non-empty list")
+    prior_discover = False
+    for index, leg in enumerate(legs):
+        if not isinstance(leg, dict):
+            raise UsageError(f"plan.legs[{index}] must be an object")
+        if prior_discover and "origins" not in leg:  # inert discover can't anchor a successor
+            raise UsageError(
+                f"plan.legs[{index}] must declare explicit origins: it follows a discover-dests "
+                f"leg, which anchors successors only once scout lands (P3)"
+            )
+        prior_discover = isinstance(leg.get("dests"), dict)
+    ids = _conventional_leg_ids(legs)
+    if len(set(ids)) != len(ids):
+        raise UsageError(f"plan.legs ids must be unique: {sorted(ids)}")
+    for index, leg in enumerate(legs):
+        _validate_leg(leg, index, ids[index], merged)
+    _validate_window_order(legs)
+
+
+def _validate_window_order(legs: list) -> None:
+    """Legs run forward in time: no later leg's window may end before an earlier leg's begins."""
+    latest_start: datetime | None = None
+    latest_start_index = -1
+    for index, leg in enumerate(legs):
+        win = leg.get("window")
+        if not isinstance(win, dict):
+            continue
+        start = datetime.fromisoformat(win["start"])
+        end = datetime.fromisoformat(win["end"])
+        if latest_start is not None and end < latest_start:
+            raise UsageError(
+                f"plan.legs[{index}].window.end precedes plan.legs[{latest_start_index}]"
+                f".window.start: legs must run forward in time"
+            )
+        if latest_start is None or start > latest_start:
+            latest_start, latest_start_index = start, index
 
 
 def _validate_plan(plan: object, merged: dict) -> None:
-    plan = require_keys(plan, set(), "plan", optional=frozenset(PLAN_KEYS))
-    trip_type = plan.get("trip_type")
-    if trip_type is not None and trip_type not in TRIP_TYPES:
-        raise UsageError(f"plan.trip_type must be one of {sorted(TRIP_TYPES)}")
-    if "origins" in plan:
-        require_str_list(plan["origins"], "plan.origins")
+    plan = require_keys(plan, set(), "plan", optional=PLAN_KEYS)
+    if "legs" in plan:
+        _validate_legs(plan["legs"], merged)
     if "sources" in plan:
         require_str_list(plan["sources"], "plan.sources")
-    if "buckets" in plan:
-        if not isinstance(plan["buckets"], list):
-            raise UsageError("plan.buckets must be a list")
-        for bucket in plan["buckets"]:
-            _validate_bucket(bucket)
-    if "program_sweeps" in plan and not isinstance(plan["program_sweeps"], list):
-        raise UsageError("plan.program_sweeps must be a list")
-    if "hybrid" in plan:
-        hybrid = require_keys(plan["hybrid"], set(), "plan.hybrid", optional=frozenset(HYBRID_KEYS))
-        if "onward_dests" in hybrid:
-            require_str_list(hybrid["onward_dests"], "plan.hybrid.onward_dests")
-            bad = sorted({a for a in hybrid["onward_dests"] if a in _vetoed_dests(merged)})
-            if bad:
-                raise UsageError(f"plan.hybrid.onward_dests vetoed by avoid lists: {bad}")
     if "preferences" in plan:
         _validate_preferences(plan["preferences"])
     if "constraints" in plan:
@@ -338,10 +532,6 @@ def _validate_plan(plan: object, merged: dict) -> None:
         both = sorted(set(plan["preferences"]) & set(plan["constraints"]))
         if both:
             raise UsageError(f"keys appear in both preferences and constraints: {both}")
-    if "return" in plan:
-        if trip_type == "one_way":
-            raise UsageError("plan.return is invalid for a one-way trip")
-        _validate_return(plan["return"], merged)
     if "lodging" in plan:
         lodging = require_keys(plan["lodging"], set(), "plan.lodging", optional=LODGING_KEYS)
         if "checkout" in lodging:  # an explicit checkout is the only one a one-way/open-jaw carries
@@ -419,10 +609,43 @@ def set_patch(slug: str, patch: dict) -> dict:
         if not current:
             raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
         merged = {**current, **patch}
+        _reject_v2_plan(merged["plan"])  # a patch over a stored v2 plan rejects like show()/compile
         _validate_trip(merged)
         return merged
 
     return atomic_update(_trip_json(slug), _mut)
+
+
+def _reject_v2_plan(plan: object) -> None:
+    """A stored pre-cutover plan (trip_type/hybrid/return/origins/buckets) can't be read: no
+    migration. Fail loud at the read boundary, naming the offending keys and the remedy."""
+    if not isinstance(plan, dict):
+        raise UsageError("plan must be an object")
+    found = sorted(set(plan) & V2_PLAN_KEYS)
+    if found:
+        raise UsageError(
+            f"plan uses removed v2 keys {found} (a pre-cutover trip); "
+            f"re-declare it as plan.legs via 'trip set'."
+        )
+
+
+def _materialize_plan(plan: dict, prefs_doc: dict) -> dict:
+    """Fill conventional leg ids, the default award mode, and the first leg's origins.
+
+    The stored doc stays sparse; every consumer reads the materialized plan so leg ids and the
+    ``$origins`` anchor are always explicit.
+    """
+    ids = _conventional_leg_ids(plan["legs"])
+    legs = [
+        {**leg, "id": leg_id, "mode": leg.get("mode", "award")}
+        for leg_id, leg in zip(ids, plan["legs"])
+    ]
+    first = legs[0]
+    if "origins" not in first:
+        origins = prefs_doc["origin_airports"] or [prefs_doc["home_airport"]]
+        require_str_list(origins, "plan.legs[0].origins")
+        first["origins"] = origins
+    return {**plan, "legs": legs}
 
 
 def show(slug: str) -> dict:
@@ -432,11 +655,9 @@ def show(slug: str) -> dict:
         raise StateConflictError(f"no trip {slug!r} in {trips_dir()}")
     doc = json.loads(path.read_text())
     plan = doc["plan"]
-    if plan and "origins" not in plan:
-        prefs_doc = prefs.show()
-        origins = prefs_doc["origin_airports"] or [prefs_doc["home_airport"]]
-        require_str_list(origins, "plan.origins")
-        doc["plan"] = {**plan, "origins": origins}
+    _reject_v2_plan(plan)
+    if plan.get("legs"):
+        doc["plan"] = _materialize_plan(plan, prefs.show())
     return doc
 
 
@@ -716,8 +937,8 @@ def _validate_bridge_quote(quote: object, label: str) -> None:
         raise UsageError(f"{label}.connections must have one airport per stop")
     require_str(quote["airline"], f"{label}.airline")
     require_str(quote["flight_number"], f"{label}.flight_number")
-    _iso_date(quote["departs_local"], f"{label}.departs_local")
-    _iso_date(quote["arrives_local"], f"{label}.arrives_local")
+    _iso_local_datetime(quote["departs_local"], f"{label}.departs_local")
+    _iso_local_datetime(quote["arrives_local"], f"{label}.arrives_local")
 
 
 def _validate_bridge_artifact(doc: object, name: str) -> None:
@@ -740,6 +961,7 @@ def _validate_finalists_artifact(doc: object, name: str) -> None:
             "dropped",
         },
         name,
+        optional=frozenset({"truncation"}),
     )
     for key in ("journeys", "notable_stretches", "unpaired_leads", "dropped"):
         if not isinstance(doc[key], list):
@@ -788,7 +1010,7 @@ def _validate_assess_artifact(doc: object, name: str) -> None:
 def _artifact_validator(leaf: str) -> Callable[[object, str], None] | None:
     if leaf.startswith("sweep") and leaf.endswith(".json"):
         return _validate_sweep_artifact
-    if leaf in ("shortlist.json", "shortlist-gateway.json"):
+    if leaf == "shortlist.json":
         return _validate_shortlist_artifact
     if leaf == "onward.json":
         return _validate_onward_artifact
@@ -854,11 +1076,24 @@ def existing_artifacts(slug: str, names: list[str]) -> list[str]:
     return [name for name in names if name in present]
 
 
-def _trip_type(plan: dict) -> str:
-    trip_type = plan.get("trip_type")
-    if trip_type not in TRIP_TYPES:
-        raise UsageError("plan.trip_type must be one_way or round_trip before compiling")
-    return trip_type
+def _targets_origins(plan: dict) -> bool:
+    """The return-side gate: does the last intent fly back to ``$origins`` (doc 49100ad)?
+
+    Replaces the ``_trip_type != "one_way"`` gate — still plan-derived, same call shape.
+    """
+    legs = plan.get("legs")
+    if not legs:
+        raise UsageError("plan.legs must be a non-empty list before compiling")
+    return legs[-1].get("dests") == ORIGINS_MARKER
+
+
+def _shape_label(plan: dict) -> str:
+    legs = plan.get("legs")
+    if not legs:
+        raise UsageError("plan.legs must be a non-empty list")
+    if len(legs) == 1:
+        return "one_way"
+    return "round_trip" if _targets_origins(plan) else "open_jaw"
 
 
 def _node(
@@ -892,155 +1127,214 @@ def _node(
     }
 
 
-def _quota_budget(nodes: list[dict]) -> dict:
+def _quota_budget(nodes: list[dict], leg_order: dict[str, int]) -> dict:
     kind_order = {"sweep": 0, "onward": 1, "bridge": 2, "expand": 3}
-    leg_order = {"outbound": 0, "return": 1, None: 2}
+    # Journey-scoped nodes (leg=None) settle after every leg's costed work.
+    last = len(leg_order)
     costed = [n for n in nodes if n["quota_cost"]]
-    costed.sort(key=lambda n: (kind_order.get(n["kind"], 9), leg_order[n["leg"]], n["id"]))
+
+    def order(n: dict) -> tuple:
+        return (kind_order.get(n["kind"], 9), leg_order.get(n["leg"], last), n["id"])
+
+    costed.sort(key=order)
     return {
         "total": sum(n["quota_cost"] for n in costed),
         "nodes": [{"id": n["id"], "quota_cost": n["quota_cost"]} for n in costed],
     }
 
 
-def compile_graph(slug: str) -> dict:
-    from getaway.sweeps import derive_specs  # lazy: sweeps imports trips at module load
+def _leg_sweep_labels(leg: dict, leg_id: str) -> list[str | None]:
+    """Sweep labels for an award/either leg: one per bucket, one per program sweep, else a bare
+    single sweep (label ``None``). Components are leaf-grammar-validated upstream. Labels must be
+    unique within the leg — two groupings folding to one label would alias one node id and artifact.
+    """
+    labeled: list[tuple[str, str]] = [
+        (bucket["name"], f"bucket {bucket['name']!r}") for bucket in leg.get("buckets", [])
+    ]
+    for sweep in leg.get("program_sweeps", []):
+        # origin_region takes a "from-" infix so a source's dest and origin sweeps over one
+        # continent stay distinct. Slug is total over the closed continent vocabulary.
+        if "dest_region" in sweep:
+            label = f"{sweep['source']}-{sweep['dest_region'].lower().replace(' ', '-')}"
+        else:
+            label = f"{sweep['source']}-from-{sweep['origin_region'].lower().replace(' ', '-')}"
+        labeled.append((label, f"program_sweep {sweep!r}"))
+    seen: dict[str, str] = {}
+    for label, source in labeled:
+        if label in seen:
+            raise UsageError(
+                f"plan.legs[{leg_id!r}] derives sweep label {label!r} twice: "
+                f"{seen[label]} vs {source}"
+            )
+        seen[label] = source
+    return [label for label, _ in labeled] or [None]
 
+
+def _leg_override(leg: dict) -> dict | None:
+    """Explicit endpoints that override the chained defaults (open jaw / non-``$origins`` home)."""
+    override: dict = {}
+    if "origins" in leg:
+        override["origins"] = leg["origins"]
+    dests = leg.get("dests")
+    if isinstance(dests, list):
+        override["dests"] = dests
+    return override or None
+
+
+def _leg_declared_dests(leg: dict, home_origins: list[str]) -> list[str]:
+    """A leg's declared concrete dests — the cash-reachable landings it forwards to its successor's
+    union. ``$origins`` resolves to the materialized first-leg origins (a cash-home leg anchors its
+    successor at home, not on []); a leg that declares its dests only through buckets forwards those
+    bucket landings (program_sweeps carry regions, not concrete dests, and forward nothing)."""
+    dests = leg.get("dests")
+    if dests == ORIGINS_MARKER:
+        return list(home_origins)
+    if isinstance(dests, list):
+        return [d for d in dests if isinstance(d, str)]
+    landings: list[str] = []
+    for bucket in leg.get("buckets", []):
+        for dest in bucket["dests"]:
+            if dest not in landings:
+                landings.append(dest)
+    return landings
+
+
+def _chain_source(
+    leg: dict, prior_leg: dict | None, prior_shortlist: str | None, home_origins: list[str]
+) -> dict | None:
+    """Where a non-first leg draws its origins from (doc 49100ad chaining):
+
+    ``from`` the prior leg's shortlist iff the prior leg has an award lane (award/either);
+    ``union`` the prior leg's declared dests iff it has a cash lane (cash/either) — so an
+    either-mode hop carries its cash-reachable dests forward and a leg after a pure-cash leg
+    anchors on that leg's declared dests rather than silently chaining past it.
+    """
+    if prior_leg is None:
+        return None
+    prior_award = prior_leg["mode"] in ("award", "either")
+    prior_cash = prior_leg["mode"] in ("cash", "either")
+    source: dict = {}
+    if prior_award:
+        source["from"] = prior_shortlist
+    source["field"] = "dest"
+    source["union"] = _leg_declared_dests(prior_leg, home_origins) if prior_cash else []
+    source["override"] = _leg_override(leg)
+    return source
+
+
+def compile_graph(slug: str) -> dict:
     trip = show(slug)
     plan = trip["plan"]
-    trip_type = _trip_type(plan)
-    prefs_doc = prefs.show()
-    has_hybrid = bool(plan.get("hybrid"))
+    if not plan.get("legs"):
+        raise UsageError("plan.legs must be a non-empty list before compiling")
+    legs = plan["legs"]
+    home_origins = legs[0]["origins"]  # materialized; resolves a downstream $origins anchor
     has_lodging = "lodging" in plan
-    # A one-way with no explicit checkout has no return-departure date to derive one from.
-    has_stays = has_lodging and (trip_type == "round_trip" or "checkout" in plan["lodging"])
-    specs = derive_specs(trip, prefs_doc)
+    # A trip that never flies home to $origins has no return-departure date to derive a stay from.
+    has_stays = has_lodging and (_targets_origins(plan) or "checkout" in plan["lodging"])
+    leg_order = {leg["id"]: index for index, leg in enumerate(legs)}
+
     nodes: list[dict] = []
+    shortlist_outputs: list[str] = []
+    cash_outputs: list[str] = []  # onward.json then bridge.json per cash/either leg, in fold order
+    prior_leg: dict | None = None  # immediately preceding non-discover leg
+    prior_shortlist: str | None = None  # its shortlist, iff it carried an award lane
 
-    for spec in specs:
-        label = spec["label"]
-        nodes.append(
-            _node(
-                f"sweep:outbound:{label}",
-                "sweep",
-                scope="leg",
-                leg="outbound",
-                inputs=[],
-                outputs=[f"legs/outbound/sweep-{label}.json"],
-                command=["getaway", "sweep", "run", slug, f"outbound:{label}"],
-            )
+    for leg in legs:
+        leg_id = leg["id"]
+        dests = leg.get("dests")
+        if isinstance(dests, dict):  # discover — inert until P3; a chain BREAK, not a pass-through
+            # A discover leg anchors successors only once scout lands (P3). Until then its successor
+            # must declare explicit origins (validated) and starts a fresh chain — never chained
+            # from before the gap.
+            prior_leg = None
+            prior_shortlist = None
+            continue
+        award = leg["mode"] in ("award", "either")
+        cash = leg["mode"] in ("cash", "either")
+        endpoint_source = _chain_source(leg, prior_leg, prior_shortlist, home_origins)
+        sweep_inputs = (
+            [endpoint_source["from"]] if endpoint_source and "from" in endpoint_source else []
         )
+        # Cash pairs read a prior shortlist only when the prior leg carried an award lane.
+        prior_award = prior_leg is not None and prior_leg["mode"] in ("award", "either")
+        origin_shortlist = prior_shortlist if prior_award else None
 
-    ob_shortlist = "legs/outbound/shortlist.json"
-    direct_sweeps = [
-        f"legs/outbound/sweep-{s['label']}.json" for s in specs if s["label"] != "gateways"
-    ]
-    nodes.append(
-        _node(
-            "shortlist:outbound",
-            "shortlist",
-            scope="leg",
-            leg="outbound",
-            inputs=direct_sweeps,
-            outputs=[ob_shortlist],
-            command=["getaway", "shortlist", "run", slug, "--leg", "outbound"],
-        )
-    )
+        leg_sweeps: list[str] = []
+        if award:
+            for label in _leg_sweep_labels(leg, leg_id):
+                spec = leg_id if label is None else f"{leg_id}:{label}"
+                leaf = "sweep.json" if label is None else f"sweep-{label}.json"
+                output = f"legs/{leg_id}/{leaf}"
+                nodes.append(
+                    _node(
+                        f"sweep:{spec}",
+                        "sweep",
+                        scope="leg",
+                        leg=leg_id,
+                        inputs=list(sweep_inputs),
+                        outputs=[output],
+                        command=["getaway", "sweep", "run", slug, spec],
+                        endpoint_source=endpoint_source,
+                    )
+                )
+                leg_sweeps.append(output)
 
-    if has_hybrid:
-        gw_shortlist = "legs/outbound/shortlist-gateway.json"
-        nodes.append(
-            _node(
-                "shortlist:outbound:gateway",
-                "shortlist",
-                scope="leg",
-                leg="outbound",
-                inputs=["legs/outbound/sweep-gateways.json"],
-                outputs=[gw_shortlist],
-                command=["getaway", "shortlist", "run", slug, "--leg", "outbound", "--gateway"],
+        if award:
+            shortlist = f"legs/{leg_id}/shortlist.json"
+            nodes.append(
+                _node(
+                    f"shortlist:{leg_id}",
+                    "shortlist",
+                    scope="leg",
+                    leg=leg_id,
+                    inputs=leg_sweeps,
+                    outputs=[shortlist],
+                    command=["getaway", "shortlist", "run", slug, "--leg", leg_id],
+                )
             )
-        )
-        onward_sweep = "legs/outbound/sweep-onward.json"
-        nodes.append(
-            _node(
-                "sweep:outbound:onward",
-                "sweep",
-                scope="leg",
-                leg="outbound",
-                inputs=[gw_shortlist],
-                outputs=[onward_sweep],
-                command=["getaway", "sweep", "run", slug, "outbound:onward"],
-                endpoint_source={"from": gw_shortlist, "field": "dest"},
+            shortlist_outputs.append(shortlist)
+            prior_shortlist = shortlist
+        if cash:
+            # Pairs carry the leg's endpoint_source verbatim; _gateway_dates resolves the gateways.
+            onward = f"legs/{leg_id}/onward.json"
+            bridge = f"legs/{leg_id}/bridge.json"
+            nodes.append(
+                _node(
+                    f"pairs:{leg_id}",
+                    "onward",
+                    scope="leg",
+                    leg=leg_id,
+                    inputs=([origin_shortlist] if origin_shortlist else []) + leg_sweeps,
+                    outputs=[onward],
+                    command=["getaway", "shortlist", "onward", slug, "--leg", leg_id],
+                    endpoint_source=endpoint_source,
+                )
             )
-        )
-        onward = "legs/outbound/onward.json"
-        nodes.append(
-            _node(
-                "onward",
-                "onward",
-                scope="leg",
-                leg="outbound",
-                inputs=[gw_shortlist, onward_sweep],
-                outputs=[onward],
-                command=["getaway", "shortlist", "onward", slug],
+            nodes.append(
+                _node(
+                    f"bridge:{leg_id}",
+                    "bridge",
+                    scope="leg",
+                    leg=leg_id,
+                    inputs=[onward],
+                    outputs=[bridge],
+                    command=["getaway", "bridge", slug, "--leg", leg_id],
+                )
             )
-        )
-        nodes.append(
-            _node(
-                "bridge",
-                "bridge",
-                scope="leg",
-                leg="outbound",
-                inputs=[onward],
-                outputs=["legs/outbound/bridge.json"],
-                command=["getaway", "bridge", slug],
-            )
-        )
+            cash_outputs += [onward, bridge]
 
-    if trip_type == "round_trip":
-        onward_dests = plan.get("hybrid", {}).get("onward_dests", [])
-        ret_sweep = "legs/return/sweep.json"
-        nodes.append(
-            _node(
-                "sweep:return",
-                "sweep",
-                scope="leg",
-                leg="return",
-                inputs=[ob_shortlist],
-                outputs=[ret_sweep],
-                command=["getaway", "sweep", "run", slug, "return"],
-                endpoint_source={
-                    "from": ob_shortlist,
-                    "field": "dest",
-                    "union": list(onward_dests),
-                    "override": plan.get("return"),
-                },
-            )
-        )
-        nodes.append(
-            _node(
-                "shortlist:return",
-                "shortlist",
-                scope="leg",
-                leg="return",
-                inputs=[ret_sweep],
-                outputs=["legs/return/shortlist.json"],
-                command=["getaway", "shortlist", "run", slug, "--leg", "return"],
-            )
+        prior_leg = leg
+
+    if not shortlist_outputs and not cash_outputs:
+        raise UsageError(
+            "plan has no retrieval-capable legs to expand: every leg is discover (inert until P3); "
+            "declare at least one award, cash, or either leg"
         )
 
-    shortlist_inputs = [ob_shortlist]
-    if trip_type == "round_trip":
-        shortlist_inputs.append("legs/return/shortlist.json")
-    if has_hybrid:
-        shortlist_inputs.append("legs/outbound/shortlist-gateway.json")
-
-    expand_inputs = list(shortlist_inputs)
-    if has_hybrid:
-        # Optional cash-hybrid reads: an absent/failed bridge hashes as absent (never blocks
-        # directs) and re-runs expand once priced.
-        expand_inputs += ["legs/outbound/onward.json", "legs/outbound/bridge.json"]
-
+    # Optional cash reads: an absent/failed onward or bridge hashes as absent (never blocks
+    # award directs) and re-runs expand once priced.
+    expand_inputs = [*shortlist_outputs, *cash_outputs]
     nodes.append(
         _node(
             "expand",
@@ -1059,7 +1353,7 @@ def compile_graph(slug: str) -> dict:
             "rank",
             "rank",
             scope="journey",
-            inputs=[*shortlist_inputs, "expand.json", "assess.json", "enhance-verify.json"],
+            inputs=[*shortlist_outputs, "expand.json", "assess.json", "enhance-verify.json"],
             outputs=["rank.json"],
             command=["getaway", "rank", slug],
         )
@@ -1096,10 +1390,10 @@ def compile_graph(slug: str) -> dict:
 
     return {
         "slug": slug,
-        "trip_type": trip_type,
+        "trip_type": _shape_label(plan),
         "lodging": has_lodging,
         "requires": ["rooms_session"] if has_stays else [],
-        "quota_budget": _quota_budget(nodes),
+        "quota_budget": _quota_budget(nodes, leg_order),
         "nodes": nodes,
     }
 

@@ -1,19 +1,22 @@
 """Journey composition — the expand-node executor (``getaway expand run <slug>``).
 
-Reads the outbound (and, on round trips, return) leg shortlists, expands each candidate's
-concrete ``/trips/{id}`` itinerary (cache-first; a miss spends seats.aero quota through
-:class:`SeatsClient`), pairs outbound with return legs into whole journeys, and — for each —
-consumes :func:`fit.journey_fit` for fit facts and mandatory preference misses, then computes
-per-program cost vectors and journey-level seat sufficiency. A journey with a *known*
-insufficient leg gates out (seat sufficiency is judged on the live-expanded row, never the
-cached ``/search`` teaser); ``unknown`` stays visible with a verification warning. Outbounds
-with no bookable return surface as a separate lead class, never as degenerate journeys.
+Reads each leg intent's candidate pool by leg id — award legs from ``legs/<id>/shortlist.json``,
+cash legs from ``legs/<id>/bridge.json`` quotes, an either leg from both — then walks the intents
+in order building candidate chains where each candidate departs the prior candidate's dest (or the
+intent's explicit override origins). Two-leg plans compose exhaustively (bounded by shortlist
+budgets, byte-identical to HEAD's pairing loop); a plan of three or more legs cheap-ranks its chains
+on ``(miles, cash cents)`` and keeps the top :data:`COMPOSE_BEAM_WIDTH` **before** any ``/trips``
+expansion spends quota, disclosing the cut count in ``expand.json`` provenance. Only surviving
+chains expand their award legs (cache-first; a miss spends quota through :class:`SeatsClient`).
 
-Hybrid journeys are composed here too, in the same journeys list — never a separate class. A
-hybrid outbound side is a gateway award leg plus an onward leg typed ``award`` or ``cash`` (a
-priced bridge from ``bridge.json``); the effective destination is the last pre-return leg. Its
-onward.json + bridge.json reads are optional: an absent or failed bridge yields zero cash
-hybrids without blocking direct journeys.
+Continuity refines with :func:`_structural_ok` on the expanded legs: a same-airport boundary
+compares full local timestamps with the preference min-connection floor; a stay-marked boundary
+bounds the gap to the declared nights; a cross-airport boundary compares dates only (seats.aero
+clocks are naive local wall times — never do cross-airport clock math). Each surviving chain draws
+fit facts and mandatory preference misses from :func:`fit.journey_fit`, then per-program cost
+vectors and journey-level seat sufficiency. A journey with a *known* insufficient leg gates out;
+``unknown`` stays visible with a verification warning. Round-trip outbounds with no bookable return
+surface as a separate lead class, never as degenerate journeys.
 
 Pairing happens here, before ranking. Composition is deterministic CLI code — no agent prompts.
 """
@@ -27,13 +30,13 @@ import click
 
 from getaway import fit, prefs, trips
 from getaway.constants import (
-    CABIN_PREFIX,
+    COMPOSE_BEAM_WIDTH,
     DEFAULT_QUOTA_FLOOR,
     EXIT_AUTH,
     EXIT_NEGATIVE,
     NODE_TTL_HOURS,
 )
-from getaway.paths import cache_db, emit, map_errors, utcnow
+from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
 from getaway.seats import AuthError, SeatsClient, itinerary_has_cabin
 from getaway.store import NoData, QuotaFloorError, connect
 
@@ -42,19 +45,17 @@ Detail = dict[str, Any]
 
 _DETAIL_TTL = dt.timedelta(hours=NODE_TTL_HOURS["expand"])
 _SWEEP_TTL_HOURS = NODE_TTL_HOURS["sweep"]
-_DEFAULT_MAX_HYBRIDS = 3
 
 
-def _shortlist(slug: str, name: str) -> dict | None:
+def _artifact(slug: str, name: str) -> dict | None:
     if name in trips.artifact_list(slug):
         return json.loads(trips.artifact_read(slug, name))
     return None
 
 
 def _sweep_provenance(slug: str, name: str) -> dict | None:
-    if name in trips.artifact_list(slug):
-        return json.loads(trips.artifact_read(slug, name))["provenance"]
-    return None
+    doc = _artifact(slug, name)
+    return doc["provenance"] if doc is not None else None
 
 
 def _detail_matches_cabin(detail: Detail, letter: str) -> bool:
@@ -160,14 +161,33 @@ def _endpoints(detail: Detail) -> tuple[str, str, str, str]:
     return segs[0]["origin"], segs[-1]["dest"], segs[0]["departs_local"], segs[-1]["arrives_local"]
 
 
-def _leg_airports(leg: dict) -> tuple[str, str]:
+def _leg_bounds(leg: dict) -> tuple[str, str, str, str]:
+    """(origin, dest, departs_local, arrives_local) of a typed leg, cash or award."""
     if leg.get("mode") == "cash":
-        return leg["origin"], leg["dest"]
-    origin, dest, _, _ = _endpoints(leg["detail"])
+        cash = leg["cash"]
+        return leg["origin"], leg["dest"], cash["departs_local"], cash["arrives_local"]
+    return _endpoints(leg["detail"])
+
+
+def _leg_airports(leg: dict) -> tuple[str, str]:
+    origin, dest, _, _ = _leg_bounds(leg)
     return origin, dest
 
 
-def _transit_points(legs: list[dict]) -> list[str]:
+def _is_return_intent(intent: dict) -> bool:
+    """A homeward intent — the last-position ``$origins``-directed leg (doc 49100ad). Structural,
+    never a role-string test; used only for veto exemption, not the fit-side gate."""
+    return intent.get("dests") == trips.ORIGINS_MARKER
+
+
+def _transit_points(legs: list[dict], intents: list[dict]) -> list[str]:
+    """Airports the journey passes *through* — subject to ``avoid_transit``.
+
+    Within a leg: award segment self-transfers and priced cash-hop connections. Between two legs:
+    the arrival/departure airports of a no-stay waypoint boundary. A boundary is an endpoint (not
+    transit) when the prior leg marks a stop or the next leg flies home to ``$origins`` — the
+    turnaround destination, governed by the destination veto, never ``avoid_transit``.
+    """
     points: list[str] = []
     for leg in legs:
         if leg.get("mode") == "cash":
@@ -176,37 +196,49 @@ def _transit_points(legs: list[dict]) -> list[str]:
             segments = leg["detail"]["segments"]
             for arriving, departing in zip(segments, segments[1:]):
                 points.extend((arriving["dest"], departing["origin"]))
-    for arriving, departing in zip(legs, legs[1:]):
-        if departing["role"] == "return":
-            continue
-        _, arrival_airport = _leg_airports(arriving)
-        departure_airport, _ = _leg_airports(departing)
+    for i in range(len(legs) - 1):
+        if "stay_nights" in intents[i] or _is_return_intent(intents[i + 1]):
+            continue  # a stop, or the homeward turnaround — an endpoint, not a transit
+        _, arrival_airport = _leg_airports(legs[i])
+        departure_airport, _ = _leg_airports(legs[i + 1])
         points.extend((arrival_airport, departure_airport))
     return points
 
 
-def _side_endpoints(side: list[dict]) -> tuple[str, str, str, str]:
-    """(origin, effective_dest, first_departure, last_arrival) of an outbound side.
+def _structural_ok(prior: dict, nxt: dict, prior_intent: dict, min_connection: int) -> bool:
+    """Does ``nxt`` continue physically from ``prior``?
 
-    Origin and departure come from the first (award gateway) leg; the destination and arrival
-    come from the last pre-return leg (onward_dest) — a cash onward leg's real arrival clock is
-    used the same as an award leg's.
+    A stay-marked boundary bounds the gap to ``[min .. max]`` nights (date arithmetic — safe across
+    timezones). A same-airport boundary compares full local timestamps with the connection floor
+    (one airport, one clock). A cross-airport surface hop of unknown timing compares dates only —
+    seats.aero timestamps are naive local wall clocks; never subtract them across airports.
     """
-    first, last = side[0], side[-1]
-    origin, _, dep, _ = _endpoints(first["detail"])
-    if last.get("mode") == "cash":
-        return origin, last["dest"], dep, last["cash"]["arrives_local"]
-    _, dest, _, arr = _endpoints(last["detail"])
-    return origin, dest, dep, arr
+    _, prior_dest, _, prior_arr = _leg_bounds(prior)
+    nxt_origin, _, nxt_dep, _ = _leg_bounds(nxt)
+    stay = prior_intent.get("stay_nights")
+    if stay is not None:
+        nights = (dt.date.fromisoformat(nxt_dep[:10]) - dt.date.fromisoformat(prior_arr[:10])).days
+        return stay["min"] <= nights <= stay["max"]
+    if nxt_origin == prior_dest:
+        gap = dt.datetime.fromisoformat(nxt_dep) - dt.datetime.fromisoformat(prior_arr)
+        return gap >= dt.timedelta(minutes=min_connection)
+    return dt.date.fromisoformat(nxt_dep[:10]) >= dt.date.fromisoformat(prior_arr[:10])
 
 
-def _structural_ok(side: list[dict], ret: dict, same_airport: bool) -> bool:
-    _, _, ret_dep, _ = _endpoints(ret["detail"])
-    _, _, _, last_arr = _side_endpoints(side)
-    if same_airport:  # one airport, one timezone — a full timestamp compare is safe
-        return dt.datetime.fromisoformat(ret_dep) > dt.datetime.fromisoformat(last_arr)
-    # open jaw: a surface hop of unknown timing sits between the legs — compare dates only
-    return dt.date.fromisoformat(ret_dep[:10]) >= dt.date.fromisoformat(last_arr[:10])
+def _chain_continuous(legs: list[dict], intents: list[dict], min_connection: int) -> bool:
+    return all(
+        _structural_ok(legs[i], legs[i + 1], intents[i], min_connection)
+        for i in range(len(legs) - 1)
+    )
+
+
+def _journey_shape(legs: list[dict], intents: list[dict]) -> str:
+    """A derived shape label, e.g. ``award→cash→award · 2 stays`` — presentation only."""
+    modes = "→".join(leg["mode"] for leg in legs)
+    stays = sum("stay_nights" in intent for intent in intents)
+    if stays:
+        return f"{modes} · {stays} stay{'s' if stays != 1 else ''}"
+    return modes
 
 
 def _cost(fit_facts: dict, legs: list[dict]) -> dict:
@@ -247,89 +279,141 @@ def _seat_rollup(fit_facts: dict) -> str:
     return "sufficient"
 
 
-def _compose(
-    trip: dict,
-    prefs_doc: dict,
-    outbound_sides: list[list[dict]],
-    return_legs: list[dict],
-    now: Callable[[], dt.datetime],
-) -> tuple[list[dict], list[str], list[dict]]:
-    """Pair expanded outbound sides into journeys. Returns ``(journeys, paired_ids, gated)``.
-
-    An outbound side is one or more pre-return legs — a direct outbound, or a gateway award plus
-    a typed onward leg for a hybrid. One-way: each side is a journey. Round trip / open jaw: each
-    side pairs with every structurally valid return sharing its effective destination (or a
-    declared override origin). A journey whose live rows show a known-insufficient leg gates out;
-    ``unknown`` stays visible. ``paired_ids`` tracks direct outbound ids only, for lead surfacing.
-    """
-    plan = trip["plan"]
-    one_way = trips._trip_type(plan) == "one_way"
-    override = plan.get("return") or {}
-    override_origins = set(override.get("origins") or [])
-    avoid_transit = set(prefs_doc["avoid_transit"])
-
-    journeys: list[dict] = []
-    gated: list[dict] = []
-    paired: set[str] = set()
-
-    for side in outbound_sides:
-        _, side_dest, _, _ = _side_endpoints(side)
-        candidate_legs: list[list[dict]] = []
-        if one_way:
-            candidate_legs.append(list(side))
-        else:
-            for ret in return_legs:
-                ret_origin, _, _, _ = _endpoints(ret["detail"])
-                same_airport = ret_origin == side_dest
-                if not (same_airport or ret_origin in override_origins):
-                    continue
-                if not _structural_ok(side, ret, same_airport):
-                    continue
-                candidate_legs.append([*side, ret])
-        for legs in candidate_legs:
-            jid = _journey_id(legs)
-            avoided = next((code for code in _transit_points(legs) if code in avoid_transit), None)
-            if avoided is not None:
-                gated.append({"journey_id": jid, "reason": f"transits {avoided}, which you avoid"})
-                continue
-            fitted = fit.journey_fit(trip, prefs_doc, legs, now)
-            sufficiency = _seat_rollup(fitted["fit_facts"])
-            if sufficiency == "insufficient":
-                gated.append(
-                    {"journey_id": jid, "reason": "a leg's live seats are below the party"}
-                )
-                continue
-            if len(side) == 1:  # direct outbound — hybrid gateways never surface as leads
-                paired.add(side[0]["id"])
-            journeys.append(
+def _leg_pool(slug: str, leg: dict, shortlist: dict | None) -> list[dict]:
+    """One intent's candidate pool: award candidates from its shortlist, cash candidates from its
+    priced bridge quotes, an either leg's union of both. Each candidate carries the airport/date it
+    chains on and its cheap-rank cost (miles for award, cents for cash)."""
+    pool: list[dict] = []
+    if leg["mode"] in ("award", "either") and shortlist is not None:
+        for cand in shortlist["candidates"]:
+            pool.append(
                 {
-                    "id": jid,
-                    "kind": _journey_kind(legs, one_way),
-                    "legs": legs,
-                    "fit_facts": fitted["fit_facts"],
-                    "preference_misses": fitted["preference_misses"],
-                    "cost": _cost(fitted["fit_facts"], legs),
-                    "seat_sufficiency": sufficiency,
+                    "kind": "award",
+                    "origin": cand["origin"],
+                    "dest": cand["dest"],
+                    "date": cand["date"],
+                    "cand": cand,
+                    "miles": cand["mileage"],
+                    "cash_cents": 0,
                 }
             )
-    return journeys, sorted(paired), gated
+    if leg["mode"] in ("cash", "either"):
+        bridge = _artifact(slug, f"legs/{leg['id']}/bridge.json")
+        for quote in bridge["quotes"] if bridge is not None else []:
+            pool.append(
+                {
+                    "kind": "cash",
+                    "origin": quote["gateway"],
+                    "dest": quote["onward_dest"],
+                    "date": quote["date"],
+                    "quote": quote,
+                    "miles": 0,
+                    "cash_cents": round(quote["price"] * 100),
+                }
+            )
+    return pool
 
 
-def _journey_kind(legs: list[dict], one_way: bool) -> str:
-    onward = next((leg for leg in legs if leg["role"] == "onward"), None)
-    if onward is not None:
-        return "gateway_cash" if onward.get("mode") == "cash" else "gateway_award"
-    ret = next((leg for leg in legs if leg["role"] == "return"), None)
-    if one_way or ret is None:
-        return "one_way"
-    _, ob_dest, _, _ = _endpoints(legs[0]["detail"])
-    ret_origin, _, _, _ = _endpoints(ret["detail"])
-    return "round_trip" if ret_origin == ob_dest else "open_jaw"
+def _build_chains(legs: list[dict], pools: list[list[dict]]) -> list[list[dict]]:
+    """Every candidate chain over the intents in order: a candidate extends a partial chain iff it
+    departs the prior candidate's dest — or, when the intent declares explicit override origins, one
+    of those (an open jaw departs where the chain didn't land). Airport anchoring only; timing is a
+    :func:`_structural_ok` refinement on the expanded clocks. Shortlist rows carry a departure date
+    but no arrival, so a departure-date prefilter would wrongly drop a dateline-crossing pairing
+    whose arrival precedes its own departure date — the topology superset never gates on time."""
+    chains: list[list[dict]] = [[cand] for cand in pools[0]]
+    for i in range(1, len(legs)):
+        override = legs[i].get("origins")  # explicit origins REPLACE the chained anchor
+        extended: list[list[dict]] = []
+        for chain in chains:
+            prior = chain[-1]
+            for cand in pools[i]:
+                anchored = (
+                    cand["origin"] in override if override else cand["origin"] == prior["dest"]
+                )
+                if anchored:
+                    extended.append([*chain, cand])
+        chains = extended
+    chains.sort(key=lambda ch: (sum(c["miles"] for c in ch), sum(c["cash_cents"] for c in ch)))
+    return chains
+
+
+def _compose_chains(
+    trip: dict,
+    prefs_doc: dict,
+    legs: list[dict],
+    chains: list[list[dict]],
+    expander: _Expander,
+    avoid_transit: set[str],
+    min_connection: int,
+    leg_states: dict,
+    now: Callable[[], dt.datetime],
+) -> tuple[list[dict], list[dict], set[str], bool]:
+    """Expand beam-survivor chains lazily, refine continuity, gate transit/seats, emit journeys.
+
+    Returns ``(journeys, gated, composed_heads, quota_stopped)`` where ``composed_heads`` is the set
+    of first-leg award candidate ids that reached a journey — used to surface the rest as leads.
+    """
+    journeys: list[dict] = []
+    gated: list[dict] = []
+    composed_heads: set[str] = set()
+    for chain in chains:
+        legs_typed: list[dict] = []
+        quota_stopped = False
+        failed = False
+        for intent, cand in zip(legs, chain):
+            role = intent["id"]
+            if cand["kind"] == "cash":
+                legs_typed.append(_cash_leg(role, cand["quote"], cand["date"]))
+                continue
+            row = cand["cand"]
+            key = f"{role}:{row['id']}:{row['cabin']}"
+            try:
+                detail, fetched_at = expander.expand(row["id"], row["cabin"])
+            except QuotaFloorError:
+                leg_states[key] = {"state": "not_run", "reason": "quota_floor"}
+                quota_stopped = True
+                break
+            if detail is None:
+                leg_states[key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
+                failed = True
+                break
+            leg_states[key] = {"state": "expanded"}
+            legs_typed.append(_leg(role, row, detail, fetched_at))
+        if quota_stopped:
+            return journeys, gated, composed_heads, True
+        if failed or not _chain_continuous(legs_typed, legs, min_connection):
+            continue
+        jid = _journey_id(legs_typed)
+        avoided = next(
+            (code for code in _transit_points(legs_typed, legs) if code in avoid_transit), None
+        )
+        if avoided is not None:
+            gated.append({"journey_id": jid, "reason": f"transits {avoided}, which you avoid"})
+            continue
+        fitted = fit.journey_fit(trip, prefs_doc, legs_typed, now)
+        sufficiency = _seat_rollup(fitted["fit_facts"])
+        if sufficiency == "insufficient":
+            gated.append({"journey_id": jid, "reason": "a leg's live seats are below the party"})
+            continue
+        if chain[0]["kind"] == "award":
+            composed_heads.add(chain[0]["cand"]["id"])
+        journeys.append(
+            {
+                "id": jid,
+                "kind": _journey_shape(legs_typed, legs),
+                "legs": legs_typed,
+                "fit_facts": fitted["fit_facts"],
+                "preference_misses": fitted["preference_misses"],
+                "cost": _cost(fitted["fit_facts"], legs_typed),
+                "seat_sufficiency": sufficiency,
+            }
+        )
+    return journeys, gated, composed_heads, False
 
 
 def _unpaired_leads(
     outbound_legs: list[dict],
-    paired: set[str],
     return_states: dict,
     return_prov: dict | None,
     now: dt.datetime,
@@ -340,7 +424,7 @@ def _unpaired_leads(
     leads: list[dict] = []
     seen: set[str] = set()
     for ob in outbound_legs:
-        if ob["id"] in paired or ob["id"] in seen:
+        if ob["id"] in seen:
             continue
         seen.add(ob["id"])
         _, dest, _, _ = _endpoints(ob["detail"])
@@ -366,112 +450,44 @@ def _unpaired_leads(
     return leads
 
 
-def _expand_leg_group(
-    expander: _Expander, candidates: list[Row], role: str, leg_states: dict
+def _lead_journeys(
+    slug: str,
+    first_pool: list[dict],
+    composed_heads: set[str],
+    expander: _Expander,
+    leg_states: dict,
+    first_leg_id: str,
+    return_leg_id: str,
+    return_states: dict,
+    now: Callable[[], dt.datetime],
 ) -> tuple[list[dict], bool]:
-    legs: list[dict] = []
+    """First-leg award candidates that reached no journey, expanded into leads with the downstream
+    leg's search state — the ``outbound with no bookable return`` class of a round trip.
+
+    Returns ``(leads, quota_stopped)``. A quota floor crossed here is a quota stop exactly like the
+    main expansion path: the breaking candidate records ``not_run``/``quota_floor`` and the caller
+    leaves the phase unstamped and raises — the lead expansion is a live-fetch leg, not a footnote.
+    """
+    outbound_legs: list[dict] = []
     quota_stopped = False
-    for i, cand in enumerate(candidates):
+    for cand in first_pool:
+        if cand["kind"] != "award" or cand["cand"]["id"] in composed_heads:
+            continue
+        row = cand["cand"]
+        key = f"{first_leg_id}:{row['id']}:{row['cabin']}"
         try:
-            detail, fetched_at = expander.expand(cand["id"], cand["cabin"])
+            detail, fetched_at = expander.expand(row["id"], row["cabin"])
         except QuotaFloorError:
+            leg_states[key] = {"state": "not_run", "reason": "quota_floor"}
             quota_stopped = True
-            for rest in candidates[i:]:
-                leg_states[f"{role}:{rest['id']}:{rest['cabin']}"] = {
-                    "state": "not_run",
-                    "reason": "quota_floor",
-                }
             break
-        key = f"{role}:{cand['id']}:{cand['cabin']}"
         if detail is None:
             leg_states[key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
             continue
-        leg_states[key] = {"state": "expanded"}
-        legs.append(_leg(role, cand, detail, fetched_at))
-    return legs, quota_stopped
-
-
-def _hybrid_specs(slug: str, gw_doc: dict, max_hybrids: int) -> list[dict]:
-    """Cheap-ranked hybrid outbound-side specs, capped before any detail is expanded.
-
-    Reads onward.json (minima + bridge_pairs) and bridge.json (cash quotes) — both optional; an
-    absent or failed bridge yields zero cash hybrids. A two-award onward alternative only surfaces
-    where a priced cash bridge also exists for the pair (the cash quote is what it competes with).
-    """
-    onward_doc = _shortlist(slug, "legs/outbound/onward.json")
-    if onward_doc is None:
-        return []
-    bridge_doc = _shortlist(slug, "legs/outbound/bridge.json") or {"quotes": []}
-    bridge_by_pair = {(q["gateway"], q["onward_dest"], q["date"]): q for q in bridge_doc["quotes"]}
-    minima_by_key = {
-        (m["gateway"], m["onward_dest"], m["date"], m["cabin"]): m for m in onward_doc["minima"]
-    }
-    gateway_by_dest: dict[str, Row] = {}
-    for cand in gw_doc["candidates"]:  # candidates are already ordered best-first
-        gateway_by_dest.setdefault(cand["dest"], cand)
-
-    specs: list[dict] = []
-    for pair in onward_doc["bridge_pairs"]:
-        gateway, dest, date = pair["gateway"], pair["onward_dest"], pair["date"]
-        award = gateway_by_dest.get(gateway)
-        cash = bridge_by_pair.get((gateway, dest, date))
-        if award is None or cash is None:
-            continue
-        specs.append(
-            {
-                "award": award,
-                "onward": {"mode": "cash", "quote": cash, "date": date},
-                "miles": award["mileage"],
-                "cash_cents": round(cash["price"] * 100),
-            }
-        )
-        onward_award = minima_by_key.get((gateway, dest, date, cash["cabin"]))
-        if onward_award is not None:
-            specs.append(
-                {
-                    "award": award,
-                    "onward": {"mode": "award", "cand": onward_award, "date": date},
-                    "miles": award["mileage"] + onward_award["mileage"],
-                    "cash_cents": 0,
-                }
-            )
-    specs.sort(key=lambda s: (s["miles"], s["cash_cents"]))
-    return specs[:max_hybrids]
-
-
-def _expand_hybrid_sides(
-    expander: _Expander, specs: list[dict], leg_states: dict
-) -> tuple[list[list[dict]], bool]:
-    sides: list[list[dict]] = []
-    for spec in specs:
-        award = spec["award"]
-        try:
-            gw_detail, gw_fetched = expander.expand(award["id"], award["cabin"])
-        except QuotaFloorError:
-            return sides, True
-        gw_key = f"gateway:{award['id']}:{award['cabin']}"
-        if gw_detail is None:
-            leg_states[gw_key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
-            continue
-        leg_states[gw_key] = {"state": "expanded"}
-        legs = [_leg("outbound", award, gw_detail, gw_fetched)]
-        onward = spec["onward"]
-        if onward["mode"] == "cash":
-            legs.append(_cash_leg("onward", onward["quote"], onward["date"]))
-        else:
-            cand = onward["cand"]
-            try:
-                on_detail, on_fetched = expander.expand(cand["id"], CABIN_PREFIX[cand["cabin"]])
-            except QuotaFloorError:
-                return sides, True
-            on_key = f"onward:{cand['id']}:{cand['cabin']}"
-            if on_detail is None:
-                leg_states[on_key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
-                continue
-            leg_states[on_key] = {"state": "expanded"}
-            legs.append(_leg("onward", cand, on_detail, on_fetched))
-        sides.append(legs)
-    return sides, False
+        leg_states.setdefault(key, {"state": "expanded"})
+        outbound_legs.append(_leg(first_leg_id, row, detail, fetched_at))
+    return_prov = _sweep_provenance(slug, f"legs/{return_leg_id}/sweep.json")
+    return _unpaired_leads(outbound_legs, return_states, return_prov, now()), quota_stopped
 
 
 def run(
@@ -482,56 +498,72 @@ def run(
     trip = trips.show(slug)
     prefs_doc = prefs.show()
     plan = trip["plan"]
-    one_way = trips._trip_type(plan) == "one_way"
+    legs = plan.get("legs")
+    if not legs:
+        raise UsageError("plan.legs must be a non-empty list before compiling")
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "expand")
+    min_connection = prefs_doc["layovers"]["min_connection_minutes"]
+    avoid_transit = set(prefs_doc["avoid_transit"])
 
-    ob_doc = _shortlist(slug, "legs/outbound/shortlist.json")
-    ret_doc = None if one_way else _shortlist(slug, "legs/return/shortlist.json")
-    has_gateway = bool(plan.get("hybrid"))
-    gw_doc = _shortlist(slug, "legs/outbound/shortlist-gateway.json") if has_gateway else None
+    shortlists = {
+        leg["id"]: _artifact(slug, f"legs/{leg['id']}/shortlist.json")
+        for leg in legs
+        if leg["mode"] in ("award", "either")
+    }
+    pools = [_leg_pool(slug, leg, shortlists.get(leg["id"])) for leg in legs]
 
     store = connect(cache_db(), now=now)
     expander = _Expander(store, quota_floor, now())
     leg_states: dict = {}
 
-    outbound_legs, quota_stopped = _expand_leg_group(
-        expander, ob_doc["candidates"] if ob_doc else [], "outbound", leg_states
-    )
-    return_legs: list[dict] = []
-    if ret_doc is not None and not quota_stopped:
-        return_legs, quota_stopped = _expand_leg_group(
-            expander, ret_doc["candidates"], "return", leg_states
-        )
-    outbound_sides: list[list[dict]] = [[leg] for leg in outbound_legs]
-    if gw_doc is not None and not quota_stopped:
-        max_hybrids = plan["hybrid"].get("max_hybrids", _DEFAULT_MAX_HYBRIDS)
-        specs = _hybrid_specs(slug, gw_doc, max_hybrids)
-        hybrid_sides, quota_stopped = _expand_hybrid_sides(expander, specs, leg_states)
-        outbound_sides.extend(hybrid_sides)
-
-    journeys, paired, gated = _compose(trip, prefs_doc, outbound_sides, return_legs, now)
-
-    outbound_states = ob_doc["search_states"] if ob_doc else {}
-    return_states = ret_doc["search_states"] if ret_doc else {}
-    unpaired = (
-        []
-        if one_way
-        else _unpaired_leads(
-            outbound_legs,
-            set(paired),
-            return_states,
-            _sweep_provenance(slug, "legs/return/sweep.json"),
-            now(),
-        )
+    # Two-leg plans compose exhaustively (HEAD-identical); ≥3-leg plans beam and disclose the cut.
+    built = _build_chains(legs, pools)
+    beam_cut = 0
+    if len(legs) >= 3:
+        chains = built[:COMPOSE_BEAM_WIDTH]
+        beam_cut = len(built) - len(chains)
+    else:
+        chains = built
+    journeys, gated, composed_heads, quota_stopped = _compose_chains(
+        trip, prefs_doc, legs, chains, expander, avoid_transit, min_connection, leg_states, now
     )
 
+    # Leads are the round-trip's unpaired outbounds only; beam-cut ≥3-leg chains are truncation, not
+    # leads (partial-chain leads land in P3).
+    unpaired: list[dict] = []
+    round_trip = (
+        len(legs) == 2 and _is_return_intent(legs[-1]) and legs[0]["mode"] in ("award", "either")
+    )
+    if round_trip and not quota_stopped:
+        return_sl = shortlists.get(legs[1]["id"])
+        unpaired, lead_quota_stopped = _lead_journeys(
+            slug,
+            pools[0],
+            composed_heads,
+            expander,
+            leg_states,
+            legs[0]["id"],
+            legs[1]["id"],
+            return_sl["search_states"] if return_sl else {},
+            now,
+        )
+        quota_stopped = quota_stopped or lead_quota_stopped
+
+    search_states = {
+        leg["id"]: (shortlists[leg["id"]] or {}).get("search_states", {})
+        for leg in legs
+        if leg["mode"] in ("award", "either")
+    }
+    provenance = {"fetched_at": now().isoformat(), "quota_stopped": quota_stopped}
+    if beam_cut:
+        provenance["truncation"] = {"beam_cut": beam_cut}
     doc = {
         "journeys": journeys,
         "unpaired_outbounds": unpaired,
         "gated": gated,
-        "search_states": {"outbound": outbound_states, "return": return_states},
+        "search_states": search_states,
         "leg_states": leg_states,
-        "provenance": {"fetched_at": now().isoformat(), "quota_stopped": quota_stopped},
+        "provenance": provenance,
     }
     trips.artifact_write(slug, "expand.json", json.dumps(doc, separators=(",", ":")))
     if quota_stopped:
@@ -539,7 +571,7 @@ def run(
         # exit 1 so the walker reads a quota stop, distinct from a data failure.
         raise QuotaFloorError(
             f"seats.aero quota floor {quota_floor} reached while expanding {slug!r}: "
-            "wrote partial journeys, some legs not_run{quota_floor}"
+            "wrote partial journeys, some legs not_run"
         )
     trips.phase_done(slug, "expand", inputs_fp=inputs_fp, now=now)
     return {

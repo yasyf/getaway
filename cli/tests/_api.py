@@ -123,13 +123,17 @@ def expand_doc(
     gated: list[dict] | None = None,
     search_states: dict | None = None,
     leg_states: dict | None = None,
+    truncation: dict | None = None,
 ) -> dict:
     """A composed-journeys artifact matching the expand write-boundary schema."""
+    provenance = {"fetched_at": "2026-07-13T12:00:00+00:00", "quota_stopped": False}
+    if truncation is not None:
+        provenance["truncation"] = truncation
     return {
         "journeys": journeys or [],
         "unpaired_outbounds": unpaired_outbounds or [],
         "gated": gated or [],
         "search_states": search_states or {},
         "leg_states": leg_states or {},
-        "provenance": {"fetched_at": "2026-07-13T12:00:00+00:00", "quota_stopped": False},
+        "provenance": provenance,
     }

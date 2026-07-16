@@ -30,10 +30,10 @@ The CLI resolves the seats.aero Pro key itself: the `SEATS_AERO_API_KEY` environ
 | `prefs` | Durable preferences: `show`, `status`, `set` (JSON patch on stdin), `set-balance`, `set-status`, `instrument-add` (JSON on stdin)/`instrument-list`/`instrument-remove` |
 | `trip` | Per-trip memory: `new`, `set` (patch on stdin), `show`, `list`, `log`, `profile`, `resume`, `status`, `current`, `done`, `compile`/`explain` (the node graph), `phase-check`/`phase-done`, `artifact read`/`write`/`list`, `finalize` |
 | `search`, `availability`, `routes` | Raw seats.aero calls; `search` and `availability` ingest into the cache |
-| `sweep` | Leg sweeps derived from the plan: `sweep plan <slug>`, `sweep run <slug> <key>` — keys are `outbound:<label>` and `return` |
-| `shortlist` | Shortlist over a leg's sweep rows: `shortlist run <slug> --leg outbound\|return [--gateway]`, `shortlist onward <slug>` |
+| `sweep` | Leg sweeps derived from the plan: `sweep plan <slug>`, `sweep run <slug> <key>` — keys are `<leg-id>[:<label>]` (e.g. `outbound:asia`, `hop`, `return`) |
+| `shortlist` | Shortlist over a leg's sweep rows: `shortlist run <slug> --leg <leg-id>`, `shortlist onward <slug> --leg <leg-id>` |
 | `expand` | Journey composition: `expand run <slug>` (expand candidates, pair legs, write journeys), `expand detail <id> --cabin <c>` (one live trip) |
-| `bridge` | Cash-leg pricing through the hardened fli driver: `bridge <slug>` |
+| `bridge` | Cash-leg pricing through the hardened fli driver: `bridge <slug> --leg <leg-id>` |
 | `stays` | rooms.aero lodging: `stays intervals <slug>` (the per-journey worklist), `stays ingest <slug>` (normalized rows on stdin) |
 | `rank`, `afford`, `quality` | Lane-based rank over assess verdicts, transfer-first affordability, seat-quality classification |
 | `enhance` | Background verification primitives: `targets <slug> verify` (the enumerated worklist), `merge <slug> verify` (concurrency-safe result upsert, JSON array on stdin) |
@@ -46,7 +46,7 @@ Exit codes: 0 ok, 1 negative predicate (`prefs status`, `trip phase-check`) or a
 
 ## Trip memory
 
-Every trip owns a directory, `~/.getaway/trips/<slug>/`. `trip.json` is the canonical memory: the verbatim `ask`, `window`, `cabin`, `party`, `vibe`, `avoid_final_destinations`, the `plan` — `trip_type`, `origins`, `buckets`, the `preferences` and `constraints` branches, optional `hybrid`, `return`, and `lodging` — the `judgment` profile, and the `decisions` log. `~/.getaway/trips/current` is a plain-text slug pointer any agent reads without the CLI.
+Every trip owns a directory, `~/.getaway/trips/<slug>/`. `trip.json` is the canonical memory: the verbatim `ask`, `window`, `cabin`, `party`, `vibe`, `avoid_final_destinations`, the `plan` — its ordered `legs` (each an intent), the `preferences` and `constraints` branches, and optional `sources` and `lodging` — the `judgment` profile, and the `decisions` log. `~/.getaway/trips/current` is a plain-text slug pointer any agent reads without the CLI.
 
 Artifacts namespace by leg — `legs/outbound/sweep-<label>.json`, `legs/return/shortlist.json` — with the journey-scoped ones (`expand.json`, `assess.json`, `stays.json`, `finalists.json`) beside them, and `checkpoints.json` stamps every graph node with input fingerprints and a TTL, all CLI-computed. Editing the window or an avoid list invalidates exactly the dependent nodes; an untouched plan stays fresh. That is the resume guarantee: a killed or resumed session re-runs the same walker and every fresh node skips wholesale, spending zero quota.
 
@@ -82,15 +82,15 @@ Pro keys get 1,000 calls per day, resetting at midnight UTC. The floor enforces 
 
    ```bash
    $CLI trip set 2026-09-warm-beachy-week <<'EOF'
-   {"window": {"start": "2026-09-06", "end": "2026-09-20"},
+   {"window": {"start": "2026-09-06", "end": "2026-09-20", "trip_length_days": null},
     "cabin": "business", "party": 2, "vibe": ["warm", "beachy"],
     "avoid_final_destinations": ["ICN", "GMP", "NRT", "HND"],
-    "plan": {"trip_type": "round_trip",
-             "origins": ["WST"],
-             "buckets": [{"name": "asia-beach", "dests": ["ASA"]},
-                         {"name": "africa", "dests": ["QAF"]}],
-             "hybrid": {"gateways": ["NRT", "HND", "TPE"],
-                        "onward_dests": ["OKA", "USM"], "max_hybrids": 4},
+    "plan": {"legs": [{"id": "outbound", "origins": ["WST"],
+                       "buckets": [{"name": "asia-gateway",
+                                    "dests": ["NRT", "HND", "TPE"]}]},
+                      {"id": "beach-hop", "mode": "either",
+                       "dests": ["OKA", "USM"], "stay_nights": {"min": 6, "max": 8}},
+                      {"id": "return", "dests": "$origins"}],
              "preferences": {
                "cabin": {"value": "business", "priority": "primary"},
                "trip_length": {"value": {"days": 7, "basis": "elapsed_door_to_door"},

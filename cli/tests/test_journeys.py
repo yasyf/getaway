@@ -7,7 +7,7 @@ import pytest
 from _api import shortlist_doc, sweep_envelope
 
 from getaway import journeys, prefs, trips
-from getaway.paths import cache_db
+from getaway.paths import UsageError, cache_db
 from getaway.store import QuotaFloorError, connect
 
 FROZEN = dt.datetime(2026, 9, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -66,6 +66,7 @@ def cand(
     soft: bool = False,
     airlines: str = "UA",
     seats: int = 2,
+    mileage: int = 80000,
 ) -> dict:
     return {
         "id": cid,
@@ -74,7 +75,7 @@ def cand(
         "origin": origin,
         "dest": dest,
         "source": source,
-        "mileage": 80000,
+        "mileage": mileage,
         "seats": seats,
         "airlines": airlines,
         "direct": True,
@@ -116,15 +117,18 @@ def make_trip(plan: dict, *, party: int = 2, cabin: str = "business") -> str:
     return SLUG
 
 
+# A two-intent round trip and a single-intent one-way — the canonical shapes, pinned field-by-field
+# against HEAD's pairing output (ids, roles, costs, trip_length), not by a literal v2 byte capture.
 ROUND_TRIP = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+    ]
 }
 ONE_WAY = {
-    "trip_type": "one_way",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+    ]
 }
 
 
@@ -153,6 +157,13 @@ def home(getaway_home: Path) -> Path:
     return getaway_home
 
 
+def test_legless_plan_raises_typed_usage_error(home: Path) -> None:
+    prefs.init()
+    trips.new(SLUG, now=clock())
+    with pytest.raises(UsageError, match="plan.legs must be a non-empty list"):
+        journeys.run(SLUG, now=clock())
+
+
 def test_round_trip_pairs_outbound_and_return(home: Path) -> None:
     slug = make_trip(ROUND_TRIP)
     seed("OB", ob_detail("OB"))
@@ -164,7 +175,8 @@ def test_round_trip_pairs_outbound_and_return(home: Path) -> None:
     assert result == {"journeys": 1, "unpaired": 0, "gated": 0}
     doc = json.loads(trips.artifact_read(slug, "expand.json"))
     (journey,) = doc["journeys"]
-    assert journey["kind"] == "round_trip"
+    assert journey["kind"] == "award→award"
+    assert journey["id"] == "outbound:OB:J|return:RET:J"
     assert [leg["role"] for leg in journey["legs"]] == ["outbound", "return"]
     assert journey["seat_sufficiency"] == "sufficient"
     assert journey["fit_facts"]["trip_length_days"] == 7
@@ -179,7 +191,7 @@ def test_one_way_makes_a_journey_per_outbound_no_leads(home: Path) -> None:
         slug, [cand("OB1", "SFO", "NRT", "2026-09-05"), cand("OB2", "SFO", "NRT", "2026-09-07")]
     )
     doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
-    assert {j["kind"] for j in doc["journeys"]} == {"one_way"}
+    assert {j["kind"] for j in doc["journeys"]} == {"award"}
     assert len(doc["journeys"]) == 2
     assert doc["unpaired_outbounds"] == []
 
@@ -312,7 +324,7 @@ def test_one_way_outbound_failed_sweep_surfaces_not_as_no_space(home: Path) -> N
     write_shortlists(slug, [], ob_states=ob_states)
     doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
     assert doc["journeys"] == []
-    assert doc["search_states"] == {"outbound": ob_states, "return": {}}
+    assert doc["search_states"] == {"outbound": ob_states}  # per-leg-id; no return leg on a one-way
     assert doc["provenance"]["quota_stopped"] is False  # a failed sweep, not a quota halt
 
 
@@ -439,38 +451,47 @@ def test_quota_floor_stops_expand_unstamped(home: Path, monkeypatch: pytest.Monk
     doc = json.loads(trips.artifact_read(slug, "expand.json"))
     assert doc["provenance"]["quota_stopped"] is True
     assert doc["leg_states"]["outbound:OB:J"] == {"state": "not_run", "reason": "quota_floor"}
-    assert doc["search_states"] == {"outbound": {}, "return": {}}  # by-leg map even on a quota stop
+    assert doc["search_states"] == {"outbound": {}}  # by-leg map even on a quota stop
     assert (
         trips.phase_check(slug, "expand", now=clock())[1] is None
     )  # node left unstamped to resume
 
 
-# --- Hybrid composition (gateway award + cash bridge / two-award), unified into journeys ----------
+# --- Gateway hybrid (award gateway + either-mode onward hop), composed as an ordinary chain -------
 
-HYBRID_SPEC = {"gateways": ["NRT", "ICN"], "onward_dests": ["OKA", "KIX"], "max_hybrids": 4}
-HYBRID_ONE_WAY = {**ONE_WAY, "hybrid": HYBRID_SPEC}
-HYBRID_ROUND_TRIP = {**ROUND_TRIP, "hybrid": HYBRID_SPEC}
+HYBRID_ONE_WAY = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA", "KIX"], "mode": "either"},
+    ]
+}
+HYBRID_ROUND_TRIP = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA", "KIX"], "mode": "either"},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
 
 
 def gw_cand(cid: str, dest: str, mileage: int = 80000, *, seats: int = 2) -> dict:
-    c = cand(cid, "SFO", dest, "2026-09-05", source="aeroplan", cabin="J", seats=seats)
-    c["mileage"] = mileage
-    return c
+    return cand(
+        cid, "SFO", dest, "2026-09-05", source="aeroplan", cabin="J", seats=seats, mileage=mileage
+    )
 
 
-def onward_min(gateway: str, dest: str, mileage: int, *, date: str = "2026-09-08") -> dict:
-    return {
-        "gateway": gateway,
-        "onward_dest": dest,
-        "cabin": "economy",
-        "id": f"OW-{gateway}-{dest}",
-        "date": date,
-        "source": "aeroplan",
-        "mileage": mileage,
-        "seats": 2,
-        "airlines": "NH",
-        "direct": True,
-    }
+def onward_award(
+    cid: str,
+    gateway: str,
+    dest: str,
+    *,
+    mileage: int = 30000,
+    seats: int = 2,
+    date: str = "2026-09-08",
+) -> dict:
+    return cand(
+        cid, gateway, dest, date, source="aeroplan", cabin="Y", seats=seats, mileage=mileage
+    )
 
 
 def onward_detail(
@@ -510,30 +531,26 @@ def cash_quote(
     }
 
 
-def bpair(gateway: str, dest: str, date: str = "2026-09-08") -> dict:
-    return {"gateway": gateway, "onward_dest": dest, "date": date}
-
-
 def write_hybrid(
     slug: str,
     *,
     gateways: list[dict],
-    pairs: list[dict],
     quotes: list[dict],
-    minima: list[dict] | None = None,
+    onward_awards: list[dict] | None = None,
     with_bridge: bool = True,
 ) -> None:
-    trips.artifact_write(
-        slug, "legs/outbound/shortlist-gateway.json", json.dumps(shortlist_doc(gateways))
-    )
-    trips.artifact_write(
-        slug,
-        "legs/outbound/onward.json",
-        json.dumps({"minima": minima or [], "bridge_pairs": pairs}),
-    )
+    """The outbound leg's own shortlist carries the gateway award candidates; the onward leg's
+    shortlist carries its award options and its bridge carries the priced cash quotes."""
+    trips.artifact_write(slug, "legs/outbound/shortlist.json", json.dumps(shortlist_doc(gateways)))
+    if onward_awards is not None:
+        trips.artifact_write(
+            slug,
+            "legs/onward/shortlist.json",
+            json.dumps(shortlist_doc(onward_awards, leg="onward")),
+        )
     if with_bridge:
         trips.artifact_write(
-            slug, "legs/outbound/bridge.json", json.dumps({"quotes": quotes, "failures": []})
+            slug, "legs/onward/bridge.json", json.dumps({"quotes": quotes, "failures": []})
         )
 
 
@@ -545,16 +562,13 @@ def _run(slug: str) -> dict:
 def test_gateway_cash_hybrid_composes_typed_legs(home: Path) -> None:
     slug = make_trip(HYBRID_ONE_WAY)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    write_shortlists(slug, [])  # no direct outbound — isolate the hybrid
     write_hybrid(
-        slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[cash_quote("NRT", "OKA", 120.0)],
+        slug, gateways=[gw_cand("GW-NRT", "NRT")], quotes=[cash_quote("NRT", "OKA", 120.0)]
     )
     doc = _run(slug)
     (journey,) = doc["journeys"]
-    assert journey["kind"] == "gateway_cash"
+    assert journey["kind"] == "award→cash"
+    assert journey["id"] == "outbound:GW-NRT:J|onward:cash:NRT:OKA:2026-09-08:economy"
     assert [(leg["role"], leg["mode"]) for leg in journey["legs"]] == [
         ("outbound", "award"),
         ("onward", "cash"),
@@ -576,30 +590,20 @@ def test_gateway_cash_hybrid_composes_typed_legs(home: Path) -> None:
 
 def test_bridge_quotes_keyed_by_date_not_just_pair(home: Path) -> None:
     # Two priced bridge quotes for the same (gateway, onward_dest) on different dates must not
-    # collapse onto each other — each bridge_pair spec gets its own date's quote.
+    # collapse onto each other — each becomes its own composed cash hop.
     slug = make_trip(HYBRID_ONE_WAY)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    write_shortlists(slug, [])
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA", "2026-09-08"), bpair("NRT", "OKA", "2026-09-15")],
         quotes=[
             cash_quote(
-                "NRT",
-                "OKA",
-                120.0,
-                date="2026-09-08",
-                departs_local="2026-09-08T09:00",
-                arrives_local="2026-09-08T12:00",
+                "NRT", "OKA", 120.0, date="2026-09-08",
+                departs_local="2026-09-08T09:00", arrives_local="2026-09-08T12:00",
             ),
             cash_quote(
-                "NRT",
-                "OKA",
-                200.0,
-                date="2026-09-15",
-                departs_local="2026-09-15T09:00",
-                arrives_local="2026-09-15T12:00",
+                "NRT", "OKA", 200.0, date="2026-09-15",
+                departs_local="2026-09-15T09:00", arrives_local="2026-09-15T12:00",
             ),
         ],
     )
@@ -614,21 +618,21 @@ def test_bridge_quotes_keyed_by_date_not_just_pair(home: Path) -> None:
     assert onward_15["departs_local"] == "2026-09-15T09:00"
 
 
-def test_two_award_hybrid_composes_both_award_legs(home: Path) -> None:
+def test_either_onward_composes_both_award_and_cash_variants(home: Path) -> None:
+    # An either onward carries an award option (its own shortlist) and a cash option (its bridge);
+    # the chain-builder composes one journey for each, decoupled — no cash needed to surface award.
     slug = make_trip(HYBRID_ONE_WAY)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
     seed("OW-NRT-OKA", onward_detail("OW-NRT-OKA", "NRT", "OKA", mileage=30000))
-    write_shortlists(slug, [])
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT")],
-        minima=[onward_min("NRT", "OKA", 30000)],
-        pairs=[bpair("NRT", "OKA")],
+        onward_awards=[onward_award("OW-NRT-OKA", "NRT", "OKA", mileage=30000)],
         quotes=[cash_quote("NRT", "OKA", 120.0)],
     )
     doc = _run(slug)
-    assert {j["kind"] for j in doc["journeys"]} == {"gateway_cash", "gateway_award"}
-    two_award = next(j for j in doc["journeys"] if j["kind"] == "gateway_award")
+    assert {j["kind"] for j in doc["journeys"]} == {"award→cash", "award→award"}
+    two_award = next(j for j in doc["journeys"] if j["kind"] == "award→award")
     assert [(leg["role"], leg["mode"]) for leg in two_award["legs"]] == [
         ("outbound", "award"),
         ("onward", "award"),
@@ -637,63 +641,65 @@ def test_two_award_hybrid_composes_both_award_legs(home: Path) -> None:
     assert two_award["cost"]["cash"] == []
 
 
-def test_hybrid_pair_without_cash_quote_composes_nothing(home: Path) -> None:
-    # Inherited coupling: a pair with no priced bridge yields no hybrid, cash or two-award.
+def test_either_onward_award_survives_absent_bridge(home: Path) -> None:
+    # Decoupled from HEAD's coupling: an award onward composes even with no priced cash bridge.
     slug = make_trip(HYBRID_ONE_WAY)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
     seed("OW-NRT-OKA", onward_detail("OW-NRT-OKA", "NRT", "OKA"))
-    write_shortlists(slug, [])
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT")],
-        minima=[onward_min("NRT", "OKA", 30000)],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[],
-    )
-    assert _run(slug)["journeys"] == []
-
-
-def test_absent_bridge_yields_no_cash_hybrids_directs_survive(home: Path) -> None:
-    slug = make_trip(HYBRID_ONE_WAY)
-    seed("OB", ob_detail("OB", dest="NRT"))
-    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
-    write_hybrid(
-        slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
+        onward_awards=[onward_award("OW-NRT-OKA", "NRT", "OKA", mileage=30000)],
         quotes=[],
         with_bridge=False,  # bridge failed/absent
     )
     doc = _run(slug)
-    assert [j["kind"] for j in doc["journeys"]] == ["one_way"]  # direct survives, zero cash hybrids
+    assert [j["kind"] for j in doc["journeys"]] == ["award→award"]  # award onward survives, no cash
 
 
-def test_max_hybrids_caps_composition_cheapest_first(home: Path) -> None:
-    slug = make_trip({**HYBRID_ONE_WAY, "hybrid": {**HYBRID_SPEC, "max_hybrids": 1}})
+def test_beam_caps_three_leg_composition_cheapest_first_and_discloses_cut(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The beam bounds only ≥3-leg plans. Two full chains compose; width 1 keeps the cheaper one, the
+    # cut is disclosed as composition truncation in provenance, and no chain becomes a false lead.
+    monkeypatch.setattr(journeys, "COMPOSE_BEAM_WIDTH", 1)
+    slug = make_trip(HYBRID_ROUND_TRIP)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    seed("GW-ICN", ob_detail("GW-ICN", dest="ICN"))
-    write_shortlists(slug, [])
+    seed("GW-ICN", ob_detail("GW-ICN", dest="ICN", mileage=90000))
+    seed("RET-OKA", ret_detail("RET-OKA", origin="OKA"))
+    seed("RET-KIX", ret_detail("RET-KIX", origin="KIX"))
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(
+            shortlist_doc(
+                [
+                    cand("RET-OKA", "OKA", "SFO", "2026-09-12"),
+                    cand("RET-KIX", "KIX", "SFO", "2026-09-12"),
+                ],
+                leg="return",
+            )
+        ),
+    )
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT", 80000), gw_cand("GW-ICN", "ICN", 90000)],
-        pairs=[bpair("NRT", "OKA"), bpair("ICN", "KIX")],
         quotes=[cash_quote("NRT", "OKA", 120.0), cash_quote("ICN", "KIX", 150.0)],
     )
     doc = _run(slug)
     composed = [(j["kind"], j["legs"][0]["id"]) for j in doc["journeys"]]
-    assert composed == [("gateway_cash", "GW-NRT")]
+    assert composed == [("award→cash→award", "GW-NRT")]  # the cheapest chain survives the beam
+    assert doc["provenance"]["truncation"] == {"beam_cut": 1}  # the cut is disclosed, not hidden
+    assert doc["unpaired_outbounds"] == []  # a beam-cut ≥3-leg chain is truncation, never a lead
 
 
 def test_hybrid_gates_on_insufficient_award_gateway(home: Path) -> None:
     # The cash leg carries no seats row; sufficiency is judged on the award gateway alone.
     slug = make_trip(HYBRID_ONE_WAY, party=2)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", seats=1))  # below the party of 2
-    write_shortlists(slug, [])
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT", seats=1)],
-        pairs=[bpair("NRT", "OKA")],
         quotes=[cash_quote("NRT", "OKA", 120.0)],
     )
     doc = _run(slug)
@@ -705,60 +711,52 @@ def test_round_trip_hybrid_pairs_return_with_cash_onward(home: Path) -> None:
     slug = make_trip(HYBRID_ROUND_TRIP)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
     seed("RET-OKA", ret_detail("RET-OKA", origin="OKA"))
-    write_shortlists(slug, [], ret=[cand("RET-OKA", "OKA", "SFO", "2026-09-12")])
-    write_hybrid(
+    trips.artifact_write(
         slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[cash_quote("NRT", "OKA", 120.0)],
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET-OKA", "OKA", "SFO", "2026-09-12")], leg="return")),
+    )
+    write_hybrid(
+        slug, gateways=[gw_cand("GW-NRT", "NRT")], quotes=[cash_quote("NRT", "OKA", 120.0)]
     )
     doc = _run(slug)
     (journey,) = doc["journeys"]
-    assert journey["kind"] == "gateway_cash"
+    assert journey["kind"] == "award→cash→award"
     assert [leg["role"] for leg in journey["legs"]] == ["outbound", "onward", "return"]
     fit_facts = journey["fit_facts"]
     assert fit_facts["away_nights"] == 4  # cash arrival 09-08 -> return departure 09-12
     assert fit_facts["trip_length_days"] == 7  # 09-05 gateway departure -> 09-12 return arrival
 
 
+def _write_hybrid_round_trip_return(slug: str, ret_dep: str, ret_arr: str, ret_date: str) -> None:
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
+    seed("RET-OKA", ret_detail("RET-OKA", origin="OKA", dep=ret_dep, arr=ret_arr))
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET-OKA", "OKA", "SFO", ret_date)], leg="return")),
+    )
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
+    )
+
+
 def test_cash_onward_return_same_day_before_arrival_rejected(home: Path) -> None:
     # The return departs the same day as, but before, the cash leg's real arrival clock —
     # structurally impossible, so no journey composes.
     slug = make_trip(HYBRID_ROUND_TRIP)
-    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
-    seed(
-        "RET-OKA",
-        ret_detail("RET-OKA", origin="OKA", dep="2026-09-08T08:00", arr="2026-09-08T20:00"),
-    )
-    write_shortlists(slug, [], ret=[cand("RET-OKA", "OKA", "SFO", "2026-09-08")])
-    write_hybrid(
-        slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
-    )
-    doc = _run(slug)
-    assert doc["journeys"] == []
+    _write_hybrid_round_trip_return(slug, "2026-09-08T08:00", "2026-09-08T20:00", "2026-09-08")
+    assert _run(slug)["journeys"] == []
 
 
 def test_cash_onward_return_next_morning_accepted(home: Path) -> None:
     # The return departs the morning after the cash leg's real arrival clock — structurally fine.
     slug = make_trip(HYBRID_ROUND_TRIP)
-    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
-    seed(
-        "RET-OKA",
-        ret_detail("RET-OKA", origin="OKA", dep="2026-09-09T08:00", arr="2026-09-09T20:00"),
-    )
-    write_shortlists(slug, [], ret=[cand("RET-OKA", "OKA", "SFO", "2026-09-09")])
-    write_hybrid(
-        slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
-    )
-    doc = _run(slug)
-    (journey,) = doc["journeys"]
-    assert journey["kind"] == "gateway_cash"
+    _write_hybrid_round_trip_return(slug, "2026-09-09T08:00", "2026-09-09T20:00", "2026-09-09")
+    (journey,) = _run(slug)["journeys"]
+    assert journey["kind"] == "award→cash→award"
 
 
 @pytest.mark.parametrize(
@@ -804,12 +802,8 @@ def test_avoid_transit_gates_hybrid_boundary_with_named_reason(home: Path) -> No
     slug = make_trip(HYBRID_ONE_WAY)
     prefs.set_patch({"avoid_transit": ["NRT"]})
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    write_shortlists(slug, [])
     write_hybrid(
-        slug,
-        gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
-        quotes=[cash_quote("NRT", "OKA", 120.0)],
+        slug, gateways=[gw_cand("GW-NRT", "NRT")], quotes=[cash_quote("NRT", "OKA", 120.0)]
     )
 
     doc = _run(slug)
@@ -828,11 +822,9 @@ CASH_HOP_JID = "outbound:GW-NRT:J|onward:cash:NRT:OKA:2026-09-08:economy"
 
 def _write_cash_hop(slug: str, connections: list[str]) -> None:
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
-    write_shortlists(slug, [])
     write_hybrid(
         slug,
         gateways=[gw_cand("GW-NRT", "NRT")],
-        pairs=[bpair("NRT", "OKA")],
         quotes=[cash_quote("NRT", "OKA", 120.0, stops=len(connections), connections=connections)],
     )
 
@@ -915,3 +907,254 @@ def test_avoid_transit_does_not_gate_trip_endpoints(
 
     assert doc["gated"] == []
     assert [journey["id"] for journey in doc["journeys"]] == [expected_journey_id]
+
+
+# --- Multi-city chains and leading positioning legs (new leg-intent shapes) -----------------------
+
+MULTI_CITY = {
+    "legs": [
+        {
+            "id": "outbound", "origins": ["SFO"], "dests": ["NRT"],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {"id": "hop", "dests": ["BKK"], "stay_nights": {"min": 4, "max": 4}},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_multi_city_chain_composes_with_two_stay_boundaries(home: Path) -> None:
+    slug = make_trip(MULTI_CITY)
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-10T10:00", "2026-09-10T14:00")]))
+    seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-14T16:00", "2026-09-14T20:00")]))
+    trips.artifact_write(
+        slug, "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug, "legs/hop/shortlist.json",
+        json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-10")], leg="hop")),
+    )
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-14")], leg="return")),
+    )
+    (journey,) = _run(slug)["journeys"]
+    assert journey["kind"] == "award→award→award · 2 stays"
+    assert [leg["role"] for leg in journey["legs"]] == ["outbound", "hop", "return"]
+    assert journey["fit_facts"]["trip_length_days"] == 9  # 09-05 departure -> 09-14 arrival
+
+
+def test_multi_city_rejects_stay_violating_hop(home: Path) -> None:
+    # A hop that departs one night after arrival violates the declared 4-night stay — no chain.
+    slug = make_trip(MULTI_CITY)
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-07T10:00", "2026-09-07T14:00")]))  # +1n
+    seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-11T16:00", "2026-09-11T20:00")]))
+    trips.artifact_write(
+        slug, "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug, "legs/hop/shortlist.json",
+        json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-07")], leg="hop")),
+    )
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-11")], leg="return")),
+    )
+    assert _run(slug)["journeys"] == []
+
+
+POSITIONING = {
+    "legs": [
+        {"id": "positioning", "origins": ["SFO"], "dests": ["LAX"], "mode": "cash",
+         "optional": True, "role": "positioning"},
+        {"id": "onward", "dests": ["NRT"]},
+    ]
+}
+
+
+def test_positioning_cash_leg_composes_as_an_ordinary_chain_leg(home: Path) -> None:
+    slug = make_trip(POSITIONING)
+    seed("ONW", detail("ONW", [seg("LAX", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    trips.artifact_write(
+        slug, "legs/positioning/bridge.json",
+        json.dumps(
+            {
+                "quotes": [
+                    cash_quote(
+                        "SFO", "LAX", 90.0, date="2026-09-03",
+                        departs_local="2026-09-03T08:00", arrives_local="2026-09-03T11:00",
+                    )
+                ],
+                "failures": [],
+            }
+        ),
+    )
+    trips.artifact_write(
+        slug, "legs/onward/shortlist.json",
+        json.dumps(shortlist_doc([cand("ONW", "LAX", "NRT", "2026-09-05")], leg="onward")),
+    )
+    (journey,) = _run(slug)["journeys"]
+    assert journey["kind"] == "cash→award"
+    assert [(leg["role"], leg["mode"]) for leg in journey["legs"]] == [
+        ("positioning", "cash"),
+        ("onward", "award"),
+    ]
+    assert journey["fit_facts"]["trip_length_days"] is None  # no homeward leg, one-way shape
+    # The positioning cash leg contributes no cabin fact and no cabin miss.
+    positioning_fact = journey["fit_facts"]["legs"][0]
+    assert positioning_fact["mode"] == "cash"
+    assert "cabin" not in positioning_fact
+    assert all(m["code"] != "cabin" for m in journey["preference_misses"])
+    assert journey["cost"]["cash"][0]["amount_cents"] == 9000
+
+
+# --- degeneracy gate: two-leg exhaustive vs ≥3-leg beam, and dateline continuity -----------------
+
+
+def test_two_leg_round_trip_composes_exhaustively_ignoring_beam(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The beam bounds only ≥3-leg plans: a two-leg round trip pairs all 9x8 = 72, no cut, no leads.
+    monkeypatch.setattr(journeys, "COMPOSE_BEAM_WIDTH", 2)
+    slug = make_trip(ROUND_TRIP)
+    obs, rets = [], []
+    for i in range(9):
+        cid = f"OB{i}"
+        seed(cid, ob_detail(cid))
+        obs.append(cand(cid, "SFO", "NRT", "2026-09-05"))
+    for j in range(8):
+        cid = f"RET{j}"
+        seed(cid, ret_detail(cid))
+        rets.append(cand(cid, "NRT", "SFO", "2026-09-12"))
+    write_shortlists(slug, obs, rets, ret_states={"NRT": {"state": "complete"}})
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    assert len(doc["journeys"]) == 72
+    assert doc["unpaired_outbounds"] == []
+    assert "truncation" not in doc["provenance"]
+
+
+def test_two_leg_round_trip_composes_all_65_at_real_beam_width(home: Path) -> None:
+    # 65x1 at the real COMPOSE_BEAM_WIDTH=64 (no monkeypatch): a two-leg plan never beams, so all 65
+    # journeys compose, no cut is disclosed, and no chain is mislabeled a lead.
+    assert journeys.COMPOSE_BEAM_WIDTH == 64
+    slug = make_trip(ROUND_TRIP)
+    obs = []
+    for i in range(65):
+        cid = f"OB{i}"
+        seed(cid, ob_detail(cid))
+        obs.append(cand(cid, "SFO", "NRT", "2026-09-05"))
+    seed("RET", ret_detail("RET"))
+    write_shortlists(
+        slug,
+        obs,
+        [cand("RET", "NRT", "SFO", "2026-09-12")],
+        ret_states={"NRT": {"state": "complete"}},
+    )
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    assert len(doc["journeys"]) == 65
+    assert doc["unpaired_outbounds"] == []
+    assert "truncation" not in doc["provenance"]
+
+
+def test_lead_quota_floor_stops_after_cached_pair_composes(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A/B: a cached outbound+return pair composes and is written, then an uncached lead outbound
+    # (no bookable return) crosses the quota floor on its live expand — an honest, resumable stop.
+    monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
+    slug = make_trip(ROUND_TRIP)
+    seed("OB1", ob_detail("OB1", dest="NRT"))  # cached: composes with the cached return below
+    seed("RET", ret_detail("RET", origin="NRT"))
+    connect(cache_db(), now=clock()).record_quota("/trips", 50)  # below the default floor of 100
+    write_shortlists(
+        slug,
+        # OB2 -> ICN has no cached detail and no return from ICN: an unpaired lead, live-fetched
+        [cand("OB1", "SFO", "NRT", "2026-09-05"), cand("OB2", "SFO", "ICN", "2026-09-05")],
+        [cand("RET", "NRT", "SFO", "2026-09-12")],
+        ret_states={"NRT": {"state": "complete"}},
+    )
+    with pytest.raises(QuotaFloorError):
+        journeys.run(slug, now=clock())
+    doc = json.loads(trips.artifact_read(slug, "expand.json"))
+    assert [j["id"] for j in doc["journeys"]] == ["outbound:OB1:J|return:RET:J"]  # pair landed
+    assert doc["provenance"]["quota_stopped"] is True
+    assert doc["leg_states"]["outbound:OB2:J"] == {"state": "not_run", "reason": "quota_floor"}
+    assert doc["unpaired_outbounds"] == []  # the breaking lead never reaches the leads list
+    assert trips.phase_check(slug, "expand", now=clock())[1] is None  # unstamped to resume
+
+
+def test_dateline_crossing_pair_composes_when_return_predates_departure_date(home: Path) -> None:
+    # Eastbound over the dateline: the outbound arrives an earlier local date than it departs, so a
+    # return departing after that arrival clock must pair though its date precedes the outbound's.
+    slug = make_trip(ROUND_TRIP)
+    seed("OB", detail("OB", [seg("SYD", "LAX", "2026-09-05T00:30", "2026-09-04T20:00")]))
+    seed("RET", detail("RET", [seg("LAX", "SYD", "2026-09-04T23:00", "2026-09-06T08:00")]))
+    write_shortlists(
+        slug,
+        [cand("OB", "SYD", "LAX", "2026-09-05")],
+        [cand("RET", "LAX", "SYD", "2026-09-04")],
+        ret_states={"LAX": {"state": "complete"}},
+    )
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+    (journey,) = doc["journeys"]
+    assert journey["id"] == "outbound:OB:J|return:RET:J"
+    assert doc["unpaired_outbounds"] == []
+
+
+@pytest.mark.parametrize(
+    ("mode", "position", "cash_variant_kind"),
+    [
+        pytest.param("cash", "first", "cash→award→award", id="cash-first-positioning"),
+        pytest.param("cash", "last", "award→award→cash", id="cash-last-home-hop"),
+        pytest.param("either", "first", "cash→award→award", id="either-first"),
+        pytest.param("either", "last", "award→award→cash", id="either-last"),
+    ],
+)
+def test_cash_or_either_end_leg_composes_through_run(
+    home: Path, mode: str, position: str, cash_variant_kind: str
+) -> None:
+    # A cash/either leg in first (positioning) or last ($origins home) position composes through
+    # journeys.run — fit reads its quote clocks, never crashing on a missing award detail.
+    legs = [
+        {"id": "outbound", "origins": ["SFO"], "dests": ["NRT"]},
+        {"id": "mid", "dests": ["OKA"]},
+        {"id": "return", "dests": "$origins"},
+    ]
+    idx = {"first": 0, "last": 2}[position]
+    legs[idx] = {**legs[idx], "mode": mode}
+    slug = make_trip({"legs": legs})
+
+    def write_leg(leg_id: str, o: str, d: str, date: str, dep: str, arr: str, cid: str) -> None:
+        leg_mode = next(leg for leg in legs if leg["id"] == leg_id).get("mode", "award")
+        if leg_mode in ("award", "either"):
+            seed(cid, detail(cid, [seg(o, d, dep, arr)]))
+            trips.artifact_write(
+                slug,
+                f"legs/{leg_id}/shortlist.json",
+                json.dumps(shortlist_doc([cand(cid, o, d, date)], leg=leg_id)),
+            )
+        if leg_mode in ("cash", "either"):
+            trips.artifact_write(
+                slug,
+                f"legs/{leg_id}/bridge.json",
+                json.dumps(
+                    {
+                        "quotes": [
+                            cash_quote(o, d, 120.0, date=date, departs_local=dep, arrives_local=arr)
+                        ],
+                        "failures": [],
+                    }
+                ),
+            )
+
+    write_leg("outbound", "SFO", "NRT", "2026-09-05", "2026-09-05T10:00", "2026-09-06T14:00", "OB")
+    write_leg("mid", "NRT", "OKA", "2026-09-08", "2026-09-08T09:00", "2026-09-08T12:00", "MID")
+    write_leg("return", "OKA", "SFO", "2026-09-12", "2026-09-12T16:00", "2026-09-12T10:00", "RET")
+
+    doc = _run(slug)
+    assert doc["journeys"], "a cash/either end leg must compose, not raise KeyError"
+    assert cash_variant_kind in {j["kind"] for j in doc["journeys"]}

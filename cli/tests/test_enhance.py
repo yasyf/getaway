@@ -18,9 +18,10 @@ SLUG = "2026-09-warm"
 RUNNER = str(Path(__file__).parent / "_runner.py")
 
 PLAN = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+    ]
 }
 WINDOW = {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10}
 

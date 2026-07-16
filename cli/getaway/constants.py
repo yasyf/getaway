@@ -36,6 +36,9 @@ SEARCH_PAGE_SIZE = 1000
 GENERATION_CUTTING_COMPLETENESS = frozenset({"complete", "searched_empty"})
 EXPANSION_BUDGET_PER_ENDPOINT = 12
 RETURN_EXPANSION_BUDGET_PER_ENDPOINT = 12
+# Chain-builder beam: candidate chains cheap-ranked on (miles, cash) are capped here BEFORE any
+# /trips expansion spends quota — only survivors expand (P3 lifts this into plan.tuning).
+COMPOSE_BEAM_WIDTH = 64
 
 # Disjoint stores: prefs.py consumes DISJOINT_TRIP_DOC_KEYS to reject trip-doc keys.
 DISJOINT_DURABLE_PREF_KEYS = frozenset(

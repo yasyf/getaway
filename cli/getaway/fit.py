@@ -45,6 +45,15 @@ def _leg_endpoints(detail: Detail) -> tuple[str, str, str, str]:
     return (first["origin"], last["dest"], first["departs_local"], last["arrives_local"])
 
 
+def _leg_clocks(leg: Leg) -> tuple[str, str, str, str]:
+    """(origin, dest, departs_local, arrives_local) of a typed leg at any chain position — an award
+    leg reads its expanded detail, a cash leg its quote's airports and clocks."""
+    if leg.get("mode") == "cash":
+        cash = leg["cash"]
+        return leg["origin"], leg["dest"], cash["departs_local"], cash["arrives_local"]
+    return _leg_endpoints(leg["detail"])
+
+
 def _cabin_fit(detail: Detail, preferred_letter: str) -> dict:
     segments = detail["segments"]
     preferred_rank = cabin_rank(preferred_letter)
@@ -169,7 +178,7 @@ def journey_fit(
     departure_days = _resolved_departure_days(trip, prefs_doc)
     now_dt = now()
 
-    has_return = trips._trip_type(trip["plan"]) != "one_way"
+    has_return = trips._targets_origins(trip["plan"])
     gateway = legs[0]
     leg_facts = [
         _leg_facts(leg, preferred_letter, departure_days, party, now_dt) for leg in legs
@@ -178,16 +187,12 @@ def journey_fit(
     trip_length_days = None
     away_nights = None
     if has_return:
-        # Effective destination is the last pre-return leg — its real arrival clock, whether
-        # award or cash.
+        # Every clock reads through _leg_clocks so a cash first/last/destination leg never crashes.
         last_outbound, return_leg = legs[-2], legs[-1]
-        _, _, ob_dep, _ = _leg_endpoints(gateway["detail"])
-        _, _, ret_dep, ret_arr = _leg_endpoints(return_leg["detail"])
+        _, _, ob_dep, _ = _leg_clocks(gateway)
+        _, _, ret_dep, ret_arr = _leg_clocks(return_leg)
         trip_length_days = (_date(ret_arr) - _date(ob_dep)).days
-        if last_outbound.get("mode") == "cash":
-            dest_arr = last_outbound["cash"]["arrives_local"]
-        else:
-            _, _, _, dest_arr = _leg_endpoints(last_outbound["detail"])
+        _, _, _, dest_arr = _leg_clocks(last_outbound)
         away_nights = (_date(ret_dep) - _date(dest_arr)).days
 
     fit_facts = {
@@ -208,7 +213,7 @@ def _preference_misses(fit_facts: dict, plan: dict) -> list[dict]:
     preferences = plan.get("preferences", {})
     outbound = fit_facts["legs"][0]
     return_leg = (
-        fit_facts["legs"][-1] if trips._trip_type(plan) != "one_way" else None
+        fit_facts["legs"][-1] if trips._targets_origins(plan) else None
     )
     misses: list[dict] = []
 
@@ -242,7 +247,11 @@ def _preference_misses(fit_facts: dict, plan: dict) -> list[dict]:
             note = f"{abs(delta)} day(s) {longer} than your {target}-day target"
             misses.append(_miss("trip_length", delta, note))
 
-    if "departure_days" in preferences and not outbound["departure_day"]["match"]:
+    if (
+        "departure_days" in preferences
+        and "departure_day" in outbound  # a cash first leg carries no weekday fact (neutral)
+        and not outbound["departure_day"]["match"]
+    ):
         want = preferences["departure_days"]["value"]
         token = outbound["departure_day"]["token"]
         note = f"departs {token}, not your preferred {want}"

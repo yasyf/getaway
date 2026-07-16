@@ -32,144 +32,170 @@ def _shift_date(date_str: str, days: int) -> str:
     return (dt.date.fromisoformat(date_str) + dt.timedelta(days=days)).isoformat()
 
 
-def derive_specs(trip: dict, prefs_doc: dict) -> list[Spec]:
-    """Outbound-leg sweep specs from the plan: buckets and gateways search, program sweeps pull
-    bulk availability. Endpoints stay as written (region pseudo-codes included) — the server
-    expands them and the leg records the concrete set at sweep time."""
-    plan = trip["plan"]
-    if not plan:
-        return []
+def _predecessor(plan: dict, leg_id: str) -> Leg | None:
+    """The immediately-preceding non-discover leg — the one this leg chains from. A discover leg
+    breaks the chain (its successor declares explicit origins), so the leg right after one, like the
+    first leg, has no predecessor. Mirrors the fold's ``prior_leg`` in ``trips.compile_graph``."""
+    legs = plan["legs"]
+    index = next(i for i, entry in enumerate(legs) if entry["id"] == leg_id)
+    if index == 0:
+        return None
+    prior = legs[index - 1]
+    return None if isinstance(prior.get("dests"), dict) else prior
+
+
+def _stay_shift(dates: set[str], stay: dict | None) -> set[str]:
+    """A stay-marked boundary pushes each predecessor-arrival date to the departures that honor the
+    declared stay: ``[arrival+min .. arrival+max]``. No stay marker leaves the date a same-day
+    connection, unshifted (the degenerate case)."""
+    if stay is None:
+        return set(dates)
+    return {
+        _shift_date(date, nights)
+        for date in dates
+        for nights in range(stay["min"], stay["max"] + 1)
+    }
+
+
+def derive_specs(leg: Leg) -> list[Spec]:
+    """An award/either leg's sweep specs: one search per bucket, one bulk-availability per program
+    sweep, else one bare search (label ``None``) over the leg's own dests. Region tokens and
+    endpoints stay as written — the server expands them and the leg records the concrete set at
+    sweep time. Labels mirror ``trips._leg_sweep_labels`` so node ids and store labels agree.
+    """
     specs: list[Spec] = []
-    for bucket in plan.get("buckets", []):
-        specs.append(
-            {
-                "label": bucket["name"],
-                "kind": "search",
-                "origins": plan["origins"],
-                "dests": bucket["dests"],
-            }
-        )
-    for sweep in plan.get("program_sweeps", []):
-        region = sweep.get("dest_region") or sweep.get("origin_region")
-        spec: Spec = {
-            "label": f"{sweep['source']}-{_region_slug(region)}",
-            "kind": "availability",
-            "source": sweep["source"],
-        }
+    for bucket in leg.get("buckets", []):
+        specs.append({"label": bucket["name"], "kind": "search", "dests": bucket["dests"]})
+    for sweep in leg.get("program_sweeps", []):
+        # origin_region takes a "from-" infix so a source's dest and origin sweeps over one
+        # continent stay distinct; the slug is total over the closed continent vocabulary.
+        if "dest_region" in sweep:
+            label = f"{sweep['source']}-{_region_slug(sweep['dest_region'])}"
+        else:
+            label = f"{sweep['source']}-from-{_region_slug(sweep['origin_region'])}"
+        spec: Spec = {"label": label, "kind": "availability", "source": sweep["source"]}
         if "dest_region" in sweep:
             spec["dest_region"] = sweep["dest_region"]
         if "origin_region" in sweep:
             spec["origin_region"] = sweep["origin_region"]
         specs.append(spec)
-    hybrid = plan.get("hybrid")
-    if hybrid:
-        specs.append(
-            {
-                "label": "gateways",
-                "kind": "search",
-                "origins": plan["origins"],
-                "dests": hybrid["gateways"],
-            }
-        )
-    return specs
+    return specs or [{"label": None, "kind": "search", "dests": None}]
 
 
-def _sweep_window(trip: dict, role: str) -> tuple[str, str]:
-    """Soft windows sweep the trip window plus padding; a confirmed date constraint is exact."""
-    plan = trip["plan"]
+def _leg_window(
+    trip: dict,
+    leg: Leg,
+    is_first: bool,
+    is_return: bool,
+    predecessor: Leg | None,
+    arrivals: dict[str, set[str]],
+) -> tuple[str, str]:
+    """A leg's sweep window: an absolute per-intent ``window`` wins; a middle leg chained past a
+    stay-marked stop departs within ``[arrival+min .. arrival+max]`` of its predecessor's observed
+    arrivals (the only dates that honor the stay); otherwise derive from the trip window,
+    positionally anchored — the first leg carries the departure-side constraint, a leg flying to
+    ``$origins`` the return-side one, and any other middle leg the padded trip window."""
+    if "window" in leg:
+        return leg["window"]["start"], leg["window"]["end"]
+    if not is_first and not is_return and predecessor is not None and "stay_nights" in predecessor:
+        observed = {date for dates in arrivals.values() for date in dates}
+        if observed:
+            shifted = _stay_shift(observed, predecessor["stay_nights"])
+            return min(shifted), max(shifted)
     window = trip["window"]
-    constraints = plan.get("constraints", {})
+    constraints = trip["plan"].get("constraints", {})
     pad = SOFT_DATE_SEARCH_PADDING_DAYS
-    if role == "return":
+    if is_return:
         hard = constraints.get("return_arrival_by")
         if hard:
             return window["start"], hard["latest_local_date"]
         return window["start"], _shift_date(window["end"], pad)
-    hard = constraints.get("outbound_departure_window")
-    if hard:
-        return hard["start"], hard["end"]
+    if is_first:
+        hard = constraints.get("outbound_departure_window")
+        if hard:
+            return hard["start"], hard["end"]
     return _shift_date(window["start"], -pad), _shift_date(window["end"], pad)
 
 
-def _return_endpoints(slug: str, trip: dict) -> tuple[list[str], list[str]]:
-    """Return-leg origins resolve at run time from the outbound shortlist's reached destinations
-    (plus onward_dests and any explicit plan.return override); dests are home. Explicit
-    plan.return values replace the derived ones."""
-    plan = trip["plan"]
-    override = plan.get("return") or {}
-    shortlist = json.loads(trips.artifact_read(slug, "legs/outbound/shortlist.json"))
-    reached = {c["dest"] for c in shortlist["candidates"]}
-    onward = plan.get("hybrid", {}).get("onward_dests", [])
-    origins = override.get("origins") or sorted(reached | set(onward))
-    dests = override.get("dests") or plan["origins"]
-    return origins, dests
+def _chained_endpoints(
+    slug: str, key: str, endpoint_source: dict
+) -> tuple[list[str], dict[str, set[str]]]:
+    """A chained leg's resolved origins and its predecessor's arrival dates per reached endpoint.
+
+    Origins come from the ``from`` shortlist's ``field`` values (award lane) unioned with the
+    carried cash-reachable dests, or the explicit override; the arrival dates ride along for the
+    stay-shifted window derivation. An empty resolution — an empty predecessor shortlist and empty
+    union with no override — leaves the leg with nowhere to depart, a data condition raised loud
+    with zero HTTP (walker backoff), generalizing HEAD's empty-gateway guard to any chained leg.
+    """
+    override = endpoint_source.get("override") or {}
+    arrivals: dict[str, set[str]] = {}
+    if "from" in endpoint_source:
+        prior = json.loads(trips.artifact_read(slug, endpoint_source["from"]))
+        for cand in prior["candidates"]:
+            arrivals.setdefault(cand[endpoint_source["field"]], set()).add(cand["date"])
+    if override.get("origins"):
+        origins = list(override["origins"])
+    else:
+        origins = sorted(set(arrivals) | set(endpoint_source.get("union", [])))
+    if not origins:
+        source = endpoint_source.get("from") or "carried union"
+        raise NoData(f"chained sweep {key!r} for {slug!r} has no gateways: {source} is empty")
+    return origins, arrivals
 
 
-def _leg_for_key(slug: str, key: str, trip: dict, prefs_doc: dict) -> Leg:
-    plan = trip["plan"]
-    window = _sweep_window(trip, "return" if key == "return" else "outbound")
-    if key == "return":
-        origins, dests = _return_endpoints(slug, trip)
-        return {
-            "id": "sweep:return",
-            "role": "return",
-            "kind": "search",
-            "path": "/search",
-            "origins": origins,
-            "dests": dests,
-            "endpoints": origins,
-            "endpoint_field": "origin",
-            "window": window,
-            "source": None,
-        }
-    leg_role, _, label = key.partition(":")
-    if leg_role != "outbound":
-        raise UsageError(f"unknown sweep key: {key!r}")
-    if label == "onward":
-        hybrid = plan["hybrid"]
-        gateway_doc = json.loads(trips.artifact_read(slug, "legs/outbound/shortlist-gateway.json"))
-        gateways = sorted({c["dest"] for c in gateway_doc["candidates"]})
-        if not gateways:
-            raise NoData(f"onward sweep for {slug!r} has no gateways: shortlist-gateway is empty")
-        return {
-            "id": "sweep:outbound:onward",
-            "role": "outbound",
-            "kind": "search",
-            "path": "/search",
-            "origins": gateways,
-            "dests": hybrid["onward_dests"],
-            "endpoints": hybrid["onward_dests"],
-            "endpoint_field": "dest",
-            "window": window,
-            "source": None,
-        }
-    spec = next((s for s in derive_specs(trip, prefs_doc) if s["label"] == label), None)
+def _leg_for_key(slug: str, key: str, trip: dict, endpoint_source: dict | None) -> Leg:
+    """The sweep leg for a compiled ``sweep:<leg-id>[:<label>]`` node: origins from the leg's own
+    (first leg) or its chain (``endpoint_source``); dests from the label's bucket, the leg's own
+    concrete dests, or home when the leg targets ``$origins``."""
+    legs = trip["plan"]["legs"]
+    leg_id, _, label = key.partition(":")
+    leg = next((entry for entry in legs if entry["id"] == leg_id), None)
+    if leg is None:
+        raise UsageError(f"unknown sweep leg: {leg_id!r}")
+    is_first = legs.index(leg) == 0
+    is_return = leg.get("dests") == trips.ORIGINS_MARKER
+    predecessor = _predecessor(trip["plan"], leg_id)
+    spec = next((s for s in derive_specs(leg) if s["label"] == (label or None)), None)
     if spec is None:
-        raise UsageError(f"no sweep spec for label {label!r}")
-    if spec["kind"] == "search":
+        raise UsageError(f"no sweep spec for leg {leg_id!r} label {(label or None)!r}")
+    if spec["kind"] == "availability":
+        # A region program sweep queries by continent, not concrete origins — the chain is inert
+        # here, so its empty-gateway guard (search-only) does not apply.
         return {
-            "id": f"sweep:outbound:{label}",
-            "role": "outbound",
-            "kind": "search",
-            "path": "/search",
-            "origins": spec["origins"],
-            "dests": spec["dests"],
-            "endpoints": spec["dests"],
-            "endpoint_field": "dest",
-            "window": window,
-            "source": None,
+            "id": f"sweep:{key}",
+            "kind": "availability",
+            "path": "/availability",
+            "source": spec["source"],
+            "origin_region": spec.get("origin_region"),
+            "dest_region": spec.get("dest_region"),
+            "endpoints": [label],
+            "endpoint_field": None,
+            "window": _leg_window(trip, leg, is_first, is_return, predecessor, {}),
         }
+    if endpoint_source is None:
+        origins, arrivals = leg["origins"], {}
+    else:
+        origins, arrivals = _chained_endpoints(slug, key, endpoint_source)
+    window = _leg_window(trip, leg, is_first, is_return, predecessor, arrivals)
+    bare_home = spec["dests"] is None and is_return
+    if spec["dests"] is not None:
+        dests = spec["dests"]
+    elif bare_home:
+        dests = legs[0]["origins"]  # home, resolving the leg's "$origins" dests
+    else:
+        dests = leg["dests"]
+    endpoints, field = (origins, "origin") if bare_home else (dests, "dest")
     return {
-        "id": f"sweep:outbound:{label}",
-        "role": "outbound",
-        "kind": "availability",
-        "path": "/availability",
-        "source": spec["source"],
-        "origin_region": spec.get("origin_region"),
-        "dest_region": spec.get("dest_region"),
-        "endpoints": [label],
-        "endpoint_field": None,
+        "id": f"sweep:{key}",
+        "kind": "search",
+        "path": "/search",
+        "origins": origins,
+        "dests": dests,
+        "endpoints": endpoints,
+        "endpoint_field": field,
         "window": window,
+        "source": None,
     }
 
 
@@ -333,11 +359,12 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
     }
 
 
-def _artifact_name(key: str) -> str:
-    if key == "return":
-        return "legs/return/sweep.json"
-    _, _, label = key.partition(":")
-    return f"legs/outbound/sweep-{label}.json"
+def _sweep_node(slug: str, key: str) -> dict:
+    node_id = f"sweep:{key}"
+    node = next((n for n in trips.compile_graph(slug)["nodes"] if n["id"] == node_id), None)
+    if node is None:
+        raise UsageError(f"no sweep node {node_id!r} in the compiled graph")
+    return node
 
 
 def run(
@@ -348,16 +375,17 @@ def run(
     now: Callable[[], dt.datetime] = utcnow,
 ) -> dict:
     trip = trips.show(slug)
-    prefs_doc = prefs.show()
-    node_id = f"sweep:{key}"
-    name = _artifact_name(key)
+    node = _sweep_node(slug, key)  # endpoint_source + output name are compiled once, offline
+    node_id = node["id"]
+    name = node["outputs"][0]
     if not refresh:  # freshness self-skip checks before reserving quota
         fresh, _ = trips.phase_check(slug, node_id, now=now)
         if fresh:
             doc = json.loads(trips.artifact_read(slug, name))
             return {"key": key, "skipped": True, "rows": len(doc["rows"])}
+    prefs_doc = prefs.show()
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, node_id)  # before the network fetch
-    leg = _leg_for_key(slug, key, trip, prefs_doc)
+    leg = _leg_for_key(slug, key, trip, node["endpoint_source"])
     store = connect(cache_db(), now=now)
     base_generation = store.pin_generation(slug, key)  # pinned before the fetch
     watermark = store.global_watermark()  # global run-start watermark, before the fetch

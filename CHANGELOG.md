@@ -13,6 +13,25 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Changed
+- The leg-intent cutover: `plan.legs` — an ordered list of intents
+  (origins, dests, `award|cash|either` mode, per-leg windows,
+  `stay_nights` stops, `"$origins"` as the homeward marker, open jaws
+  via explicit later-leg origins) — replaces the closed
+  `trip_type`/`hybrid`/`return` schema outright. A journey is any chain
+  of concrete legs satisfying the intents: multi-city, positioning cash
+  legs, and N-leg stitches compose, price, and rank in the same
+  deterministic engine as the canonical round trip, whose compiled
+  graph and composed journeys stay byte-identical to the old engine
+  (pinned). Conventional leg ids keep sweep keys, artifact paths, and
+  checkpoints stable; two-leg plans compose exhaustively while longer
+  chains cheap-rank under a disclosed composition beam; chained legs
+  resolve endpoints from their predecessor's reached dests (declared
+  dests across cash boundaries), stay-marked boundaries shift retrieval
+  dates and bound composition continuity; the walker grammar widened
+  regex-pinned. Stored v2 trip docs reject loudly with the re-declare
+  remedy — no migrations, per doctrine. Ten adversarial review rounds
+  across four stages; every accepted counterexample is a regression
+  test (1002 pytest, 50 walker tests at close).
 - One-line install. getaway's `captain-hook` and `cc-present` dependencies
   register their own marketplaces on the first session — capt-hook 9.22.0
   self-bootstraps every marketplace a pack declares — so install and upgrade are

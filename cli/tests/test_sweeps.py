@@ -61,46 +61,50 @@ def search_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     trips.set_patch(
         SLUG,
         make_trip(
-            {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT", "BKK"]}],
-            }
+            {"legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT", "BKK"]}]}]}
         ),
     )
     return SLUG
 
 
-# --- derive_specs ---
+# --- derive_specs (per-leg) ---
 
 
 @pytest.mark.parametrize(
-    ("plan", "expected"),
+    ("leg", "expected"),
     [
         pytest.param(
-            {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+            {"buckets": [{"name": "asia", "dests": ["NRT"]}]},
             [("asia", "search")],
             id="single-bucket",
         ),
         pytest.param(
-            {"origins": ["SFO"], "program_sweeps": [{"source": "ap", "dest_region": "Africa"}]},
+            {"program_sweeps": [{"source": "ap", "dest_region": "Africa"}]},
             [("ap-africa", "availability")],
-            id="program-sweep",
+            id="dest-region-program-sweep",
+        ),
+        pytest.param(
+            {"program_sweeps": [{"source": "ap", "origin_region": "North America"}]},
+            [("ap-from-north-america", "availability")],
+            id="origin-region-program-sweep",
         ),
         pytest.param(
             {
-                "origins": ["SFO"],
                 "buckets": [{"name": "asia", "dests": ["NRT"]}],
-                "hybrid": {"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3},
+                "program_sweeps": [{"source": "ap", "dest_region": "Africa"}],
             },
-            [("asia", "search"), ("gateways", "search")],
-            id="bucket-plus-hybrid",
+            [("asia", "search"), ("ap-africa", "availability")],
+            id="bucket-plus-program-sweep",
         ),
-        pytest.param({}, [], id="empty-plan"),
+        pytest.param(
+            {"dests": ["NRT"]},
+            [(None, "search")],
+            id="bare-leg-no-groupings",
+        ),
     ],
 )
-def test_derive_specs_matrix(plan: dict, expected: list[tuple[str, str]]) -> None:
-    specs = sweeps.derive_specs(make_trip(plan), {})
+def test_derive_specs_matrix(leg: dict, expected: list[tuple[str, str]]) -> None:
+    specs = sweeps.derive_specs(leg)
     assert [(s["label"], s["kind"]) for s in specs] == expected
 
 
@@ -126,9 +130,7 @@ def test_confirmed_constraint_sweeps_exact_window(search_trip: str) -> None:
         search_trip,
         {
             "plan": {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
+                "legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]}],
                 "constraints": {
                     "outbound_departure_window": {
                         "start": "2026-09-03",
@@ -535,13 +537,7 @@ def _bucket_trip(monkeypatch: pytest.MonkeyPatch, dests: list[str]) -> str:
     trips.new(SLUG, now=clock())
     trips.set_patch(
         SLUG,
-        make_trip(
-            {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": dests}],
-            }
-        ),
+        make_trip({"legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": dests}]}]}),
     )
     return SLUG
 
@@ -613,9 +609,7 @@ def _sourced_trip(monkeypatch: pytest.MonkeyPatch, sources: list[str]) -> str:
         SLUG,
         make_trip(
             {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
+                "legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]}],
                 "sources": sources,
             }
         ),
@@ -638,9 +632,7 @@ def test_plan_sources_edit_complete_refresh_spares_removed_source(
         slug,
         make_trip(
             {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
+                "legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]}],
                 "sources": ["united"],  # drop aeroplan
             }
         ),
@@ -668,16 +660,25 @@ def round_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         SLUG,
         make_trip(
             {
-                "trip_type": "round_trip",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT", "OKA"]}],
+                "legs": [
+                    {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT", "OKA"]}]},
+                    {"id": "return", "dests": "$origins"},
+                ]
             }
         ),
     )
     trips.artifact_write(
         SLUG,
         "legs/outbound/shortlist.json",
-        json.dumps(shortlist_doc([{"dest": "NRT"}, {"dest": "NRT"}], considered=2)),
+        json.dumps(
+            shortlist_doc(
+                [
+                    {"dest": "NRT", "date": "2026-09-05"},
+                    {"dest": "NRT", "date": "2026-09-06"},
+                ],
+                considered=2,
+            )
+        ),
     )
     return SLUG
 
@@ -691,8 +692,23 @@ def test_return_resolves_origins_from_outbound_shortlist(round_trip: str) -> Non
     assert params["destination_airport"] == "SFO"  # home
 
 
+def test_conventional_sweep_keys_and_paths_match_head(round_trip: str) -> None:
+    # Byte-identity: a two-intent conventional plan compiles the same sweep node ids/commands and
+    # artifact outputs the v2 round-trip graph did (sweep:outbound:asia, sweep:return).
+    graph = trips.compile_graph(round_trip)
+    sweeps_by_id = {n["id"]: n for n in graph["nodes"] if n["kind"] == "sweep"}
+    assert set(sweeps_by_id) == {"sweep:outbound:asia", "sweep:return"}
+    assert sweeps_by_id["sweep:outbound:asia"]["outputs"] == ["legs/outbound/sweep-asia.json"]
+    assert sweeps_by_id["sweep:outbound:asia"]["command"][-1] == "outbound:asia"
+    assert sweeps_by_id["sweep:return"]["outputs"] == ["legs/return/sweep.json"]
+    assert sweeps_by_id["sweep:return"]["command"][-1] == "return"
+
+
+# --- three-intent chain: a middle leg sweeps from its predecessor's reached dests ---
+
+
 @pytest.fixture
-def hybrid_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+def chain_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
     prefs.init()
     trips.new(SLUG, now=clock())
@@ -700,22 +716,154 @@ def hybrid_trip(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         SLUG,
         make_trip(
             {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
-                "hybrid": {"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3},
+                "legs": [
+                    {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+                    {"id": "hop", "dests": ["OKA"]},
+                    {"id": "return", "dests": "$origins"},
+                ]
             }
         ),
     )
     trips.artifact_write(
-        SLUG, "legs/outbound/shortlist-gateway.json", json.dumps(shortlist_doc(considered=0))
+        SLUG,
+        "legs/outbound/shortlist.json",
+        json.dumps(
+            shortlist_doc(
+                [
+                    {"dest": "NRT", "date": "2026-09-05"},
+                    {"dest": "HND", "date": "2026-09-06"},
+                ],
+                considered=2,
+            )
+        ),
     )
     return SLUG
 
 
 @respx.mock
-def test_onward_empty_gateway_raises_nodata_without_http(hybrid_trip: str) -> None:
+def test_middle_leg_sweeps_from_predecessor_reached_dests(chain_trip: str) -> None:
     route = respx.get(SEARCH_URL).mock(return_value=ok([]))
-    with pytest.raises(NoData, match="shortlist-gateway"):
-        sweeps.run(hybrid_trip, "outbound:onward", now=clock())
-    assert route.call_count == 0
+    sweeps.run(chain_trip, "hop", now=clock())
+    params = route.calls[0].request.url.params
+    # The hop departs the outbound shortlist's reached dests (NRT, HND) toward its own dests (OKA).
+    assert set(params["origin_airport"].split(",")) == {"NRT", "HND"}
+    assert params["destination_airport"] == "OKA"
+
+
+# --- per-intent window derivation: absolute vs chained ---
+
+
+@respx.mock
+def test_absolute_leg_window_overrides_trip_window(search_trip: str) -> None:
+    trips.set_patch(
+        search_trip,
+        make_trip(
+            {
+                "legs": [
+                    {
+                        "origins": ["SFO"],
+                        "buckets": [{"name": "asia", "dests": ["NRT"]}],
+                        "window": {"start": "2026-10-01", "end": "2026-10-05"},
+                    }
+                ]
+            }
+        ),
+    )
+    route = respx.get(SEARCH_URL).mock(return_value=ok([]))
+    sweeps.run(search_trip, "outbound:asia", now=clock())
+    params = route.calls[0].request.url.params
+    assert params["start_date"] == "2026-10-01"  # absolute per-intent window, no padding
+    assert params["end_date"] == "2026-10-05"
+
+
+@respx.mock
+def test_chained_return_window_uses_trip_window(round_trip: str) -> None:
+    route = respx.get(SEARCH_URL).mock(return_value=ok([]))
+    sweeps.run(round_trip, "return", now=clock())
+    params = route.calls[0].request.url.params
+    assert params["start_date"] == "2026-09-01"  # return side: trip start, end padded
+    assert params["end_date"] == "2026-09-21"
+
+
+# --- chained-leg guards: empty predecessor + stay-shifted window ---
+
+
+def _chain_plan(outbound_extra: dict | None = None) -> dict:
+    outbound = {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]}
+    outbound.update(outbound_extra or {})
+    return {
+        "legs": [
+            outbound,
+            {"id": "hop", "dests": ["OKA"]},
+            {"id": "return", "dests": "$origins"},
+        ]
+    }
+
+
+@respx.mock
+def test_chained_sweep_empty_predecessor_raises_nodata_without_http(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
+    prefs.init()
+    trips.new(SLUG, now=clock())
+    trips.set_patch(SLUG, make_trip(_chain_plan()))
+    trips.artifact_write(
+        SLUG, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([], considered=0))
+    )
+    route = respx.get(SEARCH_URL).mock(return_value=ok([]))
+    with pytest.raises(NoData):
+        sweeps.run(SLUG, "hop", now=clock())
+    assert route.call_count == 0  # empty predecessor: no gateway, zero HTTP, walker backoff
+
+
+@respx.mock
+def test_middle_leg_stay_nights_shifts_sweep_window(
+    getaway_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
+    prefs.init()
+    trips.new(SLUG, now=clock())
+    trips.set_patch(SLUG, make_trip(_chain_plan({"stay_nights": {"min": 2, "max": 3}})))
+    trips.artifact_write(
+        SLUG,
+        "legs/outbound/shortlist.json",
+        json.dumps(
+            shortlist_doc(
+                [
+                    {"dest": "NRT", "date": "2026-09-12"},
+                    {"dest": "NRT", "date": "2026-09-13"},
+                ],
+                considered=2,
+            )
+        ),
+    )
+    route = respx.get(SEARCH_URL).mock(return_value=ok([]))
+    sweeps.run(SLUG, "hop", now=clock())
+    params = route.calls[0].request.url.params
+    # Arrivals 09-12/09-13, stay {2,3} -> window spans [09-12+2 .. 09-13+3] = 09-14 .. 09-16.
+    assert params["start_date"] == "2026-09-14"
+    assert params["end_date"] == "2026-09-16"
+
+
+@respx.mock
+def test_open_jaw_override_origins_replace_chained_gateways(chain_trip: str) -> None:
+    # Contrast pin for the pairs lane: an open-jaw override REPLACES the chained gateways here too —
+    # the hop departs EXACTLY its explicit origins, not the predecessor's reached dests.
+    trips.set_patch(
+        chain_trip,
+        make_trip(
+            {
+                "legs": [
+                    {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+                    {"id": "hop", "origins": ["KIX"], "dests": ["OKA"]},
+                    {"id": "return", "dests": "$origins"},
+                ]
+            }
+        ),
+    )
+    route = respx.get(SEARCH_URL).mock(return_value=ok([]))
+    sweeps.run(chain_trip, "hop", now=clock())
+    params = route.calls[0].request.url.params
+    assert params["origin_airport"] == "KIX"  # override replaces NRT/HND from the chain
+    assert params["destination_airport"] == "OKA"

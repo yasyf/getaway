@@ -25,7 +25,7 @@ Preferences and constraints are different branches, and the CLI rejects the same
 
 ## Origin expansion
 
-Start at the gateway region, not the airport. `WST` covers the US west coast origin set in one `/search` operand — `registry regions` carries the code with its observed expansion, a superset of the UI-documented list. Pin `plan.origins: ["WST"]` and the server re-expands it on every call, so the set stays current without maintenance. A pseudo-code is a sweep operand only: the sweep records the server-expanded airports on the leg, and every feasibility check compares those concrete codes — never the literal `WST`.
+Start at the gateway region, not the airport. `WST` covers the US west coast origin set in one `/search` operand — `registry regions` carries the code with its observed expansion, a superset of the UI-documented list. Pin `plan.legs[0].origins: ["WST"]` and the server re-expands it on every call, so the set stays current without maintenance. A pseudo-code is a sweep operand only: the sweep records the server-expanded airports on the leg, and every feasibility check compares those concrete codes — never the literal `WST`.
 
 Widen outward only when the region comes back thin: add positioning origins one cheap cash hop away, as explicit IATA codes beside the region code. The cash leg to reach them prices later, in the bridge node — origin expansion decides where awards may start, not what they cost.
 
@@ -60,14 +60,14 @@ An open jaw is the same single dispatch with `plan.return` overrides — explici
 The founding instruction, verbatim: "lie flat on points to a common airport such as NRT, and then cash... the point is we can get creative with routings". A trip is a composition of legs, not one availability row. Invent the shape, then price it. Every shape competes as a journey in the rank cost lane: same-program journeys band on scalar mileage, mixed-program and cash-bearing journeys meet on a Pareto front where cash is its own axis.
 
 - Direct award — one availability row; the baseline every hybrid must beat.
-- Gateway hybrid — a lie-flat award to a hub, a cash ticket onward. `plan.hybrid` declares the `gateways` and `onward_dests` sets and `max_hybrids` caps the compositions, cheap-ranked before any expansion spends quota. Hybrid journeys compose at expand with legs typed `award|cash`, so assess judges the cash hop's layover like any other leg.
+- Gateway hybrid — a lie-flat award to a hub, a cash ticket onward. Three ordered `plan.legs` express it — an award leg to the gateway, an `either`-mode middle leg onward, then the return — beam-capped and cheap-ranked before any expansion spends quota. Hybrid journeys compose at expand with legs typed `award|cash`, so assess judges the cash hop's layover like any other leg.
 - Two-award stitch — a second award onward from the gateway, any program.
 - Cash positioning — a cash hop to the award's true origin when it isn't the user's airport.
 - Long-range positioning — a cheap long cash leg into an award-rich region, then the award from there.
 
 Gateway sets are concrete IATA codes, never pseudo-codes. Seed them from the expansions in `registry regions`; refine per program with `routes <source>` ranked by monitored-route count: one call returns the program's entire route map, so redirect it to a scratch file. The cabin for each cash or stitched leg is a per-leg judgment call fed by duration fit facts — there is no fixed cutoff. The avoid union never vetoes a gateway: Tokyo on the avoid list kills NRT as an endpoint, not as the hub the award lands at. `trip set` enforces the flip side, rejecting an onward set that intersects the union.
 
-Cash legs price through `getaway bridge <slug>` — the fli driver with the Airport-alias and origin-local-date hardening built in — and each priced quote carries its real departure and arrival clocks, which is what lets a hybrid's lodging interval derive honestly. When the fli driver fails a pair and a SerpApi key is on file (`SERPAPI_API_KEY` or the `serpapi_op_ref` preference), bridge falls back to SerpApi's Google Flights API for that pair — quotes carry `source: fli|serpapi`.
+Cash legs price through `getaway bridge <slug> --leg <id>` — the fli driver with the Airport-alias and origin-local-date hardening built in — and each priced quote carries its real departure and arrival clocks, which is what lets a hybrid's lodging interval derive honestly. When the fli driver fails a pair and a SerpApi key is on file (`SERPAPI_API_KEY` or the `serpapi_op_ref` preference), bridge falls back to SerpApi's Google Flights API for that pair — quotes carry `source: fli|serpapi`.
 
 ## Hotels
 

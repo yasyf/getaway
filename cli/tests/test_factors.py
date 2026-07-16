@@ -283,9 +283,10 @@ def test_primary_codes_are_per_code(
 
 
 PLAN = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+    ]
 }
 
 

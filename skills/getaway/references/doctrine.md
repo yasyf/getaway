@@ -12,7 +12,7 @@ Soft dates sweep the stated range plus seven days of padding, independent of pre
 
 ## The journey is the unit
 
-One normalized Journey — direct, hybrid, round-trip, open-jaw — with one concrete return leg on round trips. Returns sweep in-run from the outbound shortlist ∪ `onward_dests`; pairing happens before ranking; hybrids compose at expand with legs typed `award|cash`, and assess judges whole journeys, cash hops included. Unpaired outbounds are a visible lead class ordered by outbound mileage with cache age, and `partial`/`not_run`/`failed` search states never read as "no space". Composition, fit facts, cost vectors, and misses are deterministic CLI code, never agent prompts. (cc-notes 9d2d74b3)
+One normalized Journey — direct, hybrid, round-trip, open-jaw — with one concrete return leg on round trips. Returns sweep in-run from the prior leg's reached dests; pairing happens before ranking; hybrids compose at expand with legs typed `award|cash`, and assess judges whole journeys, cash hops included. Unpaired outbounds are a visible lead class ordered by outbound mileage with cache age, and `partial`/`not_run`/`failed` search states never read as "no space". Composition, fit facts, cost vectors, and misses are deterministic CLI code, never agent prompts. (cc-notes 9d2d74b3)
 
 ## Ranking runs in lanes, never a score
 
@@ -36,7 +36,7 @@ Africa sweeps lead with the `QAF` pseudo-code on `/search`, even though it appea
 
 ## Vetoes bind endpoints only
 
-The avoid union — prefs `avoid_destinations` plus the trip's `avoid_final_destinations` — vetoes where a trip may end, never where it passes through. A gateway is a waypoint: NRT on the avoid list stays fully valid as the hub an award lands at. The CLI enforces the flip side at `trip set`, rejecting a `hybrid.onward_dests` set that intersects the union. (cc-notes 9d2d74b3)
+The avoid union — prefs `avoid_destinations` plus the trip's `avoid_final_destinations` — vetoes where a trip may end, never where it passes through. A gateway is a waypoint: NRT on the avoid list stays fully valid as the hub an award lands at. The CLI enforces the flip side at `trip set`, rejecting a leg whose `dests` intersect the union unless it targets `$origins`. (cc-notes 9d2d74b3)
 
 ## Cabin is decided per leg, by judgment
 
@@ -44,7 +44,7 @@ The cash-or-award cabin call happens leg by leg — a judgment fed by duration f
 
 ## Hybrid fan-out is bounded
 
-Hybrid composition works only the explicit `gateways` and `onward_dests` sets in the plan, capped by `hybrid.max_hybrids` and cheap-ranked before any expansion spends quota. A plan without a `hybrid` key compiles zero hybrid nodes — absence is structural, not a reduced mode. (cc-notes 9d2d74b3)
+A gateway hybrid is three ordered `plan.legs` — a lie-flat award to the gateway, an `either`-mode hop onward, then the return — composed by the chain-builder, beam-capped and cheap-ranked before any expansion spends quota. A plan whose legs declare no cash or `either` hop compiles zero hybrid nodes — absence is structural, not a reduced mode. (cc-notes 9d2d74b3)
 
 ## Lodging derives from observed clocks
 

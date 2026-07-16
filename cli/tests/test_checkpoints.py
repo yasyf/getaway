@@ -14,6 +14,13 @@ SLUG = "2026-09-asia-business"
 BASE = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 WINDOW = {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 10}
 OCTOBER = {"start": "2026-10-01", "end": "2026-10-14", "trip_length_days": 10}
+OUTBOUND_LEG = {
+    "origins": ["SFO"],
+    "mode": "award",
+    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+}
+ROUND_TRIP = {"legs": [OUTBOUND_LEG, {"id": "return", "dests": "$origins", "mode": "award"}]}
+ONE_WAY = {"legs": [OUTBOUND_LEG]}
 
 
 def at(hours: float) -> Callable[[], dt.datetime]:
@@ -43,15 +50,7 @@ def trip(getaway_home: Path) -> str:
     trips.new(SLUG, now=at(0))
     trips.set_patch(
         SLUG,
-        {
-            "cabin": "business",
-            "window": WINDOW,
-            "plan": {
-                "trip_type": "round_trip",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
-            },
-        },
+        {"cabin": "business", "window": WINDOW, "plan": ROUND_TRIP},
     )
     # The artifacts the downstream nodes declare as inputs.
     _write(SLUG, "legs/outbound/sweep-asia.json", sweep_envelope())
@@ -144,15 +143,7 @@ def test_absent_input_arrival_flips_stale(getaway_home: Path) -> None:
     trips.new("solo", now=at(0))
     trips.set_patch(
         "solo",
-        {
-            "cabin": "business",
-            "window": WINDOW,
-            "plan": {
-                "trip_type": "one_way",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
-            },
-        },
+        {"cabin": "business", "window": WINDOW, "plan": ONE_WAY},
     )
     # shortlist:outbound depends on legs/outbound/sweep-asia.json, which does not exist yet.
     trips.phase_done("solo", "shortlist:outbound", now=at(0))
@@ -169,9 +160,7 @@ def test_unknown_node_id_rejected(trip: str) -> None:
 def test_removed_node_reads_stale_after_plan_change(trip: str) -> None:
     trips.phase_done(trip, "sweep:return", now=at(0))
     assert trips.phase_fresh(trip, "sweep:return", now=at(1))
-    one_way = {"trip_type": "one_way", "origins": ["SFO"]}
-    one_way["buckets"] = [{"name": "a", "dests": ["NRT"]}]
-    trips.set_patch(trip, {"plan": one_way})
+    trips.set_patch(trip, {"plan": ONE_WAY})  # drops the return leg
     fresh, record = trips.phase_check(trip, "sweep:return", now=at(1))
     assert fresh is False
     assert record is not None  # the checkpoint survives; the phase is simply no longer applicable

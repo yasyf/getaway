@@ -630,13 +630,18 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     expand = _optional_artifact(slug, "expand.json") or {}
 
     doc = {
-        "trip_type": trips._trip_type(plan),
+        "trip_type": trips._shape_label(plan),
         "journeys": rank_doc["ranked"][:PRESENTATION_LIMIT],
         "notable_stretches": rank_doc["notable_stretches"],
         "unpaired_leads": expand.get("unpaired_outbounds", []),
         "search_states": expand.get("search_states", {}),
         "dropped": rank_doc["dropped"],
     }
+    # Composition truncation (a beam_cut on ≥3-leg overflow) rides through to the board like the
+    # shortlist's own provenance.truncation — disclosed, never silently dropped.
+    truncation = expand.get("provenance", {}).get("truncation")
+    if truncation:
+        doc["truncation"] = truncation
     if "lodging" in plan:
         _thread_lodging(doc, plan, slug, now)
     _thread_verification(doc, slug)

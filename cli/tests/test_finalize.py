@@ -32,15 +32,16 @@ def _new(getaway_home: Path, plan: dict) -> str:
 
 
 DIRECT_PLAN = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+    ]
 }
 
 ONE_WAY_PLAN = {
-    "trip_type": "one_way",
-    "origins": ["SFO"],
-    "buckets": [{"name": "asia", "dests": ["NRT"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+    ]
 }
 
 
@@ -112,6 +113,24 @@ def test_unpaired_leads_and_search_states_surface(getaway_home: Path) -> None:
     doc = factors.finalize(slug, now=clock())
     assert doc["unpaired_leads"] == [lead]  # trailing lead class, not a journey
     assert doc["search_states"] == states  # full by-leg map surfaced, never as "no space"
+
+
+def test_beam_cut_truncation_rides_expand_provenance_to_the_board(getaway_home: Path) -> None:
+    # A ≥3-leg composition overflow discloses provenance.truncation.beam_cut in expand.json;
+    # finalize threads it onto the board like the shortlist's own truncation — never dropped.
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc(truncation={"beam_cut": 3}))
+    write_rank(slug, ["J0"])
+    doc = factors.finalize(slug, now=clock())
+    assert doc["truncation"] == {"beam_cut": 3}
+
+
+def test_no_truncation_key_when_expand_composed_within_the_beam(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())  # no provenance.truncation
+    write_rank(slug, ["J0"])
+    doc = factors.finalize(slug, now=clock())
+    assert "truncation" not in doc  # absent, not an empty stub
 
 
 @pytest.mark.parametrize(

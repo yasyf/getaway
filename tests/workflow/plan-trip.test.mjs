@@ -161,46 +161,205 @@ const roundTripGraph = ({ lodging = false, openJaw = false, fresh = false } = {}
   };
 };
 
+// A gateway hybrid: an either-mode onward leg (award sweep/shortlist + cash pairs/bridge) chained
+// between the award outbound and the $origins return. Mirrors a live `trip compile` verbatim.
 const hybridLodgingGraph = () => {
   const graph = roundTripGraph({ lodging: true });
-  const gwShortlist = 'legs/outbound/shortlist-gateway.json';
+  const obShortlist = 'legs/outbound/shortlist.json';
+  const onwardSweep = 'legs/onward/sweep.json';
+  const onwardShortlist = 'legs/onward/shortlist.json';
+  const onwardPairs = 'legs/onward/onward.json';
+  const onwardBridge = 'legs/onward/bridge.json';
+  const fromOutbound = { from: obShortlist, field: 'dest', union: [], override: { dests: ['OKA', 'KIX'] } };
+  const at = graph.nodes.findIndex((n) => n.id === 'shortlist:outbound') + 1;
   graph.nodes.splice(
-    2,
+    at,
     0,
-    sweepNode('gateways'),
-    N('shortlist:outbound:gateway', 'shortlist', {
-      leg: 'outbound',
-      inputs: ['legs/outbound/sweep-gateways.json'],
-      outputs: [gwShortlist],
-      command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'outbound', '--gateway'],
-    }),
-    N('sweep:outbound:onward', 'sweep', {
-      leg: 'outbound',
-      inputs: [gwShortlist],
-      outputs: ['legs/outbound/sweep-onward.json'],
-      command: ['getaway', 'sweep', 'run', SLUG, 'outbound:onward'],
+    N('sweep:onward', 'sweep', {
+      leg: 'onward',
+      inputs: [obShortlist],
+      outputs: [onwardSweep],
+      command: ['getaway', 'sweep', 'run', SLUG, 'onward'],
       quota: 3,
       ttl: 24,
+      endpoint_source: fromOutbound,
     }),
-    N('onward', 'onward', {
-      leg: 'outbound',
-      inputs: [gwShortlist, 'legs/outbound/sweep-onward.json'],
-      outputs: ['legs/outbound/onward.json'],
-      command: ['getaway', 'shortlist', 'onward', SLUG],
+    N('shortlist:onward', 'shortlist', {
+      leg: 'onward',
+      inputs: [onwardSweep],
+      outputs: [onwardShortlist],
+      command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'onward'],
     }),
-    N('bridge', 'bridge', {
-      leg: 'outbound',
-      inputs: ['legs/outbound/onward.json'],
-      outputs: ['legs/outbound/bridge.json'],
-      command: ['getaway', 'bridge', SLUG],
+    N('pairs:onward', 'onward', {
+      leg: 'onward',
+      inputs: [obShortlist, onwardSweep],
+      outputs: [onwardPairs],
+      command: ['getaway', 'shortlist', 'onward', SLUG, '--leg', 'onward'],
+      endpoint_source: fromOutbound,
+    }),
+    N('bridge:onward', 'bridge', {
+      leg: 'onward',
+      inputs: [onwardPairs],
+      outputs: [onwardBridge],
+      command: ['getaway', 'bridge', SLUG, '--leg', 'onward'],
       ttl: 24,
     }),
   );
+  // The return now chains off the onward leg's reached dests, not the outbound's.
+  const retSweep = graph.nodes.find((n) => n.id === 'sweep:return');
+  retSweep.inputs = [onwardShortlist];
+  retSweep.endpoint_source = { from: onwardShortlist, field: 'dest', union: ['OKA', 'KIX'], override: null };
   const expand = graph.nodes.find((n) => n.id === 'expand');
-  expand.inputs = [...expand.inputs, gwShortlist, 'legs/outbound/onward.json', 'legs/outbound/bridge.json'];
+  expand.inputs = ['legs/outbound/shortlist.json', onwardShortlist, 'legs/return/shortlist.json', onwardPairs, onwardBridge];
   const rank = graph.nodes.find((n) => n.id === 'rank');
-  rank.inputs = ['legs/outbound/shortlist.json', 'legs/return/shortlist.json', gwShortlist, 'expand.json', 'assess.json'];
+  rank.inputs = [obShortlist, onwardShortlist, 'legs/return/shortlist.json', 'expand.json', 'assess.json'];
   return graph;
+};
+
+// A three-leg award chain with stay boundaries (SFO→NRT, NRT→BKK, BKK→$origins): every leg carries
+// its own bare-id sweep + shortlist, each chaining off the prior leg's reached dests.
+const multiCityGraph = () => {
+  const obShortlist = 'legs/outbound/shortlist.json';
+  const hopShortlist = 'legs/hop/shortlist.json';
+  const retShortlist = 'legs/return/shortlist.json';
+  return {
+    slug: SLUG,
+    trip_type: 'round_trip',
+    lodging: false,
+    requires: [],
+    quota_budget: { total: 39, nodes: [] },
+    nodes: [
+      N('sweep:outbound', 'sweep', {
+        leg: 'outbound',
+        outputs: ['legs/outbound/sweep.json'],
+        command: ['getaway', 'sweep', 'run', SLUG, 'outbound'],
+        quota: 9,
+        ttl: 24,
+      }),
+      N('shortlist:outbound', 'shortlist', {
+        leg: 'outbound',
+        inputs: ['legs/outbound/sweep.json'],
+        outputs: [obShortlist],
+        command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'outbound'],
+      }),
+      N('sweep:hop', 'sweep', {
+        leg: 'hop',
+        inputs: [obShortlist],
+        outputs: ['legs/hop/sweep.json'],
+        command: ['getaway', 'sweep', 'run', SLUG, 'hop'],
+        quota: 9,
+        ttl: 24,
+        endpoint_source: { from: obShortlist, field: 'dest', union: [], override: { dests: ['BKK'] } },
+      }),
+      N('shortlist:hop', 'shortlist', {
+        leg: 'hop',
+        inputs: ['legs/hop/sweep.json'],
+        outputs: [hopShortlist],
+        command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'hop'],
+      }),
+      N('sweep:return', 'sweep', {
+        leg: 'return',
+        inputs: [hopShortlist],
+        outputs: ['legs/return/sweep.json'],
+        command: ['getaway', 'sweep', 'run', SLUG, 'return'],
+        quota: 9,
+        ttl: 24,
+        endpoint_source: { from: hopShortlist, field: 'dest', union: [], override: null },
+      }),
+      N('shortlist:return', 'shortlist', {
+        leg: 'return',
+        inputs: ['legs/return/sweep.json'],
+        outputs: [retShortlist],
+        command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'return'],
+      }),
+      N('expand', 'expand', {
+        scope: 'journey',
+        inputs: [obShortlist, hopShortlist, retShortlist],
+        outputs: ['expand.json'],
+        command: ['getaway', 'expand', 'run', SLUG],
+        quota: 12,
+        ttl: 6,
+      }),
+      N('assess', 'assess', { scope: 'journey', inputs: ['expand.json'], outputs: ['assess.json'], routing: RESEARCH }),
+      N('rank', 'rank', {
+        scope: 'journey',
+        inputs: [obShortlist, hopShortlist, retShortlist, 'expand.json', 'assess.json'],
+        outputs: ['rank.json'],
+        command: ['getaway', 'rank', SLUG],
+      }),
+      N('finalize', 'finalize', {
+        scope: 'journey',
+        inputs: ['rank.json'],
+        outputs: ['finalists.json'],
+        command: ['getaway', 'trip', 'finalize', SLUG],
+      }),
+    ],
+  };
+};
+
+// A leading cash positioning leg (SFO→LAX, priced via pairs+bridge) feeding an award onward leg to
+// the deep destination — an open jaw with no homeward leg. The positioning leg has no sweep.
+const positioningGraph = () => {
+  const posPairs = 'legs/positioning/onward.json';
+  const posBridge = 'legs/positioning/bridge.json';
+  const onwardShortlist = 'legs/onward/shortlist.json';
+  return {
+    slug: SLUG,
+    trip_type: 'open_jaw',
+    lodging: false,
+    requires: [],
+    quota_budget: { total: 21, nodes: [] },
+    nodes: [
+      N('pairs:positioning', 'onward', {
+        leg: 'positioning',
+        outputs: [posPairs],
+        command: ['getaway', 'shortlist', 'onward', SLUG, '--leg', 'positioning'],
+        endpoint_source: { field: 'dest', union: ['LAX'], override: { dests: ['NRT'] } },
+      }),
+      N('bridge:positioning', 'bridge', {
+        leg: 'positioning',
+        inputs: [posPairs],
+        outputs: [posBridge],
+        command: ['getaway', 'bridge', SLUG, '--leg', 'positioning'],
+        ttl: 24,
+      }),
+      N('sweep:onward', 'sweep', {
+        leg: 'onward',
+        outputs: ['legs/onward/sweep.json'],
+        command: ['getaway', 'sweep', 'run', SLUG, 'onward'],
+        quota: 9,
+        ttl: 24,
+        endpoint_source: { field: 'dest', union: ['LAX'], override: { dests: ['NRT'] } },
+      }),
+      N('shortlist:onward', 'shortlist', {
+        leg: 'onward',
+        inputs: ['legs/onward/sweep.json'],
+        outputs: [onwardShortlist],
+        command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'onward'],
+      }),
+      N('expand', 'expand', {
+        scope: 'journey',
+        inputs: [onwardShortlist, posPairs, posBridge],
+        outputs: ['expand.json'],
+        command: ['getaway', 'expand', 'run', SLUG],
+        quota: 12,
+        ttl: 6,
+      }),
+      N('assess', 'assess', { scope: 'journey', inputs: ['expand.json'], outputs: ['assess.json'], routing: RESEARCH }),
+      N('rank', 'rank', {
+        scope: 'journey',
+        inputs: [onwardShortlist, 'expand.json', 'assess.json'],
+        outputs: ['rank.json'],
+        command: ['getaway', 'rank', SLUG],
+      }),
+      N('finalize', 'finalize', {
+        scope: 'journey',
+        inputs: ['rank.json'],
+        outputs: ['finalists.json'],
+        command: ['getaway', 'trip', 'finalize', SLUG],
+      }),
+    ],
+  };
 };
 
 const WORKLIST = [
@@ -244,8 +403,8 @@ const baseScript = (graph, state, over = {}) => ({
   'status:*': mkStatus(state, graph),
   'sweep:*': runStub(state),
   'shortlist:*': runStub(state),
-  onward: runStub(state),
-  bridge: runStub(state),
+  'pairs:*': runStub(state),
+  'bridge:*': runStub(state),
   expand: runStub(state),
   rank: runStub(state),
   finalize: () => {
@@ -343,6 +502,36 @@ test('open-jaw: a return-override graph walks with identical mechanics', async (
 
   assert.strictEqual(result.status, 'complete');
   assert.ok(called('sweep:return'));
+  for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
+});
+
+test('multi-city: each leg sweeps only after the prior leg shortlists, whole chain walks to done', async () => {
+  const state = mkState();
+  const { result, calls, labels } = await runWorkflow(ARGS, baseScript(multiCityGraph(), state));
+
+  assert.strictEqual(result.status, 'complete');
+  assert.strictEqual(result.trip_type, 'round_trip');
+  const order = labels();
+  assert.ok(order.indexOf('shortlist:outbound') < order.indexOf('sweep:hop'));
+  assert.ok(order.indexOf('shortlist:hop') < order.indexOf('sweep:return'));
+  assert.ok(order.indexOf('shortlist:return') < order.indexOf('expand'));
+  assert.match(findCall(calls, 'sweep:hop').prompt, /getaway sweep run my-trip hop --quota-floor 100\n/);
+  for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
+});
+
+test('positioning: a leading cash leg (pairs+bridge) and the award onward leg both walk to done', async () => {
+  const state = mkState();
+  const { result, calls, labels } = await runWorkflow(ARGS, baseScript(positioningGraph(), state));
+
+  assert.strictEqual(result.status, 'complete');
+  assert.strictEqual(result.trip_type, 'open_jaw');
+  const order = labels();
+  assert.ok(order.indexOf('pairs:positioning') < order.indexOf('bridge:positioning'));
+  assert.ok(order.indexOf('sweep:onward') < order.indexOf('shortlist:onward'));
+  assert.ok(order.indexOf('bridge:positioning') < order.indexOf('expand'));
+  assert.ok(order.indexOf('shortlist:onward') < order.indexOf('expand'));
+  assert.match(findCall(calls, 'pairs:positioning').prompt, /getaway shortlist onward my-trip --leg positioning\n/);
+  assert.match(findCall(calls, 'bridge:positioning').prompt, /getaway bridge my-trip --leg positioning\n/);
   for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
 });
 
@@ -689,7 +878,7 @@ test('evidence: the transit collector checks each cash-leg connection airport pe
   );
 
   const transit = findCall(calls, 'evidence:transit').prompt;
-  assert.match(transit, /a cash onward leg carries its own airside connection airports/);
+  assert.match(transit, /a cash leg carries its own airside connection airports/);
   assert.match(transit, /Check every cash-leg connection airport individually/);
   // A multi-stop cash hop gets one check per airport, never one blanket flag.
   assert.match(transit, /never a single generic flag for a multi-stop hop/);
@@ -878,6 +1067,19 @@ test('allowlist regression: every emitted command shape from a hybrid+lodging co
 
   assert.strictEqual(result.status, 'complete');
   for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
+});
+
+// A compile-derived program-sweep label reaches {source ≤32}-from-{continent ≤13} = 51 chars, past
+// the old 32-char LEG_SPEC label bound; the widened grammar must clear the full spec end-to-end.
+test('allowlist regression: a 51-char program-sweep spec walks to done', async () => {
+  const graph = oneWayGraph();
+  const label = 'virginatlantic-from-north-america';
+  graph.nodes.unshift(sweepNode(label));
+  graph.nodes.find((n) => n.id === 'shortlist:outbound').inputs.push(`legs/outbound/sweep-${label}.json`);
+  const { result } = await runWorkflow(ARGS, baseScript(graph, mkState()));
+
+  assert.strictEqual(result.status, 'complete');
+  assert.strictEqual(result.nodes[`sweep:outbound:${label}`].state, 'done');
 });
 
 test('injection regression: every embedded command line stays inside the allowlist', async () => {

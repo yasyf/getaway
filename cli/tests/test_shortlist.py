@@ -4,9 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from _api import api_row, seed, sweep_envelope
+from _api import api_row, seed, shortlist_doc, sweep_envelope
 
 from getaway import prefs, shortlist, trips
+from getaway.store import NoData
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 SLUG = "2026-09-warm"
@@ -18,11 +19,14 @@ def clock() -> Callable[[], dt.datetime]:
     return lambda: FROZEN
 
 
-def set_plan(slug: str, **extra: object) -> None:
-    plan: dict = {"trip_type": "one_way", "origins": ["SFO"]}
-    plan["buckets"] = [{"name": "asia", "dests": DESTS}]
-    plan.update(extra)
-    trips.set_patch(slug, {"plan": plan})
+def set_plan(slug: str, *, legs: list | None = None, **outbound_extra: object) -> None:
+    """Default single outbound award leg (asia bucket); ``outbound_extra`` overrides its fields,
+    or pass ``legs`` for a multi-intent plan."""
+    if legs is None:
+        outbound = {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": DESTS}]}
+        outbound.update(outbound_extra)
+        legs = [outbound]
+    trips.set_patch(slug, {"plan": {"legs": legs}})
 
 
 @pytest.fixture
@@ -39,10 +43,9 @@ def biz(mileage: str, seats: int = 2, airlines: str = "UA", direct: bool = True)
 
 
 def _artifact_name(key: str) -> str:
-    if key == "return":
-        return "legs/return/sweep.json"
-    _, _, label = key.partition(":")
-    return f"legs/outbound/sweep-{label}.json"
+    leg_id, _, label = key.partition(":")
+    leaf = "sweep.json" if not label else f"sweep-{label}.json"
+    return f"legs/{leg_id}/{leaf}"
 
 
 def seed_leg(
@@ -366,8 +369,15 @@ def test_superseded_rows_sum_across_constituent_sweeps(base: str) -> None:
 # --- return leg ---
 
 
+def _round_trip_legs() -> list[dict]:
+    return [
+        {"origins": ["SFO"], "buckets": [{"name": "asia", "dests": DESTS}]},
+        {"id": "return", "dests": "$origins"},
+    ]
+
+
 def test_return_leg_shortlists_by_return_origin(base: str) -> None:
-    set_plan(base, trip_type="round_trip")
+    set_plan(base, legs=_round_trip_legs())
     rows = [
         api_row("RET", "NRT", "SFO", "2026-09-20", "united", biz("70000")),
         api_row("RET2", "OKA", "SFO", "2026-09-21", "united", biz("75000")),
@@ -378,25 +388,17 @@ def test_return_leg_shortlists_by_return_origin(base: str) -> None:
     assert doc["leg"] == "return"
 
 
-# --- gateway mode ---
+def test_return_leg_home_dests_exempt_from_veto(base: str) -> None:
+    # A leg flying to "$origins" partitions by origin and never applies the destination veto: home
+    # is not a place to avoid, even when it collides with an avoid list.
+    prefs.set_patch({"avoid_destinations": ["SFO"]})
+    set_plan(base, legs=_round_trip_legs())
+    seed_leg(base, "return", [api_row("RET", "NRT", "SFO", "2026-09-20", "united", biz("70000"))])
+    doc = shortlist.shortlist(base, leg="return", now=clock())
+    assert ids(doc) == ["RET"]
 
 
-def test_gateway_mode_omits_dest_veto(base: str) -> None:
-    prefs.set_patch({"avoid_destinations": ["ICN"]})
-    set_plan(base, hybrid={"gateways": ["NRT", "ICN"], "onward_dests": ["OKA"], "max_hybrids": 3})
-    seed_leg(
-        base,
-        "outbound:gateways",
-        [
-            api_row("G-NRT", "SFO", "NRT", "2026-09-05", "united", biz("80000")),
-            api_row("G-ICN", "SFO", "ICN", "2026-09-06", "united", biz("70000")),
-        ],
-    )
-    doc = shortlist.shortlist(base, gateway=True, now=clock())
-    assert set(ids(doc)) == {"G-NRT", "G-ICN"}  # gateways are waypoints, veto omitted
-
-
-# --- onward (hybrid) ---
+# --- onward (cash/either hop) ---
 
 
 def gw(cid: str, dest: str, date: str, mileage: int) -> dict:
@@ -420,24 +422,36 @@ def onward_row(rid: str, origin: str, dest: str, date: str, mileage: str) -> dic
     return api_row(rid, origin, dest, date, "aeroplan", {"J": {"mileage": mileage, "seats": 2}})
 
 
-def test_onward_drops_rows_before_earliest_gateway_arrival(base: str) -> None:
-    set_plan(base, hybrid={"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3})
+def _hybrid_legs() -> list[dict]:
+    return [
+        {"origins": ["SFO"], "dests": ["NRT"]},  # outbound award to the gateway
+        {"id": "hop", "mode": "either", "dests": ["OKA"]},  # either hop NRT -> OKA
+        {"id": "return", "dests": "$origins"},
+    ]
+
+
+def _write_gateway_shortlist(base: str) -> None:
     trips.artifact_write(
         base,
-        "legs/outbound/shortlist-gateway.json",
+        "legs/outbound/shortlist.json",
         json.dumps(
             {
                 "candidates": [gw("GW", "NRT", "2026-09-12", 80000)],
                 "considered": 1,
                 "search_states": {},
-                "leg": "outbound:gateway",
+                "leg": "outbound",
                 "truncation": {},
             }
         ),
     )
+
+
+def test_onward_drops_rows_before_earliest_gateway_arrival(base: str) -> None:
+    set_plan(base, legs=_hybrid_legs())
+    _write_gateway_shortlist(base)
     seed(
         base,
-        "outbound:onward",
+        "hop",
         "search",
         [
             onward_row("EARLY", "NRT", "OKA", "2026-09-10", "30000"),
@@ -445,5 +459,242 @@ def test_onward_drops_rows_before_earliest_gateway_arrival(base: str) -> None:
         ],
         clock(),
     )
-    doc = shortlist.onward_minima(base, now=clock())
+    doc = shortlist.onward_minima(base, "hop", now=clock())
     assert {m["id"] for m in doc["minima"]} == {"LATER"}  # EARLY departs before gateway arrival
+
+
+def test_onward_bridge_pairs_cross_gateways_and_dests_without_award_gating(base: str) -> None:
+    # The cash lane prices every reachable (gateway, onward_dest, arrival-date) pair — never gated
+    # on award availability (the double-gating the chain-builder was contracted to undo).
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"]},
+            {"id": "hop", "mode": "cash", "dests": ["OKA", "ISG"]},
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert doc["minima"] == []  # a pure-cash leg has no award option
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("NRT", "OKA", "2026-09-12"),
+        ("NRT", "ISG", "2026-09-12"),
+    }
+
+
+def test_onward_stay_nights_shifts_bridge_pair_dates(base: str) -> None:
+    # Arrival NRT 2026-09-12, stay {2,3} -> hop departs [arrival+2 .. arrival+3] = 09-14/09-15.
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"], "stay_nights": {"min": 2, "max": 3}},
+            {"id": "hop", "mode": "cash", "dests": ["OKA"]},
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("NRT", "OKA", "2026-09-14"),
+        ("NRT", "OKA", "2026-09-15"),
+    }
+
+
+def test_onward_no_stay_keeps_same_date_pairs(base: str) -> None:
+    # Degeneracy: no stay marker leaves the hop's candidate date at the predecessor arrival.
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"]},
+            {"id": "hop", "mode": "cash", "dests": ["OKA"]},
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert {p["date"] for p in doc["bridge_pairs"]} == {"2026-09-12"}
+
+
+def test_onward_positioning_leg_prices_own_origins_over_window(base: str) -> None:
+    # A leading cash leg (endpoint_source None, inputs []) prices its own origins over its window.
+    set_plan(
+        base,
+        legs=[
+            {
+                "id": "pos",
+                "mode": "cash",
+                "origins": ["SFO"],
+                "dests": ["LAX"],
+                "window": {"start": "2026-09-01", "end": "2026-09-03"},
+            },
+            {"id": "onward", "dests": ["NRT"]},
+        ],
+    )
+    doc = shortlist.onward_minima(base, "pos", now=clock())
+    assert doc["minima"] == []
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("SFO", "LAX", "2026-09-01"),
+        ("SFO", "LAX", "2026-09-02"),
+        ("SFO", "LAX", "2026-09-03"),
+    }
+
+
+def test_onward_cash_after_cash_prices_carried_union(base: str) -> None:
+    # A cash hop past another cash leg draws gateways from endpoint_source.union, not a shortlist.
+    set_plan(
+        base,
+        legs=[
+            {
+                "id": "pos",
+                "mode": "cash",
+                "origins": ["SFO"],
+                "dests": ["LAX"],
+                "window": {"start": "2026-09-01", "end": "2026-09-02"},
+            },
+            {
+                "id": "hop",
+                "mode": "cash",
+                "dests": ["SAN"],
+                "window": {"start": "2026-09-03", "end": "2026-09-03"},
+            },
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert doc["minima"] == []
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("LAX", "SAN", "2026-09-03"),
+    }
+
+
+def test_onward_either_after_pure_cash_prices_carried_union(base: str) -> None:
+    # Regression: an either hop past a pure-cash leg draws gateways from endpoint_source.union
+    # (the cash leg's dests), never a raw KeyError from the missing origins fallback.
+    set_plan(
+        base,
+        legs=[
+            {
+                "id": "pos",
+                "mode": "cash",
+                "origins": ["SFO"],
+                "dests": ["LAX"],
+                "window": {"start": "2026-09-01", "end": "2026-09-02"},
+            },
+            {
+                "id": "hop",
+                "mode": "either",
+                "dests": ["SAN"],
+                "window": {"start": "2026-09-03", "end": "2026-09-03"},
+            },
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert doc["minima"] == []  # no hop award availability seeded
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("LAX", "SAN", "2026-09-03"),
+    }
+
+
+def test_onward_override_origins_replace_chained_gateways(base: str) -> None:
+    # Open jaw: a cash hop's explicit origins REPLACE the chained gateways — the from-shortlist NRT
+    # is dropped, the hop departs only KIX over its own window (mirrors the sweep lane).
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"]},
+            {
+                "id": "hop",
+                "mode": "cash",
+                "origins": ["KIX"],
+                "dests": ["OKA"],
+                "window": {"start": "2026-09-14", "end": "2026-09-15"},
+            },
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)  # outbound reaches NRT@2026-09-12
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert {p["gateway"] for p in doc["bridge_pairs"]} == {"KIX"}  # no NRT from the dropped chain
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("KIX", "OKA", "2026-09-14"),
+        ("KIX", "OKA", "2026-09-15"),
+    }
+
+
+def test_onward_either_after_award_override_replaces_and_keeps_own_minima(base: str) -> None:
+    # Regression (S2-fix-3): an either hop's explicit origins REPLACE the pure-award chain gateway —
+    # bridge departs only KIX, and the hop's own KIX award row survives the origin filter.
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"]},
+            {
+                "id": "hop",
+                "mode": "either",
+                "origins": ["KIX"],
+                "dests": ["OKA"],
+                "window": {"start": "2026-09-14", "end": "2026-09-15"},
+            },
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)  # outbound reaches NRT@2026-09-12
+    seed(
+        base,
+        "hop",
+        "search",
+        [onward_row("HOPKIX", "KIX", "OKA", "2026-09-14", "20000")],
+        clock(),
+    )
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("KIX", "OKA", "2026-09-14"),
+        ("KIX", "OKA", "2026-09-15"),
+    }  # exactly the override pairs — no NRT from the dropped chain
+    assert {(m["gateway"], m["onward_dest"], m["date"]) for m in doc["minima"]} == {
+        ("KIX", "OKA", "2026-09-14"),
+    }  # the KIX award row kept; the origin filter keeps override-origin rows
+
+
+def test_onward_either_after_either_carries_shortlist_and_union(base: str) -> None:
+    # An either hop past an either predecessor prices its award-reached gateway (NRT@09-12) and its
+    # cash-reachable union dest (NRT over the hop window): the cash lane ignores its own award lane.
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"], "mode": "either"},
+            {
+                "id": "hop",
+                "mode": "either",
+                "dests": ["OKA"],
+                "window": {"start": "2026-09-14", "end": "2026-09-15"},
+            },
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    _write_gateway_shortlist(base)  # outbound (either) reaches NRT@2026-09-12
+    doc = shortlist.onward_minima(base, "hop", now=clock())
+    assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
+        ("NRT", "OKA", "2026-09-12"),
+        ("NRT", "OKA", "2026-09-14"),
+        ("NRT", "OKA", "2026-09-15"),
+    }
+
+
+def test_onward_empty_chained_gateway_raises_nodata(base: str) -> None:
+    # An empty predecessor shortlist leaves the cash hop no gateway: NoData, no HTTP.
+    set_plan(
+        base,
+        legs=[
+            {"origins": ["SFO"], "dests": ["NRT"]},
+            {"id": "hop", "mode": "cash", "dests": ["OKA"]},
+            {"id": "return", "dests": "$origins"},
+        ],
+    )
+    trips.artifact_write(
+        base, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([], considered=0))
+    )
+    with pytest.raises(NoData):
+        shortlist.onward_minima(base, "hop", now=clock())

@@ -68,12 +68,7 @@ def make_trip() -> None:
             "cabin": "business",
             "party": 1,
             "window": {"start": "2026-09-01", "end": "2026-09-30", "trip_length_days": 10},
-            "plan": {
-                "trip_type": "round_trip",
-                "origins": ["SFO"],
-                "buckets": [{"name": "asia", "dests": ["NRT"]}],
-                "hybrid": {"gateways": ["NRT"], "onward_dests": ["OKA"], "max_hybrids": 3},
-            },
+            "plan": {"legs": [{"origins": ["SFO"], "mode": "cash", "dests": ["OKA"]}]},
         },
     )
 
@@ -152,7 +147,7 @@ def test_quotes_the_cheapest_priced_result(getaway_home: Path) -> None:
     def search(g: str, d: str, date: str) -> list:  # fli returns cheapest-first
         return [fake_result(120.0, airline="NH", fn="NH303"), fake_result(200.0)]
 
-    assert bridge.run(SLUG, now=clock(), search=search) == {"quotes": 1, "failures": 0}
+    assert bridge.run(SLUG, "outbound", now=clock(), search=search) == {"quotes": 1, "failures": 0}
     quote = bridge_out()["quotes"][0]
     assert quote == {
         "gateway": "NRT",
@@ -193,7 +188,9 @@ def test_connections_from_fli_multi_leg_are_non_final_arrival_iata(getaway_home:
             arr=dt.datetime(2026, 9, 10, 12, 15),
         ),
     ]
-    result = bridge.run(SLUG, now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)])
+    result = bridge.run(
+        SLUG, "outbound", now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)]
+    )
     assert result == {"quotes": 1, "failures": 0}
     quote = bridge_out()["quotes"][0]
     assert quote["stops"] == 1
@@ -223,7 +220,9 @@ def test_connections_from_fli_multi_leg_rewrites_oka_alias(getaway_home: Path) -
             arr=dt.datetime(2026, 9, 10, 12, 15),
         ),
     ]
-    result = bridge.run(SLUG, now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)])
+    result = bridge.run(
+        SLUG, "outbound", now=clock(), search=lambda g, d, date: [multi_result(280.0, legs)]
+    )
     assert result == {"quotes": 1, "failures": 0}
     quote = bridge_out()["quotes"][0]
     assert quote["stops"] == 1
@@ -247,7 +246,7 @@ def test_connections_from_serp_multi_leg_are_non_final_arrival_iata(
         lambda o, d, date, cabin, api_key=None: [multi_result(280.0, legs)],
     )
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 1, "failures": 0}
     quote = bridge_out()["quotes"][0]
     assert quote["source"] == "serpapi"
     assert quote["stops"] == 1
@@ -257,7 +256,7 @@ def test_connections_from_serp_multi_leg_are_non_final_arrival_iata(
 def test_zero_results_is_failed_never_no_fare(getaway_home: Path) -> None:
     make_trip()
     write_onward([PAIR])
-    assert bridge.run(SLUG, now=clock(), search=lambda g, d, date: None) == {
+    assert bridge.run(SLUG, "outbound", now=clock(), search=lambda g, d, date: None) == {
         "quotes": 0,
         "failures": 1,
     }
@@ -271,7 +270,9 @@ def test_zero_results_is_failed_never_no_fare(getaway_home: Path) -> None:
 def test_only_unpriced_results_is_failed(getaway_home: Path) -> None:
     make_trip()
     write_onward([PAIR])
-    result = bridge.run(SLUG, now=clock(), search=lambda g, d, date: [fake_result(None)])
+    result = bridge.run(
+        SLUG, "outbound", now=clock(), search=lambda g, d, date: [fake_result(None)]
+    )
     assert result == {"quotes": 0, "failures": 1}
     assert bridge_out()["failures"][0]["retryable"] is True
 
@@ -283,7 +284,7 @@ def test_search_exception_is_retryable_failure(getaway_home: Path) -> None:
     def boom(g: str, d: str, date: str) -> list:
         raise RuntimeError("google 500")
 
-    assert bridge.run(SLUG, now=clock(), search=boom) == {"quotes": 0, "failures": 1}
+    assert bridge.run(SLUG, "outbound", now=clock(), search=boom) == {"quotes": 0, "failures": 1}
     failure = bridge_out()["failures"][0]
     assert failure["retryable"] is True
     assert "search error" in failure["reason"]
@@ -308,12 +309,10 @@ def test_fli_success_never_calls_serpapi(
         serp_calls.append("search")
         return [fake_result(90.0)]
 
-    monkeypatch.setattr(
-        bridge.serp, "resolve_api_key_if_available", resolve_api_key_if_available
-    )
+    monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", resolve_api_key_if_available)
     monkeypatch.setattr(bridge.serp, "search", serp_search)
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 1, "failures": 0}
     assert serp_calls == []
     assert bridge_out()["quotes"][0]["source"] == "fli"
 
@@ -338,7 +337,7 @@ def test_fli_error_falls_back_to_serpapi(
     monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
     monkeypatch.setattr(bridge.serp, "search", serp_search)
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 1, "failures": 0}
     assert calls == [("NRT", "OKA", "2026-09-10", "economy", "serp-key")]
     assert bridge_out()["quotes"][0] == {
         "gateway": "NRT",
@@ -381,7 +380,7 @@ def test_fli_without_priced_results_falls_back_to_serpapi(
 
     monkeypatch.setattr(bridge.serp, "search", serp_search)
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 1, "failures": 0}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 1, "failures": 0}
     assert calls == [("NRT", "OKA", "2026-09-10", "economy", "serp-key")]
     assert bridge_out()["quotes"][0]["source"] == "serpapi"
 
@@ -404,7 +403,7 @@ def test_both_search_backends_fail_once(
     monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: "serp-key")
     monkeypatch.setattr(bridge.serp, "search", serp_search)
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 0, "failures": 1}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 0, "failures": 1}
     assert bridge_out() == {
         "quotes": [],
         "failures": [
@@ -439,7 +438,7 @@ def test_missing_serpapi_key_preserves_fli_failure_detail(
     monkeypatch.setattr(bridge.serp, "resolve_api_key_if_available", lambda: None)
     monkeypatch.setattr(bridge.serp, "search", serp_search)
 
-    assert bridge.run(SLUG, now=clock()) == {"quotes": 0, "failures": 1}
+    assert bridge.run(SLUG, "outbound", now=clock()) == {"quotes": 0, "failures": 1}
     assert serp_calls == []
     assert bridge_out() == {
         "quotes": [],
@@ -464,7 +463,7 @@ def test_past_origin_local_date_is_nonretryable_and_never_queried(getaway_home: 
         calls.append(date)
         return [fake_result(120.0)]
 
-    assert bridge.run(SLUG, now=clock(), search=search) == {"quotes": 0, "failures": 1}
+    assert bridge.run(SLUG, "outbound", now=clock(), search=search) == {"quotes": 0, "failures": 1}
     assert calls == []  # a date already past in the gateway's local day is never sent to Google
     failure = bridge_out()["failures"][0]
     assert failure["retryable"] is False
@@ -480,7 +479,7 @@ def test_unknown_gateway_offset_skips_the_past_date_guard(getaway_home: Path) ->
         calls.append(date)
         return [fake_result(90.0)]
 
-    bridge.run(SLUG, now=clock(), search=search)
+    bridge.run(SLUG, "outbound", now=clock(), search=search)
     assert calls == [
         "2026-08-01"
     ]  # no offset known -> rely on the zero-results surface, still query
@@ -512,5 +511,31 @@ def test_oka_alias_fix_patches_encode_and_decode(getaway_home: Path) -> None:
 def test_bridge_stamps_its_node(getaway_home: Path) -> None:
     make_trip()
     write_onward([PAIR])
-    bridge.run(SLUG, now=clock(), search=lambda g, d, date: [fake_result(120.0)])
-    assert trips.phase_check(SLUG, "bridge", now=clock())[1] is not None
+    bridge.run(SLUG, "outbound", now=clock(), search=lambda g, d, date: [fake_result(120.0)])
+    assert trips.phase_check(SLUG, "bridge:outbound", now=clock())[1] is not None
+
+
+def test_positioning_onward_bridges_to_quotes(getaway_home: Path) -> None:
+    # End-to-end: a leading cash leg's compiled pairs node feeds real onward pairs into bridge.
+    from getaway import shortlist
+
+    prefs.init()
+    trips.new(SLUG, now=clock())
+    trips.set_patch(
+        SLUG,
+        {
+            "cabin": "business",
+            "party": 1,
+            "window": {"start": "2026-09-01", "end": "2026-09-02", "trip_length_days": 10},
+            "plan": {
+                "legs": [
+                    {"id": "pos", "mode": "cash", "origins": ["SFO"], "dests": ["LAX"]},
+                    {"id": "onward", "dests": ["NRT"]},
+                ]
+            },
+        },
+    )
+    onward = shortlist.onward_minima(SLUG, "pos", now=clock())
+    assert onward["bridge_pairs"]  # positioning prices SFO->LAX over the window (no dead plumbing)
+    out = bridge.run(SLUG, "pos", now=clock(), search=lambda g, d, date: [fake_result(120.0)])
+    assert out == {"quotes": 2, "failures": 0}

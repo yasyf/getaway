@@ -14,11 +14,13 @@ SLUG = "2026-09-warm"
 WINDOW = {"start": "2026-09-01", "end": "2026-09-30", "trip_length_days": 4}
 
 ROUND_TRIP_LODGING = {
-    "trip_type": "round_trip",
-    "origins": ["SFO"],
-    "buckets": [{"name": "warm", "dests": ["CUN"]}],
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "warm", "dests": ["CUN"]}]},
+        {"id": "return", "dests": "$origins"},
+    ],
     "lodging": {},
 }
+ONE_WAY_LEGS = ROUND_TRIP_LODGING["legs"][:1]  # drop the return: a one-way lodging plan
 
 
 def clock() -> Callable[[], dt.datetime]:
@@ -144,14 +146,14 @@ def node(graph: dict, node_id: str) -> dict:
 
 
 def test_one_way_lodging_without_checkout_compiles_no_stays_node(getaway_home: Path) -> None:
-    graph = trips.compile_graph(_trip({**ROUND_TRIP_LODGING, "trip_type": "one_way"}))
+    graph = trips.compile_graph(_trip({**ROUND_TRIP_LODGING, "legs": ONE_WAY_LEGS}))
     assert "stays" not in [n["id"] for n in graph["nodes"]]
     assert graph["requires"] == []  # no checkout to derive → no session need
     assert "stays.json" not in node(graph, "finalize")["inputs"]
 
 
 def test_one_way_lodging_with_explicit_checkout_compiles_stays_node(getaway_home: Path) -> None:
-    plan = {**ROUND_TRIP_LODGING, "trip_type": "one_way", "lodging": {"checkout": "2026-09-20"}}
+    plan = {**ROUND_TRIP_LODGING, "legs": ONE_WAY_LEGS, "lodging": {"checkout": "2026-09-20"}}
     graph = trips.compile_graph(_trip(plan))
     assert graph["requires"] == ["rooms_session"]
     assert node(graph, "stays")["outputs"] == ["stays.json"]
@@ -500,9 +502,10 @@ def test_finalize_walks_a_cash_hybrid_with_observed_arrival(getaway_home: Path) 
 
 def test_finalize_without_lodging_threads_no_lodging_fields(getaway_home: Path) -> None:
     plan = {
-        "trip_type": "round_trip",
-        "origins": ["SFO"],
-        "buckets": [{"name": "warm", "dests": ["CUN"]}],
+        "legs": [
+            {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "warm", "dests": ["CUN"]}]},
+            {"id": "return", "dests": "$origins"},
+        ]
     }
     slug = _trip(plan)
     _write_finalize_inputs(slug, ranked=[journey("J-CUN")])
