@@ -72,7 +72,29 @@ Invariants on every rung:
 
 Pro keys get 1,000 calls per day, resetting at midnight UTC. The floor enforces at the client: every API call reserves a unit before the request and reconciles the response header after, so parallel fan-outs cannot jointly cross it. `--quota-floor N` rides every API-spending command (default 100; `0` is a deliberate spend-down), and a floor stop exits 1 with the work recorded as `not_run` — distinct from a data failure, and resumable once quota returns. One page with a big `--take` beats `--pages`, since each page is a separate call. Answer follow-ups from `cache query` — zero quota; a new call needs a question the cache cannot answer. Stays spend zero seats.aero quota. When the engine starts refusing at the floor, tell the user rather than lowering it.
 
-## Planning a trip
+## Invent the shape, then price it
+
+The founding instruction, verbatim: "the point is we can get creative with routings". The plan is `plan.legs` — an ordered list of leg-intents — and a journey is any chain of concrete legs satisfying them. There is no trip-type enum: a round trip, an open jaw, a multi-city stitch, a positioning hop, and a shape nobody has named yet all compile through the same fold. Parse the ask into the shape the user actually described, then let every shape compete as a journey — pre-filtering is the search box this skill exists to replace.
+
+The leg-intent primitives:
+
+| Primitive | What it expresses |
+|---|---|
+| `origins` / `dests` | Endpoints: IATA codes, region pseudo-codes, `"$origins"` as the whole dests value on the homeward leg. Omitted origins chain from wherever the prior leg lands; explicit endpoints on a later leg are an open jaw and REPLACE the chained anchor. |
+| `mode: award\|cash\|either` | Which pricing lanes the leg rides: award sweeps, the cash bridge, or both competing. |
+| `stay_nights: {min, max}` | Marks a stop and bounds the next leg's derived window; each stay-marked boundary becomes a lodging interval when `plan.lodging` is in scope. |
+| `optional: true` | The leg fans into with/without variants competing on one front — a positioning hop surfaces beside its home-origin-direct alternative, priced, never assumed. |
+| `buckets` / `program_sweeps` | Sweep groupings on an award leg: named dest buckets, per-program region sweeps. |
+| `dests: {discover: {brief, max_airports}}` | Judgment picks the endpoints: a zero-quota scout node researches the brief, and its validated airports feed the leg's sweep beside anything declared. |
+| `window` | Per-leg date bounds; omitted windows derive from the prior leg's observed arrivals plus its stay. |
+| `plan.tuning` | Per-trip knob overrides — presentation limit, expansion budget per endpoint, beam width, sweep page budget, date padding — when the ask warrants wider or thriftier search than the defaults. |
+| `legs/manual.json` | The escape hatch: declare explicit candidate chains by hand — availability ids plus cash pairs — and `expand` prices them through the same deterministic fit, cost, and miss lanes as composed journeys. |
+
+The downstream stages — sweep, shortlist, pairs/bridge, expand, assess, rank, stays, enhance — are à la carte primitives: `trip compile` derives which of them any shape needs, and each is a CLI command an agent can run alone (a lone `sweep run` answering "any J space to Tokyo in March?" is a legitimate use of this skill). The compiled graph is the default orchestration, not the only one.
+
+## The canonical walk
+
+The dense canonical ask — warm, beachy, business, avoid the usual — runs end to end below. It is one worked example in conventional ids (`outbound`/`return`), not a mandate: a different shape pins different legs at step 5, and when `plan-trip.js` cannot express the walk, author one per [references/workflows.md](references/workflows.md).
 
 1. Warm up and check config: `$CLI prefs status` at the main level.
 2. Resume before creating: `$CLI trip list`, and when an open trip matches the ask, `$CLI trip resume <slug>` and skip everything it already pins. Otherwise parse the dense ask clause by clause; [references/planning.md](references/planning.md) works the canonical sentence.

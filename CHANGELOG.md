@@ -13,6 +13,15 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Changed
+- The skill flips from a twelve-step mandate to a primitives catalog:
+  "Invent the shape, then price it" leads SKILL.md with the leg-intent
+  vocabulary — chained and open-jaw endpoints, `either`-mode legs, stay
+  stops, optional variants, discover scouts, per-trip tuning, manual
+  chains — and the canonical warm-beachy walk demotes to one worked
+  example in conventional ids. The reference docs and doctrine follow:
+  planning.md sheds the last removed-key mechanics, "Hybrid fan-out is
+  bounded" generalizes to composition bounds, and two new rulings land
+  (declared inputs re-validate at read; scout adds, never gates).
 - The leg-intent cutover: `plan.legs` — an ordered list of intents
   (origins, dests, `award|cash|either` mode, per-leg windows,
   `stay_nights` stops, `"$origins"` as the homeward marker, open jaws

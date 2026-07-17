@@ -32,7 +32,7 @@ Every agent runs at its node's emitted `routing`. The pins also shrink the blast
 |---|---|---|
 | Mechanical runner | Emitted-command execution, JSON shaping, status re-reads | `sonnet` low |
 | Single-fact labeling | Classify or label one thing per item | `haiku` |
-| Research and judgment | Evidence collectors, `assess`, the stays walk | `opus` xhigh, or gpt-5.6-terra via the `codex:codex-wrapper` agent type (Workflow `model` opts take only Claude models) |
+| Research and judgment | Evidence collectors, `assess`, `scout`, the stays walk | `opus` xhigh, or gpt-5.6-terra via the `codex:codex-wrapper` agent type (Workflow `model` opts take only Claude models) |
 
 Fable never runs a trip-planning subagent; a walker that ignores routing burns fable-class tokens on sweep runners.
 

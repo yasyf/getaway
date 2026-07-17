@@ -12,7 +12,7 @@ The canonical ask, from the founding transcript:
 
 | Clause | Where it lands |
 |---|---|
-| "roughly a week" | `trip_type: "round_trip"` (a round trip is implied) with `preferences.trip_length: {value: {days: 7, basis: "elapsed_door_to_door"}, priority: "secondary"}` — and a week away implies a bed, so `plan.lodging` comes in scope |
+| "roughly a week" | a round trip is implied: two `plan.legs` intents, the destination leg plus a `return` with `dests: "$origins"`, with `preferences.trip_length: {value: {days: 7, basis: "elapsed_door_to_door"}, priority: "secondary"}` — and a week away implies a bed, so `plan.lodging` comes in scope |
 | "leaving in the next couple days" | `preferences.outbound_departure_window` a day or two out; soft dates sweep the stated range plus seven days of padding, so a near-miss exists in the cache before the model judges it |
 | "outside north america" | `regions.exclude: ["North America"]` |
 | "warm, beachy" | `vibe: ["warm", "beachy"]` — activates `destination_context`; weather in the window becomes evidence, never a filter |
@@ -33,7 +33,9 @@ Widen outward only when the region comes back thin: add positioning origins one 
 
 When the destination is a region or a vibe, sweep pseudo-codes on `/search` first. `QAF` leads every Africa ask: it works on `/search` despite sitting in no UI-documented list, and its observed expansion (CMN, CAI, ADD, CPT, JNB, NBO) is a floor, not a ceiling. `ASA` covers Asia's large airports, `EUR` Europe's; `registry regions` carries every code with observed expansions — never hand-maintain a list.
 
-When no pseudo-code fits, fall back to per-program `plan.program_sweeps` entries (`availability --dest-region <Continent>` under the hood), ordered funded-programs-first and never trimmed to the funded ones: preferences order, never gate. One caution: the API's Africa region includes Indian Ocean (MRU, MLE) and Canary Islands (FUE, ACE) rows; drop them when the user means the continent.
+When no pseudo-code fits, fall back to per-program `program_sweeps` entries on the leg (`availability --dest-region <Continent>` under the hood), ordered funded-programs-first and never trimmed to the funded ones: preferences order, never gate. One caution: the API's Africa region includes Indian Ocean (MRU, MLE) and Canary Islands (FUE, ACE) rows; drop them when the user means the continent.
+
+When the right endpoints are a judgment call rather than a region — "somewhere with great diving reachable from NRT" — mark the leg `dests: {discover: {brief: "...", max_airports: N}}`. The compiled graph gains a zero-quota `scout:<leg-id>` node on the research lane; its validated airports feed the leg's sweep beside anything declared. Scout adds endpoints, never gates: buckets and program sweeps on the same leg keep sweeping.
 
 Every sweep asks for all cabins in one call with `include_filtered=true` — cabin is a preference, and the server's dynamic-price filter would otherwise hide the expensive near-misses the judgment lanes exist to weigh.
 
@@ -49,11 +51,11 @@ Transfer first. When a transfer covers the gap, name the bank, the amount, and t
 
 ## Journeys
 
-The journey is the unit of search, ranking, and presentation: one concrete outbound — plus onward or bridge legs on hybrids — paired with one concrete return leg on round trips. One dispatch plans the whole thing. Return endpoints resolve mid-run from the outbound shortlist plus any declared `onward_dests`, and one comma-listed `/search` call sweeps returns for every candidate endpoint. Pairing happens before ranking, so combined cost and symmetric per-leg judgment — seat quality, layovers, transit, on the return too — decide the board.
+The journey is the unit of search, ranking, and presentation: one concrete leg per intent — award rows, cash quotes, or both on `either` legs — chained into a whole trip. One dispatch plans the whole thing. A chained leg's endpoints resolve mid-run from the prior leg's reached dests — its shortlist landings, plus its declared concrete dests across a cash boundary — and one comma-listed `/search` call sweeps every candidate endpoint. Composition happens before ranking, so combined cost and symmetric per-leg judgment — seat quality, layovers, transit, on the return too — decide the board.
 
 Search results are honest per endpoint: `complete`, `searched_empty`, `partial` (a truncated page is not an empty one), `not_run`, or `failed`. An outbound whose return search came back empty becomes an unpaired lead — a trailing board class ordered by outbound mileage, each showing when its return was searched and how stale that answer is. An expired cached empty reads "unverified", and `partial`/`not_run`/`failed` never read as "no space".
 
-An open jaw is the same single dispatch with `plan.return` overrides — explicit origins, destinations, or window replace the derived ones; return origins are veto-checked, home destinations are exempt.
+An open jaw is the same single dispatch with explicit origins or dests declared on a later leg — declared endpoints REPLACE the chained anchor wherever they appear; return origins are veto-checked, home destinations are exempt.
 
 ## Routing strategies
 
@@ -62,10 +64,11 @@ The founding instruction, verbatim: "lie flat on points to a common airport such
 - Direct award — one availability row; the baseline every hybrid must beat.
 - Gateway hybrid — a lie-flat award to a hub, a cash ticket onward. Three ordered `plan.legs` express it — an award leg to the gateway, an `either`-mode middle leg onward, then the return — beam-capped and cheap-ranked before any expansion spends quota. Hybrid journeys compose at expand with legs typed `award|cash`, so assess judges the cash hop's layover like any other leg.
 - Two-award stitch — a second award onward from the gateway, any program.
-- Cash positioning — a cash hop to the award's true origin when it isn't the user's airport.
+- Cash positioning — a cash hop to the award's true origin when it isn't the user's airport. Declare it as a leading `optional: true` cash leg: both variants compose — positioned, and home-origin-direct — and compete on the same front, so the hop is priced, never assumed.
 - Long-range positioning — a cheap long cash leg into an award-rich region, then the award from there.
+- Hand-built chain — a routing you found yourself, or one the beam cut: declare it in `legs/manual.json` (availability ids plus cash pairs) and `expand` prices it through the same deterministic fit, cost, and miss lanes as any composed journey. A chain skipping an optional leg is legal; a stale chain after a plan edit lands in `manual_rejected` with its reason.
 
-Gateway sets are concrete IATA codes, never pseudo-codes. Seed them from the expansions in `registry regions`; refine per program with `routes <source>` ranked by monitored-route count: one call returns the program's entire route map, so redirect it to a scratch file. The cabin for each cash or stitched leg is a per-leg judgment call fed by duration fit facts — there is no fixed cutoff. The avoid union never vetoes a gateway: Tokyo on the avoid list kills NRT as an endpoint, not as the hub the award lands at. `trip set` enforces the flip side, rejecting an onward set that intersects the union.
+Gateway sets are concrete IATA codes, never pseudo-codes. Seed them from the expansions in `registry regions`; refine per program with `routes <source>` ranked by monitored-route count: one call returns the program's entire route map, so redirect it to a scratch file. When the hub set itself is the judgment call, `dests: {discover: ...}` hands it to a scout node instead. The cabin for each cash or stitched leg is a per-leg judgment call fed by duration fit facts — there is no fixed cutoff. The avoid union never vetoes a gateway: Tokyo on the avoid list kills NRT as an endpoint, not as the hub the award lands at. `trip set` enforces the flip side, rejecting an onward set that intersects the union.
 
 Cash legs price through `getaway bridge <slug> --leg <id>` — the fli driver with the Airport-alias and origin-local-date hardening built in — and each priced quote carries its real departure and arrival clocks, which is what lets a hybrid's lodging interval derive honestly. When the fli driver fails a pair and a SerpApi key is on file (`SERPAPI_API_KEY` or the `serpapi_op_ref` preference), bridge falls back to SerpApi's Google Flights API for that pair — quotes carry `source: fli|serpapi`.
 

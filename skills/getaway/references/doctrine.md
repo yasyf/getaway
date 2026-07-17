@@ -28,7 +28,7 @@ Background verification is incremental enhancement: fire-and-forget agents that 
 
 ## Expansion is budgeted, and truncation is disclosed
 
-Twelve expansions per endpoint per leg, selection diversified across date, program, and cost cohorts, truncation always disclosed. No global cap: one hot endpoint never starves the others into false returnlessness. (cc-notes fdd212c0)
+The per-endpoint expansion budget — default twelve, overridable per trip through `plan.tuning.expansion_budget_per_endpoint` — diversifies selection across date, program, and cost cohorts, truncation always disclosed. No global cap: one hot endpoint never starves the others into false returnlessness. (cc-notes fdd212c0, 664182ee)
 
 ## QAF first for Africa; pseudo-codes never reach filters
 
@@ -42,9 +42,13 @@ The avoid union — prefs `avoid_destinations` plus the trip's `avoid_final_dest
 
 The cash-or-award cabin call happens leg by leg — a judgment fed by duration fit facts, not a cutoff constant — never once per trip. A business award with an economy cash hop onward is the intended shape, not an inconsistency. (cc-notes 9d2d74b3)
 
-## Hybrid fan-out is bounded
+## Composition is bounded, and every cut is disclosed
 
-A gateway hybrid is three ordered `plan.legs` — a lie-flat award to the gateway, an `either`-mode hop onward, then the return — composed by the chain-builder, beam-capped and cheap-ranked before any expansion spends quota. A plan whose legs declare no cash or `either` hop compiles zero hybrid nodes — absence is structural, not a reduced mode. (cc-notes 9d2d74b3)
+Two-leg plans compose exhaustively. Longer chains cheap-rank on (miles, cash) under the plan's beam width before any expansion spends quota, the cut disclosed as `beam_cut`; `optional` legs fan into include/skip variants on the same front, sweep coverage provably enveloping every skip variant, and a variant opening on the homeward leg is structurally excluded. A plan whose legs declare no cash or `either` hop compiles zero hybrid nodes — absence is structural, not a reduced mode. (cc-notes 664182ee, 75cfaf49)
+
+## Declared inputs re-validate at read; scout adds, never gates
+
+`legs/manual.json` and `legs/<id>/scout.json` are agent-authored inputs, not derived artifacts: they never fingerprint-invalidate, so every read re-validates against the current plan. A stale or spec-violating artifact is a typed, remedied rejection — never a crash, a silent truncation, or a NoData masquerading as an empty market. A manual chain covers every mandatory leg in plan order and may skip optional legs; its subset is its variant, priced through the same deterministic lanes as composed journeys. Scout airports feed a discover leg's sweep beside any declared buckets or program sweeps — discovery widens retrieval, never narrows it. (cc-notes 664182ee)
 
 ## Lodging derives from observed clocks
 
