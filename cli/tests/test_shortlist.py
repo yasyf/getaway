@@ -344,13 +344,15 @@ def test_soft_avoid_sorts_never_filters(base: str) -> None:
     assert {c["id"]: c["soft"] for c in doc["candidates"]} == {"CLEAN": False, "SOFT": True}
 
 
-def cohort_cand(cid: str, mileage: int, soft: bool, cabin: str = "J") -> dict:
+def cohort_cand(
+    cid: str, mileage: int, soft: bool, cabin: str = "J", date: str = "2026-09-05"
+) -> dict:
     return {
         "id": cid,
         "mileage": mileage,
         "soft": soft,
         "cabin": cabin,
-        "date": "2026-09-05",
+        "date": date,
         "source": "united",
     }
 
@@ -359,7 +361,7 @@ def test_cohort_select_keeps_cheaper_soft_over_pricier_clean_under_budget() -> N
     # Soft-avoid rides ranking, never retrieval: when the per-endpoint budget truncates the
     # cohort to one, the cheaper soft-avoided candidate survives over the pricier clean one.
     cands = [cohort_cand("CLEAN", 90000, soft=False), cohort_cand("SOFT", 70000, soft=True)]
-    selected = shortlist._cohort_select(cands, budget=1)
+    selected = shortlist._cohort_select(cands, budget=1, window_dates={"2026-09-05"})
     assert [c["id"] for c in selected] == ["SOFT"]
 
 
@@ -383,6 +385,64 @@ def test_cohort_select_interleaves_cabins_so_business_survives_economy_flood(bas
     assert by_cabin == {"Y": 6, "J": 6}  # every cost tier represented, not an all-economy flood
     assert len(doc["candidates"]) == 12  # EXPANSION_BUDGET_PER_ENDPOINT
     assert doc["truncation"]["NRT"] == {"considered": 18, "kept": 12}
+
+
+def test_cohort_select_interleaves_window_membership_over_padding() -> None:
+    # R-L: out-of-window padding is the cheapest per-cabin cohort and would fill the budget alone;
+    # window membership, the outermost axis, keeps in-window rows too.
+    pad = [
+        cohort_cand(f"PAD{i}", 40000, soft=False, date=f"2026-08-{26 + i:02d}") for i in range(6)
+    ]
+    inw = [cohort_cand(f"IN{i}", 41000, soft=False, date=f"2026-09-{6 + i:02d}") for i in range(6)]
+    window = {f"2026-09-{6 + i:02d}" for i in range(6)}
+
+    selected = shortlist._cohort_select(pad + inw, budget=6, window_dates=window)
+
+    assert sum(c["id"].startswith("IN") for c in selected) == 3  # in-window rows survive
+    assert sum(c["id"].startswith("PAD") for c in selected) == 3  # padding stays represented
+    # Reinject: strip the axis (all dates in-window) and padding floods the budget.
+    all_in = window | {f"2026-08-{26 + i:02d}" for i in range(6)}
+    flooded = shortlist._cohort_select(pad + inw, budget=6, window_dates=all_in)
+    assert [c["id"] for c in flooded] == [f"PAD{i}" for i in range(6)]
+
+
+def test_cohort_select_single_window_side_selects_byte_identically() -> None:
+    # Degeneracy pin (R-L): a single-sided pool selects identically judged in- or out-of-window.
+    cands = [
+        cohort_cand(f"R{i}", 80000 + i, soft=False, date=f"2026-09-{5 + i:02d}") for i in range(4)
+    ]
+    dates = {f"2026-09-{5 + i:02d}" for i in range(4)}
+    all_in = shortlist._cohort_select(list(cands), budget=3, window_dates=dates)
+    all_out = shortlist._cohort_select(list(cands), budget=3, window_dates=set())
+    assert [c["id"] for c in all_in] == [c["id"] for c in all_out] == ["R0", "R1", "R2"]
+
+
+def test_window_membership_survives_endpoint_budget_end_to_end(base: str) -> None:
+    # R-L end to end: the trip window (via _window_dates) drives the axis through the shortlist.
+    trips.set_patch(
+        base,
+        {
+            "plan": {
+                "legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": DESTS}]}],
+                "tuning": {"expansion_budget_per_endpoint": 6},
+            }
+        },
+    )
+    rows = [
+        api_row(f"PAD{i}", "SFO", "NRT", f"2026-08-{26 + i:02d}", "united", biz("40000"))
+        for i in range(6)
+    ]
+    rows.extend(
+        api_row(f"IN{i}", "SFO", "NRT", f"2026-09-{6 + i:02d}", "united", biz("41000"))
+        for i in range(6)
+    )
+
+    doc = run(base, rows)
+
+    kept = ids(doc)
+    assert sum(cid.startswith("IN") for cid in kept) == 3  # window rows survive the tuned budget
+    assert sum(cid.startswith("PAD") for cid in kept) == 3  # padding still represented
+    assert doc["truncation"]["NRT"] == {"considered": 12, "kept": 6}
 
 
 def test_search_states_pass_through_from_sweep(base: str) -> None:

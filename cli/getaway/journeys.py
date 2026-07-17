@@ -508,7 +508,7 @@ def _compose_chains(
     leg_states: dict,
     now: Callable[[], dt.datetime],
     manual_rejected: list[dict] | None = None,
-) -> tuple[list[dict], list[dict], set[str], bool]:
+) -> tuple[list[dict], list[dict], set[str], bool, dict[str, dict[str, int]]]:
     """Expand beam-survivor chains lazily, refine continuity, gate transit/seats, emit journeys.
 
     Each ``tagged`` entry is ``(variant_legs, chain)`` — the chain's own intent subset, since an
@@ -519,13 +519,23 @@ def _compose_chains(
     "manual"``, and a chain that composition would silently drop (a leg with no bookable itinerary,
     or a continuity break) is disclosed there with its reason rather than dropped.
 
-    Returns ``(journeys, gated, composed_heads, quota_stopped)`` where ``composed_heads`` is the set
-    of first-leg award candidate ids that reached a journey — used to surface the rest as leads.
+    Returns ``(journeys, gated, composed_heads, quota_stopped, variant_stats)``. ``composed_heads``
+    is the set of first-leg award candidate ids that reached a journey — used to surface the rest as
+    leads. ``variant_stats`` (R-M) maps each variant key — its included leg ids joined by ``+`` — to
+    honest per-variant counts (``chains_built``, ``chains_expanded``, ``dropped_continuity``,
+    ``journeys``), so an optional-leg variant whose chains all die at continuity is disclosed rather
+    than silently starved; the caller attaches it to provenance only when the plan has optionals.
     """
     journeys: list[dict] = []
     gated: list[dict] = []
     composed_heads: set[str] = set()
+    variant_stats: dict[str, dict[str, int]] = {}
     for variant_legs, chain in tagged:
+        stats = variant_stats.setdefault(
+            "+".join(leg["id"] for leg in variant_legs),
+            {"chains_built": 0, "chains_expanded": 0, "dropped_continuity": 0, "journeys": 0},
+        )
+        stats["chains_built"] += 1
         legs_typed: list[dict] = []
         quota_stopped = False
         fail_reason = ""
@@ -549,13 +559,15 @@ def _compose_chains(
             leg_states[key] = {"state": "expanded"}
             legs_typed.append(_leg(role, row, detail, fetched_at))
         if quota_stopped:
-            return journeys, gated, composed_heads, True
+            return journeys, gated, composed_heads, True, variant_stats
         if fail_reason:
             if manual_rejected is not None:
                 ref = _manual_chain_ref(variant_legs, chain)
                 manual_rejected.append({"chain": ref, "reason": fail_reason})
             continue
+        stats["chains_expanded"] += 1
         if not _chain_continuous(legs_typed, variant_legs, min_connection):
+            stats["dropped_continuity"] += 1
             if manual_rejected is not None:
                 ref = _manual_chain_ref(variant_legs, chain)
                 reason = _continuity_reason(legs_typed, variant_legs, min_connection)
@@ -589,7 +601,8 @@ def _compose_chains(
         if manual_rejected is not None:
             journey["provenance"] = "manual"
         journeys.append(journey)
-    return journeys, gated, composed_heads, False
+        stats["journeys"] += 1
+    return journeys, gated, composed_heads, False, variant_stats
 
 
 def _unpaired_leads(
@@ -970,7 +983,7 @@ def run(
         beam_cut = len(feasible) - len(kept)
     else:
         kept = tagged
-    journeys, gated, composed_heads, quota_stopped = _compose_chains(
+    journeys, gated, composed_heads, quota_stopped, variant_stats = _compose_chains(
         trip, prefs_doc, legs, kept, expander, avoid_transit, min_connection, leg_states, now
     )
 
@@ -980,7 +993,7 @@ def run(
         manual_doc = _manual_chains(slug)
         if manual_doc is not None:
             tagged_manual = _manual_tagged(legs, pools, manual_doc, manual_rejected)
-            m_journeys, m_gated, m_heads, m_quota = _compose_chains(
+            m_journeys, m_gated, m_heads, m_quota, _ = _compose_chains(
                 trip, prefs_doc, legs, tagged_manual, expander, avoid_transit,
                 min_connection, leg_states, now, manual_rejected=manual_rejected,
             )
@@ -1035,6 +1048,8 @@ def run(
         provenance["truncation"] = {"beam_cut": beam_cut}
     if date_infeasible:
         provenance["date_infeasible"] = date_infeasible
+    if any(leg.get("optional") for leg in legs):  # R-M: variants disclosed only when they exist
+        provenance["variants"] = variant_stats
     doc = {
         "journeys": journeys,
         "unpaired_outbounds": unpaired,

@@ -1242,6 +1242,57 @@ def test_optional_leg_skip_variant_absent_without_a_home_origin_candidate(home: 
     assert "leads" not in doc
 
 
+def test_optional_positioned_variant_starvation_disclosed_in_provenance(home: Path) -> None:
+    # R-M: the positioned variant's onward padding row departs LAX before the cash positioning
+    # lands, so it expands then dies at continuity — per-variant provenance keeps that honest.
+    slug = make_trip(POSITIONING)
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(
+            shortlist_doc(
+                [
+                    cand("ONW-LAX", "LAX", "NRT", "2026-08-31"),
+                    cand("ONW-SFO", "SFO", "NRT", "2026-09-05"),
+                ],
+                leg="onward",
+            )
+        ),
+    )
+    seed("ONW-LAX", detail("ONW-LAX", [seg("LAX", "NRT", "2026-08-31T10:00", "2026-09-01T14:00")]))
+    seed("ONW-SFO", detail("ONW-SFO", [seg("SFO", "NRT", "2026-09-05T09:00", "2026-09-06T13:00")]))
+    _positioning_bridge(slug)
+
+    doc = _run(slug)
+
+    assert [j["id"] for j in doc["journeys"]] == ["onward:ONW-SFO:J"]  # only the direct variant
+    variants = doc["provenance"]["variants"]
+    assert variants["positioning+onward"] == {
+        "chains_built": 1,
+        "chains_expanded": 1,
+        "dropped_continuity": 1,
+        "journeys": 0,
+    }
+    assert variants["onward"] == {
+        "chains_built": 1,
+        "chains_expanded": 1,
+        "dropped_continuity": 0,
+        "journeys": 1,
+    }
+
+
+def test_no_optional_plan_has_no_variants_provenance_key(home: Path) -> None:
+    # R-M degeneracy: a plan without optional legs keeps byte-identical provenance, no variants key.
+    slug = make_trip(ONE_WAY)
+    seed("OB", ob_detail("OB"))
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+
+    doc = _run(slug)
+
+    assert len(doc["journeys"]) == 1
+    assert "variants" not in doc["provenance"]
+
+
 POSITIONING_OPEN_JAW = {
     "legs": [
         {

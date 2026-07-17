@@ -56,19 +56,32 @@ def _group_best(candidates: list[Row]) -> list[Row]:
     return list(best.values())
 
 
-def _cohort_select(cands: list[Row], budget: int) -> list[Row]:
-    """Round-robin across (date, source, cabin) cohorts, cheapest first — no hot date, program, or
-    cabin fills the per-endpoint budget on its own. Cabins interleave so each cost tier's cheapest
-    cohort is reached before the budget is spent; mileage-order alone would drain every economy
-    cohort before any business one. Diversity, not preference: cohorts carry no trip-cabin weight.
+def _cohort_select(cands: list[Row], budget: int, window_dates: set[str]) -> list[Row]:
+    """Round-robin across (date, source, cabin) cohorts, cheapest first, interleaved on two
+    diversity axes so no hot date, program, cabin, OR window side fills the per-endpoint budget.
+
+    Window membership — a row's date inside the leg's own window (its absolute ``window`` or the
+    trip window, per :func:`_window_dates`; read straight off the trip/leg intent, no
+    sweep-provenance parse and no preference lookup) vs a padded soft-date near-miss outside it — is
+    the OUTERMOST interleave axis, wrapping the R-I cabin interleave: within each window side cabins
+    interleave as before, then the two window sides interleave above them. When both sides are
+    present each gets rank-wise slots, so out-of-window padding never crowds out in-window rows (nor
+    the reverse) — the padding exists to keep near-misses visible, so it must never vanish either.
+    Diversity, not preference: cohorts carry no window- or trip-cabin weight. A pool entirely on one
+    window side (all in-window, or all padded) selects byte-identically to the cabin-only interleave
+    — the axis is a no-op when single-sided, as the cabin axis is for a single-cabin pool.
     """
     cohorts: dict[tuple[str, str, str], list[Row]] = {}
     for cand in sorted(cands, key=lambda c: c["mileage"]):
         cohorts.setdefault((cand["date"], cand["source"], cand["cabin"]), []).append(cand)
-    by_cabin: dict[str, list[list[Row]]] = {}
-    for (_, _, cabin), queue in cohorts.items():
-        by_cabin.setdefault(cabin, []).append(queue)
-    queues = [q for rank in zip_longest(*by_cabin.values()) for q in rank if q is not None]
+    by_window: dict[bool, dict[str, list[list[Row]]]] = {}
+    for (date, _, cabin), queue in cohorts.items():
+        by_window.setdefault(date in window_dates, {}).setdefault(cabin, []).append(queue)
+    window_lanes = [
+        [q for rank in zip_longest(*by_cabin.values()) for q in rank if q is not None]
+        for by_cabin in by_window.values()
+    ]
+    queues = [q for rank in zip_longest(*window_lanes) for q in rank if q is not None]
     selected: list[Row] = []
     while len(selected) < budget:
         progressed = False
@@ -196,6 +209,7 @@ def shortlist(slug: str, leg: str = "outbound", now: Callable[[], dt.datetime] =
     for cand in _group_best(candidates):
         by_endpoint.setdefault(cand[field], []).append(cand)
 
+    window_dates = _window_dates(trip, leg_intent)
     kept: list[Row] = []
     truncation: dict = {}
     for endpoint, cands in by_endpoint.items():
@@ -204,7 +218,7 @@ def shortlist(slug: str, leg: str = "outbound", now: Callable[[], dt.datetime] =
             if cand["origin"] in floor_origins:
                 floor_picks.setdefault(cand["origin"], cand)
 
-        round_robin = _cohort_select(cands, spec["budget"])
+        round_robin = _cohort_select(cands, spec["budget"], window_dates)
         selection_pool = list(floor_picks.values())
         selection_pool.extend(cand for cand in round_robin if cand not in selection_pool)
         selected = selection_pool[: spec["budget"]]

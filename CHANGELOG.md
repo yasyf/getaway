@@ -357,6 +357,19 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   validation, with no migration story.
 
 ### Fixed
+- Date-padded rows no longer crowd requested dates off the shortlist,
+  and optional-leg variants are never silently starved. The P5
+  positioning ask surfaced both: padding rows shared each per-cabin
+  cohort with in-window rows and won on price, so only out-of-window
+  LAX departures survived selection — window membership now joins the
+  cohort interleave as the outermost axis, from the leg's own derived
+  window rather than the padded sweep range, so in-window rows claim
+  rank-wise budget share before any padding row. And a plan with
+  optional legs now discloses per-variant composition accounting
+  (`provenance.variants`: chains built, expanded, dropped for
+  continuity, and journeys, keyed by included legs), so a variant that
+  composed nothing is a visible fact, not an absence; plans without
+  optional legs emit byte-identical artifacts.
 - The composition beam ranks only feasible chains, and an empty board
   now explains itself. The founding NRT hybrid produced zero journeys
   at the default beam width: all chains ranked purely on miles and
