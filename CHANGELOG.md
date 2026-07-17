@@ -357,6 +357,17 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   validation, with no migration story.
 
 ### Fixed
+- Shortlist selection diversifies across cabins, closing the retrieval
+  half of the business-drop bug (the v2 rank fix below closed the
+  ranking half): `_cohort_select` cohorted only by date and source and
+  picked cheapest-mileage-first, so economy filled the per-endpoint
+  budget before any business row — the P5 live capstone caught all 203
+  composed journeys surfacing economy while direct business award
+  space sat in cache. The cohort key now carries cabin with a
+  rank-wise interleave, diversity not preference: single-cabin pools
+  select identically, and the trade — distinct-date coverage divides
+  by cabins present — is tunable per trip through
+  `plan.tuning.expansion_budget_per_endpoint`.
 - A business-class ask boards business journeys. The canonical
   warm-beachy run produced six economy finalists, each annotated
   "outside your preferred cabin", while all-business round trips sat

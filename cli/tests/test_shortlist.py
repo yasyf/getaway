@@ -344,8 +344,15 @@ def test_soft_avoid_sorts_never_filters(base: str) -> None:
     assert {c["id"]: c["soft"] for c in doc["candidates"]} == {"CLEAN": False, "SOFT": True}
 
 
-def cohort_cand(cid: str, mileage: int, soft: bool) -> dict:
-    return {"id": cid, "mileage": mileage, "soft": soft, "date": "2026-09-05", "source": "united"}
+def cohort_cand(cid: str, mileage: int, soft: bool, cabin: str = "J") -> dict:
+    return {
+        "id": cid,
+        "mileage": mileage,
+        "soft": soft,
+        "cabin": cabin,
+        "date": "2026-09-05",
+        "source": "united",
+    }
 
 
 def test_cohort_select_keeps_cheaper_soft_over_pricier_clean_under_budget() -> None:
@@ -354,6 +361,28 @@ def test_cohort_select_keeps_cheaper_soft_over_pricier_clean_under_budget() -> N
     cands = [cohort_cand("CLEAN", 90000, soft=False), cohort_cand("SOFT", 70000, soft=True)]
     selected = shortlist._cohort_select(cands, budget=1)
     assert [c["id"] for c in selected] == ["SOFT"]
+
+
+def test_cohort_select_interleaves_cabins_so_business_survives_economy_flood(base: str) -> None:
+    # Driver's live regression (R-I): >=budget economy rows across distinct dates fill the budget
+    # and drop every same-route business row unless the round-robin interleaves cabin cost tiers.
+    econ = {"Y": {"mileage": "12500"}}
+    rows = [
+        api_row(f"Y{i}", "SFO", "NRT", f"2026-09-{5 + i:02d}", "united", econ) for i in range(12)
+    ]
+    rows.extend(
+        api_row(f"J{i}", "SFO", "NRT", f"2026-09-{5 + i:02d}", "united", biz("40000"))
+        for i in range(6)
+    )
+
+    doc = run(base, rows)
+
+    by_cabin: dict[str, int] = {}
+    for cand in doc["candidates"]:
+        by_cabin[cand["cabin"]] = by_cabin.get(cand["cabin"], 0) + 1
+    assert by_cabin == {"Y": 6, "J": 6}  # every cost tier represented, not an all-economy flood
+    assert len(doc["candidates"]) == 12  # EXPANSION_BUDGET_PER_ENDPOINT
+    assert doc["truncation"]["NRT"] == {"considered": 18, "kept": 12}
 
 
 def test_search_states_pass_through_from_sweep(base: str) -> None:

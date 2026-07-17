@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 from collections.abc import Callable
+from itertools import zip_longest
 from typing import Any
 
 import click
@@ -56,12 +57,18 @@ def _group_best(candidates: list[Row]) -> list[Row]:
 
 
 def _cohort_select(cands: list[Row], budget: int) -> list[Row]:
-    """Round-robin across (date, source) cohorts, cheapest first — one hot date or program can't
-    fill the per-endpoint budget on its own."""
-    cohorts: dict[tuple[str, str], list[Row]] = {}
+    """Round-robin across (date, source, cabin) cohorts, cheapest first — no hot date, program, or
+    cabin fills the per-endpoint budget on its own. Cabins interleave so each cost tier's cheapest
+    cohort is reached before the budget is spent; mileage-order alone would drain every economy
+    cohort before any business one. Diversity, not preference: cohorts carry no trip-cabin weight.
+    """
+    cohorts: dict[tuple[str, str, str], list[Row]] = {}
     for cand in sorted(cands, key=lambda c: c["mileage"]):
-        cohorts.setdefault((cand["date"], cand["source"]), []).append(cand)
-    queues = list(cohorts.values())
+        cohorts.setdefault((cand["date"], cand["source"], cand["cabin"]), []).append(cand)
+    by_cabin: dict[str, list[list[Row]]] = {}
+    for (_, _, cabin), queue in cohorts.items():
+        by_cabin.setdefault(cabin, []).append(queue)
+    queues = [q for rank in zip_longest(*by_cabin.values()) for q in rank if q is not None]
     selected: list[Row] = []
     while len(selected) < budget:
         progressed = False
