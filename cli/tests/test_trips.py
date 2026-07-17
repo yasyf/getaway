@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from _api import shortlist_doc
 from click.testing import CliRunner
 
 from getaway import prefs, trips
@@ -691,6 +692,31 @@ def test_assess_notable_stretches_limit(ready: Path, count: int, accepted: bool)
             trips.artifact_write(SLUG, "assess.json", json.dumps(doc))
 
 
+def _expand_doc() -> dict:
+    return {
+        "journeys": [],
+        "unpaired_outbounds": [],
+        "gated": [],
+        "search_states": {},
+        "leg_states": {},
+        "provenance": {"fetched_at": "2026-07-13T12:00:00+00:00", "quota_stopped": False},
+    }
+
+
+def test_expand_artifact_accepts_optional_partial_leads(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = {**_expand_doc(), "leads": [{"prefix": [], "reached": "NRT", "remaining": []}]}
+    trips.artifact_write(SLUG, "expand.json", json.dumps(doc))
+    assert json.loads(trips.artifact_read(SLUG, "expand.json"))["leads"][0]["reached"] == "NRT"
+
+
+def test_expand_artifact_rejects_non_list_leads(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = {**_expand_doc(), "leads": {"not": "a list"}}
+    with pytest.raises(UsageError, match=r"expand\.json\.leads must be a list"):
+        trips.artifact_write(SLUG, "expand.json", json.dumps(doc))
+
+
 def test_current_cli_reports_null_when_unset(ready: Path, runner: CliRunner) -> None:
     result = runner.invoke(trips.trip_group, ["current"])
     assert result.exit_code == 0
@@ -1045,6 +1071,49 @@ def test_conventional_quota_budget_orders_legs_before_expand(ready: Path) -> Non
     assert budget["total"] == sum(n["quota_cost"] for n in budget["nodes"])
 
 
+def test_plan_tuning_accepts_positive_int_overrides(ready: Path) -> None:
+    trips.new(SLUG)
+    doc = trips.set_patch(
+        SLUG, {"plan": {"legs": [OUTBOUND], "tuning": {"beam_width": 8, "presentation_limit": 3}}}
+    )
+    assert doc["plan"]["tuning"] == {"beam_width": 8, "presentation_limit": 3}
+
+
+@pytest.mark.parametrize(
+    "tuning",
+    [
+        pytest.param({"beam_width": 0}, id="zero"),
+        pytest.param({"presentation_limit": -1}, id="negative"),
+        pytest.param({"sweep_page_budget": 1.5}, id="non-int-float"),
+        pytest.param({"date_padding_days": "7"}, id="non-int-str"),
+        pytest.param({"beam_width": True}, id="bool-not-int"),
+        pytest.param({"unknown_knob": 4}, id="unknown-key"),
+    ],
+)
+def test_plan_tuning_rejects_bad_values(ready: Path, tuning: dict) -> None:
+    trips.new(SLUG)
+    with pytest.raises(UsageError):
+        trips.set_patch(SLUG, {"plan": {"legs": [OUTBOUND], "tuning": tuning}})
+
+
+def test_quota_budget_follows_tuning_overrides(ready: Path) -> None:
+    default = _graph(CANONICAL, slug="trip-default")
+    tuned_plan = {
+        **CANONICAL,
+        "tuning": {"sweep_page_budget": 5, "expansion_budget_per_endpoint": 20},
+    }
+    graph = _graph(tuned_plan, slug="trip-tuned")
+    # Default sweep = (AUTO_WIDEN + 1) * SWEEP_PAGE_BUDGET = 3 * 3 = 9; default expand = 12.
+    assert _node(default, "sweep:outbound:asia")["quota_cost"] == 9
+    assert _node(default, "expand")["quota_cost"] == 12
+    # Tuned page budget lifts every sweep node (3 * 5 = 15); tuned expansion budget lifts expand.
+    assert _node(graph, "sweep:outbound:asia")["quota_cost"] == 15
+    assert _node(graph, "sweep:return")["quota_cost"] == 15
+    assert _node(graph, "expand")["quota_cost"] == 20
+    assert graph["quota_budget"]["total"] == 15 + 15 + 20
+    assert graph["quota_budget"]["total"] > default["quota_budget"]["total"]
+
+
 def test_explicit_conventional_ids_match_position_defaults(ready: Path) -> None:
     explicit = {
         "legs": [
@@ -1190,15 +1259,132 @@ def test_positioning_leg_compiles_no_award_sweep_and_onward_chains_from_cash_des
     budget = graph["quota_budget"]
     assert [n["id"] for n in budget["nodes"]] == ["sweep:onward", "expand"]
     assert budget["total"] == sum(n["quota_cost"] for n in budget["nodes"])
-    # the award onward departs the positioning leg's declared dest, from-absent (cash prior)
+    # onward departs the positioning leg's declared dest (from-absent, cash prior); the optional
+    # positioning leg is transparent, so skip_sources also covers home (R-A), disclosed in the node.
     sweep_on = _node(graph, "sweep:onward")
     assert sweep_on["inputs"] == []
     assert sweep_on["endpoint_source"] == {
         "field": "dest",
         "union": ["LAX"],
         "override": {"dests": ["NRT"]},
+        "skip_sources": [{"union": ["SFO"]}],
     }
     assert _node(graph, "pairs:outbound")["endpoint_source"] is None  # first leg, no chain
+
+
+MIDDLE_OPTIONAL = {
+    "legs": [
+        {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
+        {"id": "hop", "dests": ["BKK"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+DOUBLE_OPTIONAL = {
+    "legs": [
+        {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
+        {"id": "hop1", "dests": ["BKK"], "mode": "award", "optional": True},
+        {"id": "hop2", "dests": ["SIN"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+
+
+def test_middle_optional_leg_makes_the_return_sweep_transparent_to_its_skip(ready: Path) -> None:
+    # R-A: the return chains from the optional hop, and (hop skipped) additionally from the
+    # pre-optional outbound boundary — a from-based skip source, its shortlist a dependency input.
+    graph = _graph(MIDDLE_OPTIONAL)
+    sweep_ret = _node(graph, "sweep:return")
+    assert sweep_ret["endpoint_source"]["from"] == "legs/hop/shortlist.json"
+    assert sweep_ret["endpoint_source"]["skip_sources"] == [
+        {"from": "legs/outbound/shortlist.json", "field": "dest"}
+    ]
+    assert sweep_ret["inputs"] == ["legs/hop/shortlist.json", "legs/outbound/shortlist.json"]
+    # the hop's own sweep is unchanged — its predecessor (outbound) is mandatory
+    assert "skip_sources" not in _node(graph, "sweep:hop")["endpoint_source"]
+
+
+def test_consecutive_optionals_fold_every_pre_optional_boundary(ready: Path) -> None:
+    # R-A recursion: the return covers hop2 (present) plus hop1 and outbound (either optional
+    # skipped); hop2 itself already covers outbound, since hop1 before it is optional.
+    graph = _graph(DOUBLE_OPTIONAL)
+    assert _node(graph, "sweep:return")["endpoint_source"]["skip_sources"] == [
+        {"from": "legs/hop1/shortlist.json", "field": "dest"},
+        {"from": "legs/outbound/shortlist.json", "field": "dest"},
+    ]
+    assert _node(graph, "sweep:hop2")["endpoint_source"]["skip_sources"] == [
+        {"from": "legs/outbound/shortlist.json", "field": "dest"}
+    ]
+    assert "skip_sources" not in _node(graph, "sweep:hop1")["endpoint_source"]
+
+
+OPEN_JAW_OPTIONAL = {
+    "legs": [
+        {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
+        {"id": "hop", "origins": ["KIX"], "dests": ["BKK"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+MIDDLE_OPTIONAL_STAY = {
+    "legs": [
+        {
+            "origins": ["SFO"],
+            "dests": ["NRT"],
+            "mode": "award",
+            "stay_nights": {"min": 2, "max": 6},
+        },
+        {
+            "id": "hop",
+            "dests": ["OKA"],
+            "mode": "award",
+            "optional": True,
+            "stay_nights": {"min": 1, "max": 1},
+        },
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+ALL_OPTIONAL_HOME_RETURN = {
+    "legs": [
+        {"id": "pos", "origins": ["SFO"], "dests": ["LAX"], "mode": "award", "optional": True},
+        {"id": "hop", "dests": ["NRT"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+
+
+def test_optional_open_jaw_leg_skips_to_pre_boundary_not_its_declared_origins(ready: Path) -> None:
+    # MAJOR-1: a skipped optional open-jaw leg vanishes with its [KIX] origins; the runtime
+    # re-anchors the return on the PRE-optional outbound landings — the skip source is outbound.
+    graph = _graph(OPEN_JAW_OPTIONAL)
+    assert _node(graph, "sweep:return")["endpoint_source"]["skip_sources"] == [
+        {"from": "legs/outbound/shortlist.json", "field": "dest"}
+    ]
+    # the hop's OWN full-variant sweep still departs its explicit [KIX] override (open-jaw anchor)
+    assert _node(graph, "sweep:hop")["endpoint_source"]["override"] == {
+        "origins": ["KIX"],
+        "dests": ["BKK"],
+    }
+
+
+def test_optional_leg_skip_source_carries_the_pre_boundary_stay(ready: Path) -> None:
+    # MAJOR-2: the return's skip source carries the pre-boundary outbound's stay_nights so the sweep
+    # window envelopes the skip variant's stay-valid departures off outbound's arrivals.
+    graph = _graph(MIDDLE_OPTIONAL_STAY)
+    assert _node(graph, "sweep:return")["endpoint_source"]["skip_sources"] == [
+        {
+            "from": "legs/outbound/shortlist.json",
+            "field": "dest",
+            "stay_nights": {"min": 2, "max": 6},
+        }
+    ]
+
+
+def test_all_optional_before_home_return_drops_home_union_skip_source(ready: Path) -> None:
+    # NIT: the all-skipped home union would sweep home→home, read only by the R-D-excluded fly-home-
+    # from-home variant — the $origins return drops it, keeping only live pre-boundaries.
+    graph = _graph(ALL_OPTIONAL_HOME_RETURN)
+    assert _node(graph, "sweep:return")["endpoint_source"]["skip_sources"] == [
+        {"from": "legs/pos/shortlist.json", "field": "dest"}
+    ]
 
 
 def test_lodging_adds_stays_node_and_requires_session(ready: Path) -> None:
@@ -1217,17 +1403,47 @@ def test_one_way_lodging_without_checkout_has_no_stays(ready: Path) -> None:
     assert "stays" not in _ids(graph)
 
 
-def test_discover_dests_validated_but_inert(ready: Path) -> None:
-    plan = {
-        "legs": [
-            {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
-            {"id": "explore", "dests": {"discover": {"region": "asia"}}, "mode": "award"},
-        ]
+DISCOVER = {"discover": {"brief": "warm asian beach hubs with award space", "max_airports": 6}}
+
+
+def test_discover_leg_compiles_scout_feeding_sweep(ready: Path) -> None:
+    # A first-position discover leg comes alive in P3: a zero-quota scout node proposes the dest
+    # airports, and the leg's sweep consumes them as an endpoint input.
+    graph = _graph({"legs": [{"origins": ["SFO"], "dests": DISCOVER, "mode": "award"}]})
+    scout = _node(graph, "scout:outbound")
+    assert scout["kind"] == "scout"
+    assert scout["quota_cost"] == 0
+    assert scout["routing"] == {"model": "opus", "effort": "xhigh"}
+    assert scout["command"] is None  # agent-shaped
+    assert scout["inputs"] == []
+    assert scout["outputs"] == ["legs/outbound/scout.json"]
+    sweep = _node(graph, "sweep:outbound")
+    assert sweep["inputs"] == ["legs/outbound/scout.json"]
+    assert sweep["endpoint_source"] is None
+    assert "shortlist:outbound" in _ids(graph)
+    assert scout["quota_cost"] == 0 and "scout:outbound" not in {
+        n["id"] for n in graph["quota_budget"]["nodes"]
     }
-    doc = trips.set_patch(trips.new(SLUG)["slug"], {"plan": plan})
-    assert doc["plan"]["legs"][1]["dests"] == {"discover": {"region": "asia"}}
-    graph = trips.compile_graph(SLUG)
-    assert not any("explore" in i for i in _ids(graph))  # discover emits no retrieval nodes in P2b
+
+
+def test_discover_leg_with_buckets_compiles_both_sweeps(ready: Path) -> None:
+    # R-H: a discover leg's bucket sweep and scout-fed bare sweep compile side by side.
+    leg = {
+        "origins": ["SFO"],
+        "dests": DISCOVER,
+        "mode": "award",
+        "buckets": [{"name": "asia", "dests": ["HND"]}],
+    }
+    graph = _graph({"legs": [leg]})
+    assert "scout:outbound" in _ids(graph)
+    bucket = _node(graph, "sweep:outbound:asia")
+    assert bucket["outputs"] == ["legs/outbound/sweep-asia.json"]
+    assert "legs/outbound/scout.json" not in bucket["inputs"]  # the bucket never reads scout
+    bare = _node(graph, "sweep:outbound")
+    assert bare["outputs"] == ["legs/outbound/sweep.json"]
+    assert bare["inputs"] == ["legs/outbound/scout.json"]  # only the bare sweep consumes scout
+    shortlist = _node(graph, "shortlist:outbound")
+    assert shortlist["inputs"] == ["legs/outbound/sweep-asia.json", "legs/outbound/sweep.json"]
 
 
 def test_compile_requires_legs(ready: Path) -> None:
@@ -1629,48 +1845,50 @@ def test_stored_v2_program_sweeps_only_rejected_loudly(ready: Path) -> None:
     assert "trip set" in message
 
 
-def test_leg_after_discover_requires_explicit_origins(ready: Path) -> None:
-    # A discover leg is inert until P3, so it can't anchor a successor: the next leg must declare
-    # explicit origins or the plan is rejected loudly.
+def test_leg_after_discover_chains_from_its_shortlist(ready: Path) -> None:
+    # P3 relaxes the P2b rule: a successor with no explicit origins chains from a discover leg's
+    # shortlist like any award leg — the discovered+swept hubs become its gateways.
     plan = {
         "legs": [
-            {"origins": ["SFO"], "dests": {"discover": {"region": "asia"}}, "mode": "award"},
-            {"id": "next", "dests": ["OKA"], "mode": "award"},
+            {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
+            {"id": "explore", "dests": DISCOVER, "mode": "award"},
+            {"id": "onward", "dests": ["SIN"], "mode": "award"},
         ]
     }
-    trips.new(SLUG)
-    with pytest.raises(UsageError, match="must declare explicit origins"):
-        trips.set_patch(SLUG, {"plan": plan})
+    graph = _graph(plan)
+    # The discover leg itself chains from the outbound shortlist and reads its own scout artifact.
+    explore = _node(graph, "sweep:explore")
+    assert explore["endpoint_source"]["from"] == "legs/outbound/shortlist.json"
+    assert explore["inputs"] == ["legs/outbound/shortlist.json", "legs/explore/scout.json"]
+    # The successor anchors on the discover leg's shortlist — no explicit origins needed.
+    onward = _node(graph, "sweep:onward")
+    assert onward["endpoint_source"]["from"] == "legs/explore/shortlist.json"
+    assert "legs/explore/shortlist.json" in onward["inputs"]
 
 
-def test_leg_after_discover_with_explicit_origins_accepted(ready: Path) -> None:
+def test_leg_after_discover_with_explicit_origins_still_chains(ready: Path) -> None:
+    # Explicit origins REPLACE the chained gateways at resolution, but the successor still depends
+    # on the discover leg's shortlist (an open-jaw override rides the chain source, as always).
     plan = {
         "legs": [
-            {"origins": ["SFO"], "dests": {"discover": {"region": "asia"}}, "mode": "award"},
+            {"origins": ["SFO"], "dests": DISCOVER, "mode": "award"},
             {"id": "next", "origins": ["NRT"], "dests": ["OKA"], "mode": "award"},
         ]
     }
     graph = _graph(plan)
     node = _node(graph, "sweep:next")
-    assert node["endpoint_source"] is None  # a fresh chain start, anchored on its own origins
-    assert node["inputs"] == []  # nothing carried across the discover gap
+    assert node["endpoint_source"]["from"] == "legs/outbound/shortlist.json"
+    assert node["endpoint_source"]["override"] == {"origins": ["NRT"], "dests": ["OKA"]}
+    assert "legs/outbound/shortlist.json" in node["inputs"]
 
 
-def test_mid_plan_discover_breaks_the_chain(ready: Path) -> None:
-    # A discover leg mid-plan is a chain BREAK: its successor gets no chain source and no spurious
-    # dependency on the pre-gap shortlist — it anchors on its own declared origins (P3 re-anchors).
-    plan = {
-        "legs": [
-            {"origins": ["SFO"], "dests": ["NRT"], "mode": "award"},
-            {"id": "scout", "origins": ["NRT"], "dests": {"discover": {}}, "mode": "award"},
-            {"id": "after", "origins": ["BKK"], "dests": ["SIN"], "mode": "award"},
-        ]
-    }
-    graph = _graph(plan)
-    node = _node(graph, "sweep:after")
-    assert node["endpoint_source"] is None  # not chained past the discover leg
-    assert node["inputs"] == []  # no dependency on legs/outbound/shortlist.json across the gap
-    assert "sweep:scout" not in _ids(graph)  # discover emits no retrieval node
+def test_all_discover_plan_compiles(ready: Path) -> None:
+    # A plan of nothing but a discover leg is no longer inert: it compiles a scout+sweep+shortlist
+    # that feeds expand, so the retrieval-capable guard never fires.
+    graph = _graph({"legs": [{"origins": ["SFO"], "dests": DISCOVER, "mode": "award"}]})
+    ids = _ids(graph)
+    for node_id in ("scout:outbound", "sweep:outbound", "shortlist:outbound", "expand"):
+        assert node_id in ids
 
 
 def test_leg_window_requires_start_before_end(ready: Path) -> None:
@@ -1802,14 +2020,116 @@ def test_either_leg_forwards_bucket_dests_to_successor_union(ready: Path) -> Non
     assert _node(graph, "sweep:return")["endpoint_source"]["union"] == ["NRT", "HND"]
 
 
-def test_all_discover_plan_rejected_at_compile(ready: Path) -> None:
-    # A plan of nothing but discover legs has no retrieval node to feed expand — reject at compile
-    # rather than emit a vacuous expand-only graph.
-    plan = {"legs": [{"origins": ["SFO"], "dests": {"discover": {}}, "mode": "award"}]}
+@pytest.mark.parametrize(
+    ("dests", "extra", "mode", "message"),
+    [
+        pytest.param(DISCOVER, {}, "either", "only valid on an award leg", id="either-mode"),
+        pytest.param(
+            {"discover": {"max_airports": 6}}, {}, "award", "missing=\\['brief'\\]", id="no-brief"
+        ),
+        pytest.param(
+            {"discover": {"brief": " ", "max_airports": 6}}, {}, "award", "must be non-empty",
+            id="blank-brief",
+        ),
+        pytest.param(
+            {"discover": {"brief": "x", "max_airports": 0}}, {}, "award", "must be 1..12",
+            id="zero-cap",
+        ),
+        pytest.param(
+            {"discover": {"brief": "x", "max_airports": 13}}, {}, "award", "must be 1..12",
+            id="over-cap",
+        ),
+    ],
+)
+def test_discover_dests_validation_rejects(
+    ready: Path, dests: dict, extra: dict, mode: str, message: str
+) -> None:
     trips.new(SLUG)
+    leg = {"origins": ["SFO"], "dests": dests, "mode": mode, **extra}
+    with pytest.raises(UsageError, match=message):
+        trips.set_patch(SLUG, {"plan": {"legs": [leg]}})
+
+
+def _discover_trip() -> None:
+    trips.new(SLUG)
+    plan = {"legs": [{"origins": ["SFO"], "dests": DISCOVER, "mode": "award"}]}
     trips.set_patch(SLUG, {"plan": plan})
-    with pytest.raises(UsageError, match="no retrieval-capable legs"):
-        trips.compile_graph(SLUG)
+
+
+def _write_scout(doc: object) -> None:
+    trips.artifact_write(SLUG, "legs/outbound/scout.json", json.dumps(doc))
+
+
+def test_scout_artifact_accepts_valid_list(ready: Path) -> None:
+    _discover_trip()
+    doc = [
+        {"airport": "NRT", "why": "peak award space in shoulder season"},
+        {"airport": "BKK", "why": "cheap J"},
+    ]
+    _write_scout(doc)
+    assert json.loads(trips.artifact_read(SLUG, "legs/outbound/scout.json")) == doc
+
+
+@pytest.mark.parametrize(
+    ("doc", "message"),
+    [
+        pytest.param([{"airport": "nrt", "why": "x"}], "3-letter IATA code", id="bad-iata"),
+        pytest.param([{"airport": "NRTX", "why": "x"}], "3-letter IATA code", id="long-iata"),
+        pytest.param([{"airport": "NRT\n", "why": "x"}], "3-letter IATA code", id="newline-iata"),
+        pytest.param([{"airport": "NRT"}], "missing=\\['why'\\]", id="missing-why"),
+        pytest.param([{"airport": "NRT", "why": "x" * 201}], "at most 200", id="why-too-long"),
+        pytest.param([{"why": "x"}], "missing=\\['airport'\\]", id="missing-airport"),
+        pytest.param([{"airport": "NRT", "why": "x"}] * 7, "max_airports 6", id="over-cap"),
+        pytest.param({"airport": "NRT"}, "must be a list", id="not-a-list"),
+    ],
+)
+def test_scout_artifact_validator_rejects(ready: Path, doc: object, message: str) -> None:
+    _discover_trip()
+    with pytest.raises(UsageError, match=message):
+        _write_scout(doc)
+
+
+def test_scout_artifact_rejects_non_discover_leg(ready: Path) -> None:
+    # scout.json under a leg that is not a discover leg is a misuse, rejected loudly.
+    _graph(CANONICAL)
+    with pytest.raises(UsageError, match="is not a discover leg"):
+        _write_scout([{"airport": "NRT", "why": "x"}])
+
+
+def test_scout_artifact_rejects_malformed_path(ready: Path) -> None:
+    # A top-level scout.json is a typed rejection, never a raw IndexError.
+    _discover_trip()
+    with pytest.raises(UsageError, match="must be legs/<leg-id>/scout.json"):
+        trips.artifact_write(SLUG, "scout.json", json.dumps([]))
+
+
+@pytest.mark.parametrize(
+    ("legs", "message"),
+    [
+        pytest.param(
+            [{"id": "outbound\n", "origins": ["SFO"], "dests": ["NRT"], "mode": "award"}],
+            "must match", id="leg-id",
+        ),
+        pytest.param(
+            [
+                {
+                    "origins": ["SFO"],
+                    "mode": "award",
+                    "buckets": [{"name": "asia\n", "dests": ["NRT"]}],
+                }
+            ],
+            "must match",
+            id="bucket-name",
+        ),
+    ],
+)
+def test_anchored_validators_reject_trailing_newline(
+    ready: Path, legs: list, message: str
+) -> None:
+    # fullmatch, not match: '$' matches before a terminal '\n', so .match() would accept "X\n".
+    trips.new(SLUG)
+    with pytest.raises(UsageError, match=message):
+        trips.set_patch(SLUG, {"plan": {"legs": legs}})
 
 
 def test_shape_label_rejects_legless_plan(ready: Path) -> None:
@@ -1848,9 +2168,197 @@ def test_node_routing_runners_are_sonnet_research_is_opus(ready: Path) -> None:
     assert _node(graph, "assess")["routing"] == {"model": "opus", "effort": "xhigh"}
 
 
-def test_explain_flags_node_freshness(
-    ready: Path, frozen_clock: Callable[[], dt.datetime]
-) -> None:
+def test_explain_flags_node_freshness(ready: Path, frozen_clock: Callable[[], dt.datetime]) -> None:
     _graph({"legs": [OUTBOUND]})
     graph = trips.explain(SLUG, now=frozen_clock)
     assert all(n["fresh"] is False for n in graph["nodes"])  # nothing has run yet
+
+
+# --- T3: manual-chain artifact (legs/manual.json) — validated at write, priced at compile --------
+
+VALID_MANUAL = [
+    [{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]
+]
+
+
+def _manual_ready(slug: str = SLUG) -> None:
+    """A round-trip trip with both legs' shortlists seeded — the write-boundary state the manual
+    validator resolves award ids against."""
+    trips.new(slug)
+    trips.set_patch(slug, {"cabin": "business", "plan": CANONICAL})
+    trips.artifact_write(
+        slug, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([{"id": "OB"}]))
+    )
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([{"id": "RET"}], leg="return"))
+    )
+
+
+def test_manual_artifact_accepts_valid_chain(ready: Path) -> None:
+    _manual_ready()
+    trips.artifact_write(SLUG, "legs/manual.json", json.dumps(VALID_MANUAL))
+    assert json.loads(trips.artifact_read(SLUG, "legs/manual.json")) == VALID_MANUAL
+
+
+def test_manual_artifact_joins_expand_inputs_only_when_present(ready: Path) -> None:
+    _manual_ready()
+    assert "legs/manual.json" not in _node(trips.compile_graph(SLUG), "expand")["inputs"]
+    trips.artifact_write(SLUG, "legs/manual.json", json.dumps(VALID_MANUAL))
+    assert "legs/manual.json" in _node(trips.compile_graph(SLUG), "expand")["inputs"]
+
+
+@pytest.mark.parametrize(
+    ("doc", "match"),
+    [
+        pytest.param({"a": 1}, "must be a list of candidate chains", id="not-a-list"),
+        pytest.param([[]], "non-empty list", id="empty-chain"),
+        pytest.param(["x"], "non-empty list", id="chain-not-a-list"),
+        pytest.param(
+            [[{"leg_id": "outbound"}]],
+            r"keys: missing=\['candidate'\]",
+            id="entry-missing-candidate",
+        ),
+        pytest.param(
+            [[{"leg_id": "nope", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]],
+            "is not a plan leg",
+            id="unknown-leg-id",
+        ),
+        pytest.param(
+            [[{"leg_id": "return", "candidate": "RET"}, {"leg_id": "outbound", "candidate": "OB"}]],
+            "must list every leg once in plan order",
+            id="wrong-order",
+        ),
+        pytest.param(
+            [[{"leg_id": "outbound", "candidate": "OB"}]],
+            "must list every leg once in plan order",
+            id="missing-a-leg",
+        ),
+        pytest.param(
+            [
+                [
+                    {"leg_id": "outbound", "candidate": "GHOST"},
+                    {"leg_id": "return", "candidate": "RET"},
+                ]
+            ],
+            "'GHOST' is not in leg",
+            id="unknown-award-id",
+        ),
+        pytest.param(
+            [
+                [
+                    {
+                        "leg_id": "outbound",
+                        "candidate": {"gateway": "SFO", "onward_dest": "NRT", "date": "2026-09-05"},
+                    },
+                    {"leg_id": "return", "candidate": "RET"},
+                ]
+            ],
+            "cash quote but leg 'outbound' is award-only",
+            id="cash-quote-on-award-leg",
+        ),
+    ],
+)
+def test_manual_artifact_rejects_malformed(ready: Path, doc: object, match: str) -> None:
+    _manual_ready()
+    with pytest.raises(UsageError, match=match):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))
+
+
+def test_manual_artifact_rejects_award_id_on_cash_only_leg(ready: Path) -> None:
+    trips.new(SLUG)
+    plan = {"legs": [OUTBOUND, {"id": "onward", "dests": ["OKA"], "mode": "cash"}]}
+    trips.set_patch(SLUG, {"cabin": "business", "plan": plan})
+    trips.artifact_write(
+        SLUG, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([{"id": "OB"}]))
+    )
+    doc = [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "SOMEID"}]]
+    with pytest.raises(UsageError, match="award id but leg 'onward' is cash-only"):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))
+
+
+def test_manual_artifact_rejects_unknown_cash_key(ready: Path) -> None:
+    trips.new(SLUG)
+    plan = {"legs": [OUTBOUND, {"id": "onward", "dests": ["OKA"], "mode": "cash"}]}
+    trips.set_patch(SLUG, {"cabin": "business", "plan": plan})
+    trips.artifact_write(
+        SLUG, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([{"id": "OB"}]))
+    )
+    trips.artifact_write(
+        SLUG, "legs/onward/bridge.json", json.dumps({"quotes": [], "failures": []})
+    )
+    doc = [
+        [
+            {"leg_id": "outbound", "candidate": "OB"},
+            {
+                "leg_id": "onward",
+                "candidate": {"gateway": "HND", "onward_dest": "OKA", "date": "2026-09-08"},
+            },
+        ]
+    ]
+    with pytest.raises(UsageError, match="is not a priced quote"):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))
+
+
+# R-F: the write boundary accepts a manual chain that covers every mandatory leg in plan order and
+# skips optional legs; it rejects coverage/order/homeward violations loud.
+
+OPTIONAL_MIDDLE = {
+    "legs": [
+        OUTBOUND,
+        {"id": "hop", "dests": ["OKA"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins", "mode": "award"},
+    ]
+}
+
+
+def _manual_ready_optional(slug: str = SLUG) -> None:
+    """A round trip with an optional middle hop, every leg's shortlist seeded for resolution."""
+    trips.new(slug)
+    trips.set_patch(slug, {"cabin": "business", "plan": OPTIONAL_MIDDLE})
+    trips.artifact_write(
+        slug, "legs/outbound/shortlist.json", json.dumps(shortlist_doc([{"id": "OB"}]))
+    )
+    trips.artifact_write(
+        slug, "legs/hop/shortlist.json", json.dumps(shortlist_doc([{"id": "HOP"}], leg="hop"))
+    )
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([{"id": "RET"}], leg="return"))
+    )
+
+
+def test_manual_artifact_accepts_optional_skip_variant(ready: Path) -> None:
+    _manual_ready_optional()
+    skip = [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]]
+    trips.artifact_write(SLUG, "legs/manual.json", json.dumps(skip))
+    assert json.loads(trips.artifact_read(SLUG, "legs/manual.json")) == skip
+
+
+def test_manual_artifact_rejects_missing_mandatory_leg_on_optional_plan(ready: Path) -> None:
+    _manual_ready_optional()
+    doc = [[{"leg_id": "outbound", "candidate": "OB"}]]  # misses mandatory return
+    with pytest.raises(UsageError, match=r"must cover every mandatory leg .* missing \['return'\]"):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))
+
+
+def test_manual_artifact_rejects_out_of_order_on_optional_plan(ready: Path) -> None:
+    _manual_ready_optional()
+    doc = [[{"leg_id": "return", "candidate": "RET"}, {"leg_id": "outbound", "candidate": "OB"}]]
+    with pytest.raises(UsageError, match="must be a subsequence of plan order"):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))
+
+
+def test_manual_artifact_rejects_chain_opening_on_homeward_leg(ready: Path) -> None:
+    trips.new(SLUG)
+    plan = {
+        "legs": [
+            {"id": "pos", "origins": ["SFO"], "dests": ["NRT"], "mode": "award", "optional": True},
+            {"id": "return", "dests": "$origins", "mode": "award"},
+        ]
+    }
+    trips.set_patch(SLUG, {"cabin": "business", "plan": plan})
+    trips.artifact_write(
+        SLUG, "legs/return/shortlist.json", json.dumps(shortlist_doc([{"id": "RET"}], leg="return"))
+    )
+    doc = [[{"leg_id": "return", "candidate": "RET"}]]  # skips optional pos → opens on $origins
+    with pytest.raises(UsageError, match="opens on the homeward leg 'return'"):
+        trips.artifact_write(SLUG, "legs/manual.json", json.dumps(doc))

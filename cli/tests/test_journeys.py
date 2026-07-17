@@ -4,9 +4,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from _api import shortlist_doc, sweep_envelope
+from _api import api_row, shortlist_doc, sweep_envelope
+from _api import seed as ingest_rows
 
-from getaway import journeys, prefs, trips
+from getaway import journeys, prefs, shortlist, sweeps, trips
+from getaway.constants import COMPOSE_BEAM_WIDTH
 from getaway.paths import UsageError, cache_db
 from getaway.store import QuotaFloorError, connect
 
@@ -559,6 +561,43 @@ def _run(slug: str) -> dict:
     return json.loads(trips.artifact_read(slug, "expand.json"))
 
 
+def biz_row(rid: str, origin: str, dest: str, date: str = "2026-09-05") -> dict:
+    return api_row(
+        rid,
+        origin,
+        dest,
+        date,
+        "aeroplan",
+        {"J": {"mileage": "80000", "seats": 2, "airlines": "UA", "direct": True}},
+    )
+
+
+def pipeline_shortlist(
+    slug: str,
+    leg: str,
+    rows: list[dict],
+    *,
+    expanded_origins: list[str],
+    states: dict | None = None,
+    fetched_at: str = "2026-09-01T00:00:00+00:00",
+) -> dict:
+    """Drive the real sweep→shortlist path: ingest availability under the leg's sweep label, write
+    the sweep artifact, run the production shortlist — so candidates and feasibility come from the
+    pipeline, never hand-seeded. ``fetched_at`` sets the sweep's provenance age for TTL tests."""
+    ingest_rows(slug, leg, "search", rows, clock())
+    env = sweep_envelope(rows, expanded_origins=expanded_origins, search_states=states or {})
+    env["provenance"]["fetched_at"] = fetched_at
+    trips.artifact_write(slug, f"legs/{leg}/sweep.json", json.dumps(env))
+    return shortlist.shortlist(slug, leg=leg, now=clock())
+
+
+def sweep_states(dests: list[str], rows: list[dict] | None = None, *, field: str = "dest") -> dict:
+    """Per-endpoint search states built through the sweep-side writer so fixtures carry
+    production-keyed shapes and can't drift from what a real sweep writes (R-B)."""
+    leg = {"endpoints": list(dests), "endpoint_field": field}
+    return sweeps._search_states(leg, rows or [], has_more=False, stop=None)
+
+
 def test_gateway_cash_hybrid_composes_typed_legs(home: Path) -> None:
     slug = make_trip(HYBRID_ONE_WAY)
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
@@ -598,12 +637,20 @@ def test_bridge_quotes_keyed_by_date_not_just_pair(home: Path) -> None:
         gateways=[gw_cand("GW-NRT", "NRT")],
         quotes=[
             cash_quote(
-                "NRT", "OKA", 120.0, date="2026-09-08",
-                departs_local="2026-09-08T09:00", arrives_local="2026-09-08T12:00",
+                "NRT",
+                "OKA",
+                120.0,
+                date="2026-09-08",
+                departs_local="2026-09-08T09:00",
+                arrives_local="2026-09-08T12:00",
             ),
             cash_quote(
-                "NRT", "OKA", 200.0, date="2026-09-15",
-                departs_local="2026-09-15T09:00", arrives_local="2026-09-15T12:00",
+                "NRT",
+                "OKA",
+                200.0,
+                date="2026-09-15",
+                departs_local="2026-09-15T09:00",
+                arrives_local="2026-09-15T12:00",
             ),
         ],
     )
@@ -657,13 +704,10 @@ def test_either_onward_award_survives_absent_bridge(home: Path) -> None:
     assert [j["kind"] for j in doc["journeys"]] == ["award→award"]  # award onward survives, no cash
 
 
-def test_beam_caps_three_leg_composition_cheapest_first_and_discloses_cut(
-    home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The beam bounds only ≥3-leg plans. Two full chains compose; width 1 keeps the cheaper one, the
-    # cut is disclosed as composition truncation in provenance, and no chain becomes a false lead.
-    monkeypatch.setattr(journeys, "COMPOSE_BEAM_WIDTH", 1)
-    slug = make_trip(HYBRID_ROUND_TRIP)
+def test_beam_caps_three_leg_composition_cheapest_first_and_discloses_cut(home: Path) -> None:
+    # The beam bounds only ≥3-leg plans. Two full chains compose; a beam_width of 1 keeps the
+    # cheaper one, the cut is disclosed as composition truncation, and no chain becomes a lead.
+    slug = make_trip({**HYBRID_ROUND_TRIP, "tuning": {"beam_width": 1}})
     seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))
     seed("GW-ICN", ob_detail("GW-ICN", dest="ICN", mileage=90000))
     seed("RET-OKA", ret_detail("RET-OKA", origin="OKA"))
@@ -852,9 +896,7 @@ def test_avoid_transit_gates_cash_leg_internal_connection(home: Path) -> None:
     doc = _run(slug)
 
     assert doc["journeys"] == []
-    assert doc["gated"] == [
-        {"journey_id": CASH_HOP_JID, "reason": "transits FUK, which you avoid"}
-    ]
+    assert doc["gated"] == [{"journey_id": CASH_HOP_JID, "reason": "transits FUK, which you avoid"}]
 
 
 @pytest.mark.parametrize(
@@ -914,7 +956,9 @@ def test_avoid_transit_does_not_gate_trip_endpoints(
 MULTI_CITY = {
     "legs": [
         {
-            "id": "outbound", "origins": ["SFO"], "dests": ["NRT"],
+            "id": "outbound",
+            "origins": ["SFO"],
+            "dests": ["NRT"],
             "stay_nights": {"min": 4, "max": 4},
         },
         {"id": "hop", "dests": ["BKK"], "stay_nights": {"min": 4, "max": 4}},
@@ -929,15 +973,18 @@ def test_multi_city_chain_composes_with_two_stay_boundaries(home: Path) -> None:
     seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-10T10:00", "2026-09-10T14:00")]))
     seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-14T16:00", "2026-09-14T20:00")]))
     trips.artifact_write(
-        slug, "legs/outbound/shortlist.json",
+        slug,
+        "legs/outbound/shortlist.json",
         json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
     )
     trips.artifact_write(
-        slug, "legs/hop/shortlist.json",
+        slug,
+        "legs/hop/shortlist.json",
         json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-10")], leg="hop")),
     )
     trips.artifact_write(
-        slug, "legs/return/shortlist.json",
+        slug,
+        "legs/return/shortlist.json",
         json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-14")], leg="return")),
     )
     (journey,) = _run(slug)["journeys"]
@@ -953,15 +1000,18 @@ def test_multi_city_rejects_stay_violating_hop(home: Path) -> None:
     seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-07T10:00", "2026-09-07T14:00")]))  # +1n
     seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-11T16:00", "2026-09-11T20:00")]))
     trips.artifact_write(
-        slug, "legs/outbound/shortlist.json",
+        slug,
+        "legs/outbound/shortlist.json",
         json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
     )
     trips.artifact_write(
-        slug, "legs/hop/shortlist.json",
+        slug,
+        "legs/hop/shortlist.json",
         json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-07")], leg="hop")),
     )
     trips.artifact_write(
-        slug, "legs/return/shortlist.json",
+        slug,
+        "legs/return/shortlist.json",
         json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-11")], leg="return")),
     )
     assert _run(slug)["journeys"] == []
@@ -969,8 +1019,14 @@ def test_multi_city_rejects_stay_violating_hop(home: Path) -> None:
 
 POSITIONING = {
     "legs": [
-        {"id": "positioning", "origins": ["SFO"], "dests": ["LAX"], "mode": "cash",
-         "optional": True, "role": "positioning"},
+        {
+            "id": "positioning",
+            "origins": ["SFO"],
+            "dests": ["LAX"],
+            "mode": "cash",
+            "optional": True,
+            "role": "positioning",
+        },
         {"id": "onward", "dests": ["NRT"]},
     ]
 }
@@ -980,13 +1036,18 @@ def test_positioning_cash_leg_composes_as_an_ordinary_chain_leg(home: Path) -> N
     slug = make_trip(POSITIONING)
     seed("ONW", detail("ONW", [seg("LAX", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
     trips.artifact_write(
-        slug, "legs/positioning/bridge.json",
+        slug,
+        "legs/positioning/bridge.json",
         json.dumps(
             {
                 "quotes": [
                     cash_quote(
-                        "SFO", "LAX", 90.0, date="2026-09-03",
-                        departs_local="2026-09-03T08:00", arrives_local="2026-09-03T11:00",
+                        "SFO",
+                        "LAX",
+                        90.0,
+                        date="2026-09-03",
+                        departs_local="2026-09-03T08:00",
+                        arrives_local="2026-09-03T11:00",
                     )
                 ],
                 "failures": [],
@@ -994,7 +1055,8 @@ def test_positioning_cash_leg_composes_as_an_ordinary_chain_leg(home: Path) -> N
         ),
     )
     trips.artifact_write(
-        slug, "legs/onward/shortlist.json",
+        slug,
+        "legs/onward/shortlist.json",
         json.dumps(shortlist_doc([cand("ONW", "LAX", "NRT", "2026-09-05")], leg="onward")),
     )
     (journey,) = _run(slug)["journeys"]
@@ -1012,15 +1074,368 @@ def test_positioning_cash_leg_composes_as_an_ordinary_chain_leg(home: Path) -> N
     assert journey["cost"]["cash"][0]["amount_cents"] == 9000
 
 
+def _positioning_bridge(slug: str) -> None:
+    trips.artifact_write(
+        slug,
+        "legs/positioning/bridge.json",
+        json.dumps(
+            {
+                "quotes": [
+                    cash_quote(
+                        "SFO",
+                        "LAX",
+                        90.0,
+                        date="2026-09-03",
+                        departs_local="2026-09-03T08:00",
+                        arrives_local="2026-09-03T11:00",
+                    )
+                ],
+                "failures": [],
+            }
+        ),
+    )
+
+
+def test_optional_positioning_leg_yields_both_positioned_and_direct_variants(home: Path) -> None:
+    # Regression ask #4, pipeline-produced (R-A): the onward sweep, transparent to the optional
+    # positioning leg, lets the real shortlist emit both LAX->NRT and home-direct SFO->NRT.
+    slug = make_trip(POSITIONING)
+    sweep_on = next(n for n in trips.compile_graph(slug)["nodes"] if n["id"] == "sweep:onward")
+    assert sweep_on["endpoint_source"]["skip_sources"] == [{"union": ["SFO"]}]  # covers home
+    rows = [biz_row("ONW-LAX", "LAX", "NRT"), biz_row("ONW-SFO", "SFO", "NRT")]
+    sl = pipeline_shortlist(slug, "onward", rows, expanded_origins=["LAX", "SFO"])
+    assert {c["id"] for c in sl["candidates"]} == {"ONW-LAX", "ONW-SFO"}  # both from feasibility
+    seed("ONW-LAX", detail("ONW-LAX", [seg("LAX", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    seed("ONW-SFO", detail("ONW-SFO", [seg("SFO", "NRT", "2026-09-05T09:00", "2026-09-06T13:00")]))
+    _positioning_bridge(slug)
+    doc = _run(slug)
+    assert doc["gated"] == []
+    by_id = {journey["id"]: journey for journey in doc["journeys"]}
+    # The positioned variant carries the leg id segment; the skip variant simply lacks it.
+    assert set(by_id) == {
+        "positioning:cash:SFO:LAX:2026-09-03:economy|onward:ONW-LAX:J",
+        "onward:ONW-SFO:J",
+    }
+    # the full variant never departs SFO — positioning's LAX landing anchors the onward leg
+    assert "positioning:cash:SFO:LAX:2026-09-03:economy|onward:ONW-SFO:J" not in by_id
+    positioned = by_id["positioning:cash:SFO:LAX:2026-09-03:economy|onward:ONW-LAX:J"]
+    direct = by_id["onward:ONW-SFO:J"]
+    assert positioned["kind"] == "cash→award"
+    assert [(leg["role"], leg["mode"]) for leg in positioned["legs"]] == [
+        ("positioning", "cash"),
+        ("onward", "award"),
+    ]
+    assert direct["kind"] == "award"
+    assert [(leg["role"], leg["mode"]) for leg in direct["legs"]] == [("onward", "award")]
+    assert direct["legs"][0]["detail"]["segments"][0]["origin"] == "SFO"  # home-origin direct
+    assert direct["cost"]["cash"] == []  # skip variant carries no positioning cash cost
+    assert positioned["cost"]["cash"][0]["amount_cents"] == 9000
+
+
+def test_optional_leg_skip_variant_absent_without_a_home_origin_candidate(home: Path) -> None:
+    # Pipeline-produced: the onward sweep searches home (SFO) via skip transparency but finds no SFO
+    # availability, so feasibility yields only the LAX candidate — one journey, no skip variant.
+    slug = make_trip(POSITIONING)
+    sl = pipeline_shortlist(
+        slug, "onward", [biz_row("ONW", "LAX", "NRT")], expanded_origins=["LAX"]
+    )
+    assert {c["id"] for c in sl["candidates"]} == {"ONW"}
+    seed("ONW", detail("ONW", [seg("LAX", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    _positioning_bridge(slug)
+    doc = _run(slug)
+    assert [journey["id"] for journey in doc["journeys"]] == [
+        "positioning:cash:SFO:LAX:2026-09-03:economy|onward:ONW:J"
+    ]
+    assert "leads" not in doc
+
+
+POSITIONING_OPEN_JAW = {
+    "legs": [
+        {
+            "id": "positioning",
+            "origins": ["SFO"],
+            "dests": ["LAX"],
+            "mode": "cash",
+            "optional": True,
+        },
+        {"id": "onward", "origins": ["LAX"], "dests": ["NRT"]},
+    ]
+}
+
+
+def test_skip_variant_first_leg_explicit_origins_replace_the_home_filter(home: Path) -> None:
+    # R-A precedence: the skip variant's new opening leg declares its own origins (open jaw), which
+    # REPLACE the home filter — so it departs LAX standalone, not filtered to home SFO.
+    slug = make_trip(POSITIONING_OPEN_JAW)
+    sweep_on = next(n for n in trips.compile_graph(slug)["nodes"] if n["id"] == "sweep:onward")
+    assert sweep_on["endpoint_source"]["override"] == {"origins": ["LAX"], "dests": ["NRT"]}
+    sl = pipeline_shortlist(
+        slug, "onward", [biz_row("ONW", "LAX", "NRT")], expanded_origins=["LAX"]
+    )
+    assert {c["id"] for c in sl["candidates"]} == {"ONW"}
+    seed("ONW", detail("ONW", [seg("LAX", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    _positioning_bridge(slug)
+    doc = _run(slug)
+    # both variants depart LAX per the onward leg's own declaration — uniform across variants
+    assert {journey["id"] for journey in doc["journeys"]} == {
+        "positioning:cash:SFO:LAX:2026-09-03:economy|onward:ONW:J",
+        "onward:ONW:J",
+    }
+
+
+def _write_multi_city_prefix(
+    slug: str, *, hop_states: dict, hop_fetched_at: str = "2026-09-01T00:00:00+00:00"
+) -> None:
+    """The outbound composes through the real pipeline; the hop market is dead (empty shortlist),
+    its per-dest states built via the sweep writer (R-B). The return is an unreached beyond-leg."""
+    pipeline_shortlist(slug, "outbound", [biz_row("OB", "SFO", "NRT")], expanded_origins=["SFO"])
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    pipeline_shortlist(
+        slug, "hop", [], expanded_origins=[], states=hop_states, fetched_at=hop_fetched_at
+    )
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([], leg="return"))
+    )
+
+
+def test_three_leg_dead_middle_surfaces_prefix_lead_with_honest_state(home: Path) -> None:
+    # No hop availability ⇒ no full chain; the outbound prefix (a stay point) surfaces as a lead
+    # carrying the hop's honest per-dest state (R-B: keyed by BKK, the leg's own endpoint).
+    slug = make_trip(MULTI_CITY)
+    _write_multi_city_prefix(slug, hop_states=sweep_states(["BKK"]))
+    doc = _run(slug)
+    assert doc["journeys"] == []
+    assert doc["unpaired_outbounds"] == []
+    (lead,) = doc["leads"]
+    assert [entry["leg_id"] for entry in lead["prefix"]] == ["outbound"]
+    assert lead["prefix"][0]["dest"] == "NRT"
+    assert lead["reached"] == "NRT"
+    remaining = {entry["leg_id"]: entry["search_state"] for entry in lead["remaining"]}
+    assert remaining["hop"] == {"BKK": {"state": "searched_empty"}}  # dest-keyed per the sweep
+    assert remaining["return"] == {"state": "not_run", "reason": "prefix_incomplete"}
+
+
+def test_dead_middle_prefix_lead_reports_not_run_when_hop_unsearched(home: Path) -> None:
+    # An unsearched hop reads not_run/no_search per its own dest, never a false "searched, empty".
+    slug = make_trip(MULTI_CITY)
+    _write_multi_city_prefix(slug, hop_states={})
+    doc = _run(slug)
+    (lead,) = doc["leads"]
+    remaining = {entry["leg_id"]: entry["search_state"] for entry in lead["remaining"]}
+    assert remaining["hop"] == {"BKK": {"state": "not_run", "reason": "no_search"}}
+
+
+def test_dead_middle_prefix_lead_downgrades_expired_searched_empty(home: Path) -> None:
+    # R-C: a searched-empty hop whose sweep TTL has lapsed downgrades to unverified, exactly as the
+    # two-leg unpaired path does — a stale empty market never reads as authoritatively dead.
+    slug = make_trip(MULTI_CITY)
+    _write_multi_city_prefix(
+        slug, hop_states=sweep_states(["BKK"]), hop_fetched_at="2026-07-13T12:00:00+00:00"
+    )
+    doc = _run(slug)
+    (lead,) = doc["leads"]
+    remaining = {entry["leg_id"]: entry["search_state"] for entry in lead["remaining"]}
+    assert remaining["hop"] == {"BKK": {"state": "searched_empty", "verification": "unverified"}}
+
+
+BUCKETED_MIDDLE = {
+    "legs": [
+        {
+            "id": "outbound",
+            "origins": ["SFO"],
+            "dests": ["NRT"],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {
+            "id": "hop",
+            "buckets": [{"name": "asia", "dests": ["BKK"]}],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+PROGRAM_SWEEP_MIDDLE = {
+    "legs": [
+        {
+            "id": "outbound",
+            "origins": ["SFO"],
+            "dests": ["NRT"],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {
+            "id": "hop",
+            "program_sweeps": [{"source": "aeroplan", "dest_region": "Asia"}],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_bucketed_dead_middle_lead_reads_labeled_sweep_provenance(home: Path) -> None:
+    # MINOR-1: a bucketed hop writes only sweep-asia.json, never the bare sweep.json — the lead's
+    # provenance aggregates the labeled sweep names, so a stale dead market downgrades honestly.
+    slug = make_trip(BUCKETED_MIDDLE)
+    pipeline_shortlist(slug, "outbound", [biz_row("OB", "SFO", "NRT")], expanded_origins=["SFO"])
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    env = sweep_envelope([], expanded_origins=[], search_states=sweep_states(["BKK"]))
+    env["provenance"]["fetched_at"] = "2026-07-13T12:00:00+00:00"  # >24h stale vs FROZEN 09-01
+    trips.artifact_write(slug, "legs/hop/sweep-asia.json", json.dumps(env))
+    shortlist.shortlist(slug, leg="hop", now=clock())
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([], leg="return"))
+    )
+    doc = _run(slug)
+    (lead,) = doc["leads"]
+    hop = next(entry for entry in lead["remaining"] if entry["leg_id"] == "hop")
+    assert hop["searched_at"] == "2026-07-13T12:00:00+00:00"  # read from sweep-asia.json, not null
+    assert hop["cache_age_hours"] is not None
+    assert hop["search_state"] == {"BKK": {"state": "searched_empty", "verification": "unverified"}}
+
+
+def test_program_sweeps_dead_middle_lead_keys_state_by_sweep_label(home: Path) -> None:
+    # MINOR-2: a program-sweeps-only hop forwards no concrete dests; its lead state keys by the
+    # sweep LABEL its states were written under (aeroplan-asia), never an empty {} reading nothing.
+    slug = make_trip(PROGRAM_SWEEP_MIDDLE)
+    pipeline_shortlist(slug, "outbound", [biz_row("OB", "SFO", "NRT")], expanded_origins=["SFO"])
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    states = sweeps._search_states(
+        {"endpoints": ["aeroplan-asia"], "endpoint_field": None}, [], has_more=False, stop=None
+    )
+    env = sweep_envelope([], expanded_origins=[], search_states=states)
+    env["provenance"]["fetched_at"] = "2026-09-01T00:00:00+00:00"  # fresh: no TTL downgrade
+    trips.artifact_write(slug, "legs/hop/sweep-aeroplan-asia.json", json.dumps(env))
+    shortlist.shortlist(slug, leg="hop", now=clock())
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([], leg="return"))
+    )
+    doc = _run(slug)
+    (lead,) = doc["leads"]
+    hop = next(entry for entry in lead["remaining"] if entry["leg_id"] == "hop")
+    assert hop["search_state"] == {"aeroplan-asia": {"state": "searched_empty"}}
+
+
+MIXED_MIDDLE = {
+    "legs": [
+        {
+            "id": "outbound",
+            "origins": ["SFO"],
+            "dests": ["NRT"],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {
+            "id": "hop",
+            "buckets": [{"name": "asia", "dests": ["BKK"]}],
+            "program_sweeps": [{"source": "aeroplan", "dest_region": "Asia"}],
+            "stay_nights": {"min": 4, "max": 4},
+        },
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_mixed_bucket_and_program_dead_middle_lead_keeps_both_state_keys(home: Path) -> None:
+    # MINOR (R-B): a hop with BOTH buckets and program_sweeps keys its lead state ADDITIVELY — the
+    # bucket's dest (BKK) AND the region sweep's label (aeroplan-asia), never dropping the label.
+    slug = make_trip(MIXED_MIDDLE)
+    pipeline_shortlist(slug, "outbound", [biz_row("OB", "SFO", "NRT")], expanded_origins=["SFO"])
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    bucket = sweep_envelope([], expanded_origins=[], search_states=sweep_states(["BKK"]))
+    bucket["provenance"]["fetched_at"] = "2026-09-01T00:00:00+00:00"  # fresh: no TTL downgrade
+    trips.artifact_write(slug, "legs/hop/sweep-asia.json", json.dumps(bucket))
+    program_states = sweeps._search_states(
+        {"endpoints": ["aeroplan-asia"], "endpoint_field": None}, [], has_more=False, stop=None
+    )
+    program = sweep_envelope([], expanded_origins=[], search_states=program_states)
+    program["provenance"]["fetched_at"] = "2026-09-01T00:00:00+00:00"
+    trips.artifact_write(slug, "legs/hop/sweep-aeroplan-asia.json", json.dumps(program))
+    shortlist.shortlist(slug, leg="hop", now=clock())
+    trips.artifact_write(
+        slug, "legs/return/shortlist.json", json.dumps(shortlist_doc([], leg="return"))
+    )
+    doc = _run(slug)
+    (lead,) = doc["leads"]
+    hop = next(entry for entry in lead["remaining"] if entry["leg_id"] == "hop")
+    assert hop["search_state"] == {
+        "BKK": {"state": "searched_empty"},
+        "aeroplan-asia": {"state": "searched_empty"},
+    }
+
+
+RETURN_ONLY_OPTIONAL = {
+    "legs": [
+        {
+            "id": "positioning",
+            "origins": ["SFO"],
+            "dests": ["LAX"],
+            "mode": "cash",
+            "optional": True,
+        },
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_leg_variants_excludes_a_variant_whose_first_leg_targets_origins() -> None:
+    # R-D: skipping the only non-$origins leg leaves a fly-home-from-home shape — excluded, same
+    # class as the dropped empty variant. The full variant survives.
+    legs = [
+        {"id": "positioning", "dests": ["LAX"], "optional": True},
+        {"id": "return", "dests": "$origins"},
+    ]
+    assert journeys._leg_variants(legs) == [[0, 1]]
+
+
+def test_all_optional_before_home_never_crashes_on_a_home_departing_return(home: Path) -> None:
+    # R-D repro (cc-notes log 0e780d2): a home-origin return candidate would drive the return-only
+    # variant into fit with one typed leg (IndexError at fit.py:194). The variant is excluded.
+    slug = make_trip(RETURN_ONLY_OPTIONAL)
+    seed(
+        "RET-HOME", detail("RET-HOME", [seg("SFO", "SFO", "2026-09-12T16:00", "2026-09-12T20:00")])
+    )
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET-HOME", "SFO", "SFO", "2026-09-12")], leg="return")),
+    )
+    _positioning_bridge(slug)
+    doc = _run(slug)  # no IndexError
+    assert doc["journeys"] == []  # the degenerate fly-home-from-home variant never composes
+
+
+def test_full_chain_success_produces_no_partial_leads(home: Path) -> None:
+    # A full three-leg chain composes ⇒ no prefix surfaces as a lead.
+    slug = make_trip(MULTI_CITY)
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-10T10:00", "2026-09-10T14:00")]))
+    seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-14T16:00", "2026-09-14T20:00")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/hop/shortlist.json",
+        json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-10")], leg="hop")),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-14")], leg="return")),
+    )
+    doc = _run(slug)
+    assert len(doc["journeys"]) == 1
+    assert "leads" not in doc
+
+
 # --- degeneracy gate: two-leg exhaustive vs ≥3-leg beam, and dateline continuity -----------------
 
 
-def test_two_leg_round_trip_composes_exhaustively_ignoring_beam(
-    home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The beam bounds only ≥3-leg plans: a two-leg round trip pairs all 9x8 = 72, no cut, no leads.
-    monkeypatch.setattr(journeys, "COMPOSE_BEAM_WIDTH", 2)
-    slug = make_trip(ROUND_TRIP)
+def test_two_leg_round_trip_composes_exhaustively_ignoring_beam(home: Path) -> None:
+    # The beam bounds only ≥3-leg plans: even with plan.tuning.beam_width 2, a two-leg round trip
+    # pairs all 9x8 = 72, no cut, no leads.
+    slug = make_trip({**ROUND_TRIP, "tuning": {"beam_width": 2}})
     obs, rets = [], []
     for i in range(9):
         cid = f"OB{i}"
@@ -1038,9 +1453,9 @@ def test_two_leg_round_trip_composes_exhaustively_ignoring_beam(
 
 
 def test_two_leg_round_trip_composes_all_65_at_real_beam_width(home: Path) -> None:
-    # 65x1 at the real COMPOSE_BEAM_WIDTH=64 (no monkeypatch): a two-leg plan never beams, so all 65
-    # journeys compose, no cut is disclosed, and no chain is mislabeled a lead.
-    assert journeys.COMPOSE_BEAM_WIDTH == 64
+    # 65x1 at the default beam width 64 (no tuning): a two-leg plan never beams, so all 65 journeys
+    # compose, no cut is disclosed, and no chain is mislabeled a lead.
+    assert COMPOSE_BEAM_WIDTH == 64
     slug = make_trip(ROUND_TRIP)
     obs = []
     for i in range(65):
@@ -1158,3 +1573,442 @@ def test_cash_or_either_end_leg_composes_through_run(
     doc = _run(slug)
     assert doc["journeys"], "a cash/either end leg must compose, not raise KeyError"
     assert cash_variant_kind in {j["kind"] for j in doc["journeys"]}
+
+
+# --- T3: manual chains (legs/manual.json) — the agent invents the shape, the CLI prices it -------
+
+OPEN_JAW = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "award"},
+    ]
+}
+CASH_ONWARD = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "cash"},
+    ]
+}
+
+
+def write_manual(slug: str, chains: list) -> None:
+    trips.artifact_write(slug, "legs/manual.json", json.dumps(chains))
+
+
+def test_manual_absent_leaves_expand_byte_identical(home: Path) -> None:
+    slug = make_trip(ROUND_TRIP)
+    seed("OB", ob_detail("OB"))
+    seed("RET", ret_detail("RET"))
+    write_shortlists(
+        slug, [cand("OB", "SFO", "NRT", "2026-09-05")], [cand("RET", "NRT", "SFO", "2026-09-12")]
+    )
+    doc = _run(slug)
+    assert "manual_rejected" not in doc
+    assert all("provenance" not in journey for journey in doc["journeys"])
+
+
+def test_manual_chain_dedupes_and_prices_identically_to_composed(home: Path) -> None:
+    slug = make_trip(ROUND_TRIP)
+    seed("OB", ob_detail("OB"))
+    seed("RET", ret_detail("RET"))
+    write_shortlists(
+        slug, [cand("OB", "SFO", "NRT", "2026-09-05")], [cand("RET", "NRT", "SFO", "2026-09-12")]
+    )
+    baseline = _run(slug)["journeys"]
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]],
+    )
+    doc = _run(slug)
+    assert doc["journeys"] == baseline  # composed wins the dedup, byte-for-byte — no manual boost
+    assert "manual_rejected" not in doc
+    (journey,) = doc["journeys"]
+    assert "provenance" not in journey
+
+
+def test_manual_only_cross_airport_chain_prices_and_badges_provenance(home: Path) -> None:
+    # A surface hop between airports the topology superset never anchors (NRT arrival, HND
+    # departure): composition alone yields nothing, but the agent's explicit chain prices.
+    slug = make_trip(OPEN_JAW)
+    seed("OB", ob_detail("OB"))
+    seed("ON", detail("ON", [seg("HND", "OKA", "2026-09-08T09:00", "2026-09-08T12:00", cabin="Y")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(
+            shortlist_doc([cand("ON", "HND", "OKA", "2026-09-08", cabin="Y")], leg="onward")
+        ),
+    )
+    assert _run(slug)["journeys"] == []  # composition never chains HND onto an NRT arrival
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "ON"}]],
+    )
+    doc = _run(slug)
+    (journey,) = doc["journeys"]
+    assert journey["id"] == "outbound:OB:J|onward:ON:Y"
+    assert journey["kind"] == "award→award"
+    assert journey["provenance"] == "manual"
+    assert "manual_rejected" not in doc
+
+
+def test_manual_duplicate_chains_dedupe_to_one_journey(home: Path) -> None:
+    slug = make_trip(OPEN_JAW)
+    seed("OB", ob_detail("OB"))
+    seed("ON", detail("ON", [seg("HND", "OKA", "2026-09-08T09:00", "2026-09-08T12:00", cabin="Y")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(
+            shortlist_doc([cand("ON", "HND", "OKA", "2026-09-08", cabin="Y")], leg="onward")
+        ),
+    )
+    chain = [{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "ON"}]
+    write_manual(slug, [chain, chain])
+    assert len(_run(slug)["journeys"]) == 1
+
+
+def test_manual_cash_leg_chain_prices_with_provenance(home: Path) -> None:
+    slug = make_trip(CASH_ONWARD)
+    seed("OB", ob_detail("OB"))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    quote = cash_quote("HND", "OKA", 240.0, date="2026-09-08")
+    trips.artifact_write(
+        slug, "legs/onward/bridge.json", json.dumps({"quotes": [quote], "failures": []})
+    )
+    write_manual(
+        slug,
+        [
+            [
+                {"leg_id": "outbound", "candidate": "OB"},
+                {
+                    "leg_id": "onward",
+                    "candidate": {"gateway": "HND", "onward_dest": "OKA", "date": "2026-09-08"},
+                },
+            ]
+        ],
+    )
+    doc = _run(slug)
+    (journey,) = doc["journeys"]
+    assert journey["kind"] == "award→cash"
+    assert journey["provenance"] == "manual"
+    assert journey["cost"]["cash"][0]["amount_cents"] == 24000
+
+
+def test_manual_continuity_violation_lands_in_manual_rejected(home: Path) -> None:
+    slug = make_trip(OPEN_JAW)
+    seed("OB", ob_detail("OB"))  # arrives NRT 2026-09-06
+    seed("ON", detail("ON", [seg("HND", "OKA", "2026-09-04T09:00", "2026-09-04T12:00", cabin="Y")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(
+            shortlist_doc([cand("ON", "HND", "OKA", "2026-09-04", cabin="Y")], leg="onward")
+        ),
+    )
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "ON"}]],
+    )
+    doc = _run(slug)
+    assert doc["journeys"] == []
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == [
+        {"leg_id": "outbound", "candidate": "OB"},
+        {"leg_id": "onward", "candidate": "ON"},
+    ]
+    assert "does not continue" in rejected["reason"]
+
+
+def test_manual_candidate_aged_out_of_shortlist_is_disclosed(home: Path) -> None:
+    slug = make_trip(ROUND_TRIP)
+    seed("OB", ob_detail("OB"))
+    seed("RET", ret_detail("RET"))
+    write_shortlists(
+        slug,
+        [cand("OB", "SFO", "NRT", "2026-09-05"), cand("OB2", "SFO", "NRT", "2026-09-07")],
+        [cand("RET", "NRT", "SFO", "2026-09-12")],
+    )
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB2"}, {"leg_id": "return", "candidate": "RET"}]],
+    )
+    # Rewrite the outbound shortlist without OB2 — a stale manual reference that no longer resolves.
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == [
+        {"leg_id": "outbound", "candidate": "OB2"},
+        {"leg_id": "return", "candidate": "RET"},
+    ]
+    assert "no longer available" in rejected["reason"]
+
+
+GROWN = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "award"},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+RENAMED = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "back", "dests": "$origins"},
+    ]
+}
+STALE_CHAIN = [{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]
+
+
+def _seed_round_trip_manual(slug: str) -> None:
+    seed("OB", ob_detail("OB"))
+    seed("RET", ret_detail("RET"))
+    write_shortlists(
+        slug, [cand("OB", "SFO", "NRT", "2026-09-05")], [cand("RET", "NRT", "SFO", "2026-09-12")]
+    )
+    write_manual(slug, [STALE_CHAIN])
+
+
+def test_manual_chain_stale_after_plan_grows_lands_in_manual_rejected(home: Path) -> None:
+    # A leg added under the input artifact: the chain no longer covers every plan leg, so it
+    # re-validates to a coverage rejection — never a zip-truncated, role-misattributed journey.
+    slug = make_trip(ROUND_TRIP)
+    _seed_round_trip_manual(slug)
+    trips.set_patch(slug, {"plan": GROWN})  # +onward; the artifact still lists only two legs
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == STALE_CHAIN
+    assert "cover every plan leg once in order" in rejected["reason"]
+    assert all(journey.get("provenance") != "manual" for journey in doc["journeys"])
+
+
+def test_manual_chain_stale_after_leg_rename_lands_in_manual_rejected(home: Path) -> None:
+    # A leg renamed under the artifact references an id no longer in the plan: it re-validates to a
+    # manual_rejected reason naming the unknown id, not a raw KeyError.
+    slug = make_trip(ROUND_TRIP)
+    _seed_round_trip_manual(slug)
+    trips.set_patch(slug, {"plan": RENAMED})  # 'return' → 'back'; the artifact still names 'return'
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == STALE_CHAIN
+    assert rejected["reason"] == "leg 'return' is not a plan leg"
+    assert all(journey.get("provenance") != "manual" for journey in doc["journeys"])
+
+
+def test_manual_chain_duplicating_a_gated_composed_chain_dedupes_gated(home: Path) -> None:
+    # A manual chain identical to a seat-gated composed chain gets the gated channel's id-dedupe
+    # (first occurrence wins) — not a doubled disclosure.
+    slug = make_trip(ROUND_TRIP, party=2)
+    seed("OB", ob_detail("OB"))
+    seed("RET", ret_detail("RET", seats=1))  # live return seats below the party of 2 → seat gate
+    write_shortlists(
+        slug,
+        [cand("OB", "SFO", "NRT", "2026-09-05")],
+        [cand("RET", "NRT", "SFO", "2026-09-12", seats=2)],
+    )
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "return", "candidate": "RET"}]],
+    )
+    doc = _run(slug)
+    assert doc["journeys"] == []
+    (entry,) = doc["gated"]  # not doubled by the manual pass re-composing the same gated chain
+    assert "below the party" in entry["reason"]
+
+
+# R-F: a manual chain covers every MANDATORY leg in plan order, freely skipping OPTIONAL ones.
+
+OPTIONAL_GROWN = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "award", "optional": True},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+REORDERED = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "return", "dests": "$origins"},
+        {"id": "onward", "dests": ["OKA"], "mode": "award"},
+    ]
+}
+FULL_GROWN_CHAIN = [
+    {"leg_id": "outbound", "candidate": "OB"},
+    {"leg_id": "onward", "candidate": "ON"},
+    {"leg_id": "return", "candidate": "RET"},
+]
+
+
+def _seed_grown_manual(slug: str) -> None:
+    """A 3-leg SFO→NRT→OKA→SFO trip, every leg mandatory, its full manual chain written."""
+    seed("OB", ob_detail("OB"))  # SFO→NRT
+    seed("ON", detail("ON", [seg("NRT", "OKA", "2026-09-08T09:00", "2026-09-08T12:00")]))
+    seed("RET", ret_detail("RET", origin="OKA"))  # OKA→SFO
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(shortlist_doc([cand("ON", "NRT", "OKA", "2026-09-08")], leg="onward")),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET", "OKA", "SFO", "2026-09-12")], leg="return")),
+    )
+    write_manual(slug, [FULL_GROWN_CHAIN])
+
+
+def test_manual_chain_grown_by_optional_leg_prices_as_skip_variant(home: Path) -> None:
+    # An OPTIONAL leg inserted under a two-leg chain: it still covers both mandatory legs, so it now
+    # PRICES as the skip variant (dedupes with the composed twin) instead of a coverage rejection.
+    slug = make_trip(ROUND_TRIP)
+    _seed_round_trip_manual(slug)  # STALE_CHAIN=[outbound, return] on the two-leg plan
+    trips.set_patch(slug, {"plan": OPTIONAL_GROWN})  # +optional onward between the two legs
+    doc = _run(slug)
+    assert "manual_rejected" not in doc
+    assert any(journey["id"] == "outbound:OB:J|return:RET:J" for journey in doc["journeys"])
+
+
+def test_manual_chain_stale_after_leg_removal_lands_in_manual_rejected(home: Path) -> None:
+    # A removed leg the chain still names re-validates to the unknown-id reason, never a KeyError.
+    slug = make_trip(GROWN)
+    _seed_grown_manual(slug)
+    trips.set_patch(slug, {"plan": ROUND_TRIP})  # onward removed; the chain still names it
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == FULL_GROWN_CHAIN
+    assert rejected["reason"] == "leg 'onward' is not a plan leg"
+    assert all(journey.get("provenance") != "manual" for journey in doc["journeys"])
+
+
+def test_manual_chain_stale_after_leg_reorder_lands_in_manual_rejected(home: Path) -> None:
+    # Reordered mandatory legs: the chain is no longer a plan-order subsequence → coverage reason.
+    slug = make_trip(GROWN)
+    _seed_grown_manual(slug)
+    trips.set_patch(slug, {"plan": REORDERED})  # [outbound, return, onward]
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == FULL_GROWN_CHAIN
+    assert rejected["reason"] == (
+        "chain must cover every plan leg once in order "
+        "['outbound', 'return', 'onward'], got ['outbound', 'onward', 'return']"
+    )
+
+
+def test_manual_chain_optional_flag_flip_on_covered_leg_still_prices(home: Path) -> None:
+    # Flipping a COVERED leg's optional flag leaves the chain's variant unchanged, so it keeps
+    # pricing across the boundary the topology never anchors.
+    slug = make_trip(OPEN_JAW)
+    seed("OB", ob_detail("OB"))
+    seed("ON", detail("ON", [seg("HND", "OKA", "2026-09-08T09:00", "2026-09-08T12:00")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(shortlist_doc([cand("ON", "HND", "OKA", "2026-09-08")], leg="onward")),
+    )
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "ON"}]],
+    )
+    flipped = {"legs": [OPEN_JAW["legs"][0], {**OPEN_JAW["legs"][1], "optional": True}]}
+    trips.set_patch(slug, {"plan": flipped})
+    doc = _run(slug)
+    (journey,) = [j for j in doc["journeys"] if j.get("provenance") == "manual"]
+    assert journey["id"] == "outbound:OB:J|onward:ON:J"
+    assert "manual_rejected" not in doc
+
+
+def test_manual_chain_mode_flip_award_to_cash_discloses_unavailable(home: Path) -> None:
+    # Flipping a covered leg award→cash strands its award id: coverage passes, resolution misses.
+    slug = make_trip(OPEN_JAW)
+    seed("OB", ob_detail("OB"))
+    seed("ON", detail("ON", [seg("NRT", "OKA", "2026-09-08T09:00", "2026-09-08T12:00", cabin="Y")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(
+            shortlist_doc([cand("ON", "NRT", "OKA", "2026-09-08", cabin="Y")], leg="onward")
+        ),
+    )
+    write_manual(
+        slug,
+        [[{"leg_id": "outbound", "candidate": "OB"}, {"leg_id": "onward", "candidate": "ON"}]],
+    )
+    cash_onward = {
+        "legs": [OPEN_JAW["legs"][0], {"id": "onward", "dests": ["OKA"], "mode": "cash"}]
+    }
+    trips.set_patch(slug, {"plan": cash_onward})  # onward now cash: the award id can't resolve
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["reason"] == "leg 'onward': award candidate 'ON' is no longer available"
+    assert all(journey.get("provenance") != "manual" for journey in doc["journeys"])
+
+
+POS_ONWARD = {
+    "legs": [
+        {"id": "pos", "origins": ["SFO"], "dests": ["NRT"], "mode": "award", "optional": True},
+        {"id": "onward", "dests": ["OKA"], "mode": "award"},
+    ]
+}
+POS_HOME = {
+    "legs": [
+        {"id": "pos", "origins": ["SFO"], "dests": ["NRT"], "mode": "award", "optional": True},
+        {"id": "onward", "dests": "$origins"},
+    ]
+}
+
+
+def test_manual_skip_chain_opening_on_flipped_homeward_leg_is_rejected(home: Path) -> None:
+    # R-D: a plan edit leaves the chain's only covered leg flying home to $origins → honest
+    # rejection, never the fit.py single-leg IndexError.
+    slug = make_trip(POS_ONWARD)
+    seed("ON", detail("ON", [seg("NRT", "OKA", "2026-09-08T09:00", "2026-09-08T12:00")]))
+    trips.artifact_write(
+        slug,
+        "legs/onward/shortlist.json",
+        json.dumps(shortlist_doc([cand("ON", "NRT", "OKA", "2026-09-08")], leg="onward")),
+    )
+    write_manual(slug, [[{"leg_id": "onward", "candidate": "ON"}]])  # skip the optional positioning
+    trips.set_patch(slug, {"plan": POS_HOME})  # onward now flies home to $origins
+    doc = _run(slug)
+    (rejected,) = doc["manual_rejected"]
+    assert rejected["chain"] == [{"leg_id": "onward", "candidate": "ON"}]
+    assert "homeward leg 'onward'" in rejected["reason"]
+    assert all(journey.get("provenance") != "manual" for journey in doc["journeys"])

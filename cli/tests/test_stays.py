@@ -334,6 +334,19 @@ def test_intervals_worklist_covers_the_board_and_carries_a_fingerprint(getaway_h
     assert walk["search_key"] == "CUN|2026-09-10|4"
 
 
+def test_intervals_board_cut_honors_tuning_override(getaway_home: Path) -> None:
+    # The board walks the same effective presentation cut finalize applies: tuning it to 3 shrinks
+    # the worklist to the top three plus the notable stretch, keeping board and finalists in sync.
+    slug = _trip({**ROUND_TRIP_LODGING, "tuning": {"presentation_limit": 3}})
+    write_rank(
+        slug,
+        [journey(f"J{i}") for i in range(8)],
+        notable=[journey("LATE", ret_dep="2026-09-15T10:00")],
+    )
+    ids = [w["journey_id"] for w in stays.intervals(slug, now=clock())["journeys"]]
+    assert ids == [f"J{i}" for i in range(3)] + ["LATE"]
+
+
 def test_intervals_marks_open_jaw_deferred(getaway_home: Path) -> None:
     slug = _trip(ROUND_TRIP_LODGING)
     write_rank(slug, [journey("OJ", ret_origin="MEX")])

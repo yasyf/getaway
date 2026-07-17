@@ -166,12 +166,15 @@ def journey_fit(
 ) -> dict:
     """Fit facts + mandatory preference misses for one composed journey.
 
-    ``legs`` is an ordered list of typed legs. An award leg is
-    ``{role, mode:"award", detail, source, fetched_at?}`` where ``detail`` is an expanded
-    seats.aero itinerary (segments carry local wall-clock times and per-segment cabins); a cash
-    leg is ``{role, mode:"cash", origin, dest, cash}`` and contributes only elapsed time and cost —
-    its detail-dependent facts stay absent (unknown = neutral). The outbound leg is required; a
-    non-return onward leg makes this a hybrid journey and a return leg makes it round-trip.
+    ``legs`` is an ordered list of typed legs — for an optional-leg variant, this variant's own
+    composed legs. An award leg is ``{role, mode:"award", detail, source, fetched_at?}`` where
+    ``detail`` is an expanded seats.aero itinerary (segments carry local wall-clock times and
+    per-segment cabins); a cash leg is ``{role, mode:"cash", origin, dest, cash}`` and contributes
+    only elapsed time and cost — its detail-dependent facts stay absent (unknown = neutral). The
+    outbound leg is required; a non-return onward leg makes this a hybrid journey and a return leg
+    makes it round-trip. The return-side gate stays plan-derived (:func:`trips._targets_origins`):
+    the caller passes the variant's own plan legs, so a variant that skips the homeward leg is
+    scored as the shorter shape it is, per-position facts anchoring off the legs given here.
     """
     party = trip["party"]
     preferred_letter = CABIN_PREFIX[preferred_cabin(trip)]

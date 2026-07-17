@@ -27,7 +27,7 @@ from typing import Any
 import click
 
 from getaway import prefs, registry, trips
-from getaway.constants import PRESENTATION_LIMIT
+from getaway.constants import tuned
 from getaway.paths import (
     UsageError,
     emit,
@@ -178,10 +178,12 @@ def _worklist_entry(jid: str, derived: dict) -> dict:
     }
 
 
-def _board_journeys(rank_doc: dict) -> list[Journey]:
-    """The complete journeys the board presents — the ranked cut plus the notable stretches
-    assess pulled from beyond it. Deduplicated; both share the ``{journey, ...}`` entry shape."""
-    entries = rank_doc["ranked"][:PRESENTATION_LIMIT] + rank_doc["notable_stretches"]
+def _board_journeys(rank_doc: dict, plan: dict) -> list[Journey]:
+    """The complete journeys the board presents — the ranked cut (the same effective presentation
+    limit finalize applies) plus the notable stretches assess pulled from beyond it. Deduplicated;
+    both share the ``{journey, ...}`` entry shape."""
+    cut = rank_doc["ranked"][: tuned(plan, "presentation_limit")]
+    entries = cut + rank_doc["notable_stretches"]
     seen: set[str] = set()
     journeys: list[Journey] = []
     for entry in entries:
@@ -205,7 +207,7 @@ def intervals(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     plan = trip["plan"]
     rank_doc = json.loads(trips.artifact_read(slug, "rank.json"))
     out: list[dict] = []
-    for journey in _board_journeys(rank_doc):
+    for journey in _board_journeys(rank_doc, plan):
         today = _origin_local_today(_home_origin(journey), now())
         for derived in derive_intervals(journey, plan, today):
             out.append(_worklist_entry(journey["id"], derived))

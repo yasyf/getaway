@@ -13,8 +13,7 @@ from getaway.constants import (
     DEFAULT_QUOTA_FLOOR,
     GENERATION_CUTTING_COMPLETENESS,
     SEARCH_PAGE_SIZE,
-    SOFT_DATE_SEARCH_PADDING_DAYS,
-    SWEEP_PAGE_BUDGET,
+    tuned,
 )
 from getaway.paths import UsageError, cache_db, emit, map_errors, utcnow
 from getaway.seats import AuthError, PaginationError, SeatsClient
@@ -33,15 +32,11 @@ def _shift_date(date_str: str, days: int) -> str:
 
 
 def _predecessor(plan: dict, leg_id: str) -> Leg | None:
-    """The immediately-preceding non-discover leg — the one this leg chains from. A discover leg
-    breaks the chain (its successor declares explicit origins), so the leg right after one, like the
-    first leg, has no predecessor. Mirrors the fold's ``prior_leg`` in ``trips.compile_graph``."""
+    """The immediately-preceding leg — the one this leg chains from — or ``None`` for the first leg.
+    A discover leg chains like any award leg (P3). Mirrors ``prior_leg`` in the compile fold."""
     legs = plan["legs"]
     index = next(i for i, entry in enumerate(legs) if entry["id"] == leg_id)
-    if index == 0:
-        return None
-    prior = legs[index - 1]
-    return None if isinstance(prior.get("dests"), dict) else prior
+    return None if index == 0 else legs[index - 1]
 
 
 def _stay_shift(dates: set[str], stay: dict | None) -> set[str]:
@@ -59,9 +54,10 @@ def _stay_shift(dates: set[str], stay: dict | None) -> set[str]:
 
 def derive_specs(leg: Leg) -> list[Spec]:
     """An award/either leg's sweep specs: one search per bucket, one bulk-availability per program
-    sweep, else one bare search (label ``None``) over the leg's own dests. Region tokens and
-    endpoints stay as written — the server expands them and the leg records the concrete set at
-    sweep time. Labels mirror ``trips._leg_sweep_labels`` so node ids and store labels agree.
+    sweep, plus a bare scout-fed search (label ``None``) for a discover leg, else one bare search
+    (label ``None``) over the leg's own dests. Region tokens and endpoints stay as written — the
+    server expands them and the leg records the concrete set at sweep time. Labels mirror
+    ``trips._leg_sweep_labels`` so node ids and store labels agree.
     """
     specs: list[Spec] = []
     for bucket in leg.get("buckets", []):
@@ -79,6 +75,8 @@ def derive_specs(leg: Leg) -> list[Spec]:
         if "origin_region" in sweep:
             spec["origin_region"] = sweep["origin_region"]
         specs.append(spec)
+    if isinstance(leg.get("dests"), dict):  # discover: scout-fed bare sweep beside the groupings
+        specs.append({"label": None, "kind": "search", "dests": None})
     return specs or [{"label": None, "kind": "search", "dests": None}]
 
 
@@ -89,32 +87,93 @@ def _leg_window(
     is_return: bool,
     predecessor: Leg | None,
     arrivals: dict[str, set[str]],
+    skip_windows: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     """A leg's sweep window: an absolute per-intent ``window`` wins; a middle leg chained past a
     stay-marked stop departs within ``[arrival+min .. arrival+max]`` of its predecessor's observed
     arrivals (the only dates that honor the stay); otherwise derive from the trip window,
     positionally anchored — the first leg carries the departure-side constraint, a leg flying to
-    ``$origins`` the return-side one, and any other middle leg the padded trip window."""
-    if "window" in leg:
+    ``$origins`` the return-side one, and any other middle leg the padded trip window.
+
+    ``skip_windows`` are the windows this leg would sweep were an optional predecessor absent and it
+    chained from the earlier pre-boundary instead (one per carried skip source). EVERY branch's base
+    window flows through one exit that ENVELOPEs it (min start, max end) with every skip window (R-A
+    window union): the skip variant may depart earlier (dropping the optional stay) OR later (the
+    wider pre-boundary stay), and both are searched — no branch drops the skip coverage. The padded
+    trip window is a soft search bound, never a cap on skip coverage; only a hard trip constraint
+    (``return_arrival_by``) clamps the end, and it clamps AFTER the envelope so the skip path never
+    lifts a trip-level return cap."""
+    if "window" in leg:  # an absolute per-intent window is a hard bound in every variant
         return leg["window"]["start"], leg["window"]["end"]
-    if not is_first and not is_return and predecessor is not None and "stay_nights" in predecessor:
-        observed = {date for dates in arrivals.values() for date in dates}
-        if observed:
-            shifted = _stay_shift(observed, predecessor["stay_nights"])
-            return min(shifted), max(shifted)
     window = trip["window"]
     constraints = trip["plan"].get("constraints", {})
-    pad = SOFT_DATE_SEARCH_PADDING_DAYS
-    if is_return:
-        hard = constraints.get("return_arrival_by")
-        if hard:
-            return window["start"], hard["latest_local_date"]
-        return window["start"], _shift_date(window["end"], pad)
-    if is_first:
-        hard = constraints.get("outbound_departure_window")
-        if hard:
-            return hard["start"], hard["end"]
-    return _shift_date(window["start"], -pad), _shift_date(window["end"], pad)
+    pad = tuned(trip["plan"], "date_padding_days")
+    skip_windows = skip_windows or []
+    widen = bool(skip_windows)
+    return_cap = constraints.get("return_arrival_by") if is_return else None
+
+    observed: set[str] = set()
+    stay: dict | None = None
+    if not is_first and not is_return and predecessor is not None and "stay_nights" in predecessor:
+        observed = {date for dates in arrivals.values() for date in dates}
+        stay = predecessor["stay_nights"]
+    outbound_hard = constraints.get("outbound_departure_window") if is_first else None
+    if outbound_hard:
+        start, end = outbound_hard["start"], outbound_hard["end"]
+    elif observed:
+        shifted = _stay_shift(observed, stay)
+        start, end = min(shifted), max(shifted)
+    elif is_return:
+        end = return_cap["latest_local_date"] if return_cap else _shift_date(window["end"], pad)
+        start = window["start"]
+    else:
+        start, end = _shift_date(window["start"], -pad), _shift_date(window["end"], pad)
+
+    for skip_start, skip_end in skip_windows:  # single exit: envelope every branch's base window
+        start, end = min(start, skip_start), max(end, skip_end)
+    start = _skip_floor(start, window["start"], pad, widen)
+    if return_cap:  # a hard return cap clamps AFTER the envelope; skip coverage never lifts it
+        end = min(end, return_cap["latest_local_date"])
+    return start, end
+
+
+def _skip_floor(start: str, window_start: str, pad: int, widen_skip: bool) -> str:
+    """The lower window bound, dropped to the padded trip-window floor when an optional predecessor
+    could be skipped so the earlier skip-variant departures are searched (R-A)."""
+    if not widen_skip:
+        return start
+    return min(start, _shift_date(window_start, -pad))
+
+
+def _promoted_first_window(plan: dict, src: dict, padded: tuple[str, str]) -> tuple[str, str]:
+    """The window a home-union skip source's successor would sweep once promoted to the variant's
+    FIRST leg: the padded trip window, enveloped with a confirmed ``outbound_departure_window`` when
+    the skip reaches all the way back to leg 0. ``_leg_window`` applies that hard window verbatim to
+    a promoted first leg (``is_first`` outbound branch), so the full plan must envelope it or it
+    undercuts the variant's authoritative departure dates (R-E)."""
+    outbound = plan.get("constraints", {}).get("outbound_departure_window")
+    if outbound and src == {"union": list(plan["legs"][0]["origins"])}:
+        return min(padded[0], outbound["start"]), max(padded[1], outbound["end"])
+    return padded
+
+
+def _skip_source_window(slug: str, trip: dict, src: dict) -> tuple[str, str]:
+    """The window this leg would sweep were an optional predecessor absent and it chained from this
+    earlier skip source instead (R-A window union): the stay-shifted departures off the
+    pre-boundary's observed arrivals (its carried ``from`` shortlist ∪ ``stay_nights``), or the
+    padded trip window — enveloping a confirmed outbound window when the skip reaches leg 0 — when
+    that boundary carries no arrivals or no stay to shift them by."""
+    window = trip["window"]
+    pad = tuned(trip["plan"], "date_padding_days")
+    padded = (_shift_date(window["start"], -pad), _shift_date(window["end"], pad))
+    if "from" not in src or "stay_nights" not in src:
+        return _promoted_first_window(trip["plan"], src, padded)
+    prior = json.loads(trips.artifact_read(slug, src["from"]))
+    arrivals = {cand["date"] for cand in prior["candidates"]}
+    if not arrivals:
+        return padded
+    shifted = _stay_shift(arrivals, src["stay_nights"])
+    return min(shifted), max(shifted)
 
 
 def _chained_endpoints(
@@ -134,14 +193,51 @@ def _chained_endpoints(
         prior = json.loads(trips.artifact_read(slug, endpoint_source["from"]))
         for cand in prior["candidates"]:
             arrivals.setdefault(cand[endpoint_source["field"]], set()).add(cand["date"])
-    if override.get("origins"):
+    if override.get("origins"):  # explicit origins REPLACE the chain — skip anchors never apply
         origins = list(override["origins"])
     else:
-        origins = sorted(set(arrivals) | set(endpoint_source.get("union", [])))
+        resolved = set(arrivals) | set(endpoint_source.get("union", []))
+        for src in endpoint_source.get("skip_sources", []):  # optional-run skip transparency (R-A)
+            resolved |= trips.resolve_source_airports(slug, src)
+        origins = sorted(resolved)
     if not origins:
         source = endpoint_source.get("from") or "carried union"
         raise NoData(f"chained sweep {key!r} for {slug!r} has no gateways: {source} is empty")
     return origins, arrivals
+
+
+def _scout_endpoints(slug: str, leg: Leg, key: str) -> list[str]:
+    """A discover leg's dest airports: the scout artifact's proposed hubs feeding the sweep endpoint
+    set (adds, never gates). An empty or not-yet-written scout artifact leaves the leg with nowhere
+    to land — the typed chained-empty NoData with zero HTTP, mirroring the origin-side guard
+    (:func:`_chained_endpoints`). A written artifact is re-validated against the leg's CURRENT
+    discover spec at read time — the same shape and ``max_airports`` cap the write boundary enforces
+    (:func:`trips._validate_scout_artifact`) — so a plan edit that lowered the cap under a
+    still-on-disk scout raises loudly rather than spending quota the current plan no longer
+    authorizes: never a silent truncation, never a NoData masquerading as an empty market. A
+    malformed on-disk file raises the same typed parse UsageError the write boundary
+    (:func:`trips.artifact_write`) does — read and write enforce identical rules — never a raw
+    ``JSONDecodeError`` escaping :func:`map_errors`."""
+    name = f"legs/{leg['id']}/scout.json"
+    path = trips._artifact_path(slug, name)
+    if path.exists():
+        remedy = f"re-run scout {leg['id']!r} (the walker re-runs it by fingerprint)"
+        try:
+            doc = json.loads(path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError) as err:
+            raise UsageError(f"artifact {name!r} failed to parse: {err} — {remedy}") from err
+        try:
+            trips._validate_scout_artifact(slug, doc, name)
+        except UsageError as stale:
+            raise UsageError(f"{stale} — {remedy}") from stale
+        dests = sorted({row["airport"] for row in doc})
+    else:
+        dests = []
+    if not dests:
+        raise NoData(
+            f"discover sweep {key!r} for {slug!r} has no endpoints: scout {leg['id']!r} is empty"
+        )
+    return dests
 
 
 def _leg_for_key(slug: str, key: str, trip: dict, endpoint_source: dict | None) -> Leg:
@@ -159,9 +255,11 @@ def _leg_for_key(slug: str, key: str, trip: dict, endpoint_source: dict | None) 
     spec = next((s for s in derive_specs(leg) if s["label"] == (label or None)), None)
     if spec is None:
         raise UsageError(f"no sweep spec for leg {leg_id!r} label {(label or None)!r}")
+    skip_sources = endpoint_source.get("skip_sources", []) if endpoint_source else []
+    skip_windows = [_skip_source_window(slug, trip, src) for src in skip_sources]
     if spec["kind"] == "availability":
-        # A region program sweep queries by continent, not concrete origins — the chain is inert
-        # here, so its empty-gateway guard (search-only) does not apply.
+        # Region program sweep: origins are inert (queried by continent), but the window rides the
+        # same skip envelope so an optional's program_sweeps successor covers the skip variant.
         return {
             "id": f"sweep:{key}",
             "kind": "availability",
@@ -171,18 +269,20 @@ def _leg_for_key(slug: str, key: str, trip: dict, endpoint_source: dict | None) 
             "dest_region": spec.get("dest_region"),
             "endpoints": [label],
             "endpoint_field": None,
-            "window": _leg_window(trip, leg, is_first, is_return, predecessor, {}),
+            "window": _leg_window(trip, leg, is_first, is_return, predecessor, {}, skip_windows),
         }
     if endpoint_source is None:
         origins, arrivals = leg["origins"], {}
     else:
         origins, arrivals = _chained_endpoints(slug, key, endpoint_source)
-    window = _leg_window(trip, leg, is_first, is_return, predecessor, arrivals)
+    window = _leg_window(trip, leg, is_first, is_return, predecessor, arrivals, skip_windows)
     bare_home = spec["dests"] is None and is_return
     if spec["dests"] is not None:
         dests = spec["dests"]
     elif bare_home:
         dests = legs[0]["origins"]  # home, resolving the leg's "$origins" dests
+    elif isinstance(leg.get("dests"), dict):  # discover: scout proposes the dest airports
+        dests = _scout_endpoints(slug, leg, key)
     else:
         dests = leg["dests"]
     endpoints, field = (origins, "origin") if bare_home else (dests, "dest")
@@ -297,7 +397,7 @@ def _sweep_leg(client: SeatsClient, leg: Leg, plan: dict) -> dict:
             if leg["kind"] == "search":
                 params["order_by"] = "lowest_mileage"
                 page = client._paginate(
-                    leg["path"], params, SEARCH_PAGE_SIZE, SWEEP_PAGE_BUDGET
+                    leg["path"], params, SEARCH_PAGE_SIZE, tuned(plan, "sweep_page_budget")
                 )
                 page_rows = page.rows
                 has_more = page.has_more

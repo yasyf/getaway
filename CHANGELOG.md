@@ -39,6 +39,30 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   getaway@getaway`, no dependency marketplaces to add by hand.
 
 ### Added
+- The primitives layer on the leg-intent engine — structured mechanisms
+  the planning agent calls out to when it deems fit: `plan.tuning`
+  per-trip knobs (presentation limit, expansion budget, beam width,
+  sweep page budget, date padding) over the former fixed constants;
+  `optional: true` legs that fan into with/without variants competing
+  on one cheap-rank front, with sweep coverage provably enveloping
+  every skip variant (compile of the full plan covers each
+  optional-removed variant plan — an equivalence matrix pinned over
+  airports, windows, and cash gateway dates); partial-chain leads —
+  when no full chain composes on a ≥3-leg plan, the longest bookable
+  prefix surfaces with an honest, TTL-aware search state per remaining
+  leg; `legs/manual.json` — the agent invents a chain (any
+  mandatory-covering, optional-skipping subsequence of the plan), the
+  CLI prices it through the same deterministic fit/cost/miss lanes;
+  and `dests: {discover: ...}` scout legs — a zero-quota research node
+  proposes hub airports that feed the leg's sweep beside any declared
+  buckets or program sweeps, adding endpoints, never gating. Mutable
+  input artifacts (manual, scout) re-validate against the current plan
+  at every read with typed errors — never silent truncation, a stale
+  crash, or corruption masquerading as an empty market — and IATA and
+  sibling validators reject partial matches, closing a
+  trailing-newline hole to the HTTP layer. Thirteen adversarial review
+  rounds across five stages; every accepted counterexample is a
+  regression test (1113 pytest, 51 walker tests at close).
 - Sweep generations: only a complete, filter-honest run supersedes.
   A sweep that fully searched its scope cuts a new generation and
   disclosed rows it proved gone; anything less — a quota stop, a failed

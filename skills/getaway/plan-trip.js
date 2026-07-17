@@ -101,6 +101,7 @@ const ASSESS_SCHEMA = {
   required: ['ok'],
   properties: { ok: { type: 'boolean' }, journeys: { type: 'number' }, notable_stretches: { type: 'number' } },
 };
+const SCOUT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, airports: { type: 'number' } } };
 const INTERVALS_SCHEMA = {
   type: 'object',
   required: ['inputs_fp', 'journeys'],
@@ -131,6 +132,7 @@ const project = args.project;
 const slug = args.slug;
 const CLI = `uv run --project ${project} getaway`;
 
+const gLegId = (v) => { if (typeof v !== 'string' || !LEG_ID.test(v)) throw new Error(`plan-trip: unsafe leg id ${v}`); return v; };
 const gIata = (v) => { if (typeof v !== 'string' || !IATA.test(v)) throw new Error(`plan-trip: unsafe airport code ${v}`); return v; };
 const gDate = (v) => { if (typeof v !== 'string' || !DATE.test(v)) throw new Error(`plan-trip: unsafe date ${v}`); return v; };
 const gJourneyId = (v) => { if (typeof v !== 'string' || !JOURNEY_ID.test(v)) throw new Error(`plan-trip: unsafe journey id ${v}`); return v; };
@@ -252,7 +254,7 @@ const judgmentFactors = loaded.judgmentFactors;
 // A trip shape the walker cannot express is a stop-and-check-back, never an improvisation.
 const surprise = (finding, options, extra = {}) => ({ slug, status: 'shape_surprise', finding, options, ...extra });
 
-const JUDGMENT_KINDS = new Set(['assess', 'stays']);
+const JUDGMENT_KINDS = new Set(['assess', 'stays', 'scout']);
 const PREFLIGHTS = new Set(['rooms_session']);
 for (const node of graph.nodes) {
   routed(node);
@@ -375,6 +377,21 @@ const runCollectors = async (node, title) => {
   okCollectors = wanted.filter((c) => !stillMissed.includes(c));
 };
 
+const runScout = (node, title, prefix) => {
+  const leg = gLegId(node.leg);
+  const artifact = `legs/${leg}/scout.json`;
+  return agent(
+    `Propose the destination hub airports for discover leg "${leg}" — zero seats.aero quota, run only the getaway commands named here.\n` +
+    `Read the trip and find this leg's discover brief and its max_airports cap:\n${CLI} trip show ${slug}\n` +
+    `The leg with id "${leg}" carries dests.discover.{brief, max_airports}. Research hub candidates that answer the brief — weigh season, award-space reputation across the mileage programs, and layover interest — and pick at most max_airports airports.\n` +
+    `Assemble a list [{"airport": <3-letter IATA>, "why": <one sentence, at most 200 chars, on why this hub fits the brief>}] and write it via this command, feeding the JSON on standard input:\n` +
+    `${CLI} trip artifact write ${slug} ${artifact}\n` +
+    `The CLI rejects a non-IATA code, an over-cap list, or a missing field — fix and rewrite if it does. Then stamp the node by running exactly:\n${CLI} trip phase-done ${slug} scout:${leg}\n` +
+    `Return {"ok": true, "airports": <count proposed>}.`,
+    { label: `${prefix}scout:${leg}`, phase: title, schema: SCOUT_SCHEMA, ...research(node) },
+  );
+};
+
 const runAssess = async (node, title, prefix) => {
   if (!evidenceDone) {
     await runCollectors(node, title);
@@ -476,6 +493,7 @@ const runStays = async (node, title, prefix) => {
 const dispatchNode = (node, title, prefix) => {
   if (Array.isArray(node.command)) return runNode(node, title, prefix);
   if (node.kind === 'assess') return runAssess(node, title, prefix);
+  if (node.kind === 'scout') return runScout(node, title, prefix);
   return runStays(node, title, prefix);
 };
 

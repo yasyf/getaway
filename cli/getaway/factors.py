@@ -26,7 +26,7 @@ from typing import Any
 import click
 
 from getaway import afford, enhance, fit, prefs, registry, stays, trips
-from getaway.constants import CABIN_PREFIX, MILEAGE_BAND, PRESENTATION_LIMIT, cabin_rank
+from getaway.constants import CABIN_PREFIX, MILEAGE_BAND, cabin_rank, tuned
 from getaway.paths import UsageError, emit, map_errors, utcnow
 
 VERDICT_RANK = {"promote": -1, "neutral": 0, "demote": 1}
@@ -555,7 +555,8 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
     ordered = _order(entries, tiers, active, primary_codes)
     ranked = [_entry_out(e) for e in ordered]
 
-    within_cut = {e["journey"]["id"] for e in ordered[:PRESENTATION_LIMIT]}
+    limit = tuned(plan, "presentation_limit")
+    within_cut = {e["journey"]["id"] for e in ordered[:limit]}
     by_id = {e["journey"]["id"]: e for e in ordered}
     notable: list[dict] = []
     for stretch in assess.get("notable_stretches", []):
@@ -564,14 +565,14 @@ def rank(slug: str, now: Callable[[], dt.datetime] = utcnow) -> list[dict]:
             notable.append({**_entry_out(entry), "why": stretch.get("why", "")})
 
     for code in sorted(primary_codes):
-        if any(code in _clears(e, primary_codes) for e in ordered[:PRESENTATION_LIMIT]):
+        if any(code in _clears(e, primary_codes) for e in ordered[:limit]):
             continue
         if any(code in _clears(n, primary_codes) for n in notable):
             continue
         stretch_entry = next(
             (
                 e
-                for e in ordered[PRESENTATION_LIMIT:]
+                for e in ordered[limit:]
                 if code in _clears(e, primary_codes) and not _verified_unavailable(e)
             ),
             None,
@@ -631,7 +632,7 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
 
     doc = {
         "trip_type": trips._shape_label(plan),
-        "journeys": rank_doc["ranked"][:PRESENTATION_LIMIT],
+        "journeys": rank_doc["ranked"][: tuned(plan, "presentation_limit")],
         "notable_stretches": rank_doc["notable_stretches"],
         "unpaired_leads": expand.get("unpaired_outbounds", []),
         "search_states": expand.get("search_states", {}),

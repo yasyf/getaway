@@ -134,6 +134,24 @@ def test_one_way_has_no_round_trip_spans() -> None:
     assert facts["away_nights"] is None
 
 
+def test_return_side_facts_follow_the_variant_plan_legs() -> None:
+    # Variant facts: an optional-leg skip is scored under its own plan legs, so a skipped homeward
+    # leg reads one-way spans while the full variant keeps its round trip.
+    round_trip = fit.journey_fit(
+        trip(), PREFS, [_outbound(), _return(arr="2026-09-15T09:00:00")], clock()
+    )["fit_facts"]
+    assert round_trip["trip_length_days"] == 10
+    skip_variant = {
+        "cabin": "business",
+        "party": 1,
+        "window": WINDOW,
+        "plan": {"legs": plan_legs(returns=False)},
+    }
+    skipped = fit.journey_fit(skip_variant, PREFS, [_outbound()], clock())["fit_facts"]
+    assert skipped["trip_length_days"] is None
+    assert skipped["away_nights"] is None
+
+
 def _cash_onward(
     origin: str = "NRT",
     dest: str = "OKA",

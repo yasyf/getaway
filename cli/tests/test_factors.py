@@ -828,6 +828,26 @@ def test_notable_stretch_within_the_cut_is_not_duplicated(biz_trip: str) -> None
     assert rank_doc(biz_trip)["notable_stretches"] == []  # J1 is within the cut, not a stretch
 
 
+@pytest.mark.parametrize(
+    ("tuning", "expected_stretches"),
+    [
+        pytest.param(None, [], id="default-cut-keeps-j2-within"),
+        pytest.param({"presentation_limit": 2}, ["J2"], id="tuned-cut-pushes-j2-beyond"),
+    ],
+)
+def test_presentation_limit_cut_honors_tuning_override(
+    biz_trip: str, tuning: dict | None, expected_stretches: list[str]
+) -> None:
+    # presentation_limit=2 pushes the third journey beyond the cut, surfacing an assess-flagged
+    # stretch the default cut of 6 keeps silent — the consumer reads the effective (tuned) value.
+    trips.set_patch(biz_trip, {"plan": {**PLAN, "tuning": tuning} if tuning else PLAN})
+    js = [journey(f"J{i}", {"united": 80000 + i * 1000}) for i in range(3)]
+    do_rank(biz_trip, js, assess={}, notable=[{"journey_id": "J2", "why": "a promising stretch"}])
+    doc = rank_doc(biz_trip)
+    assert len(doc["ranked"]) == 3  # the cut bounds the board, never drops ranked rows
+    assert [n["journey"]["id"] for n in doc["notable_stretches"]] == expected_stretches
+
+
 def assess_doc(journeys: dict | None = None, notable: list | None = None) -> str:
     return json.dumps({"journeys": journeys or {}, "notable_stretches": notable or []})
 

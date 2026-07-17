@@ -159,6 +159,26 @@ def test_per_endpoint_budget_truncates_and_discloses(base: str) -> None:
     assert doc["truncation"]["NRT"] == {"considered": 15, "kept": 12}
 
 
+@pytest.mark.parametrize("budget", [5, 14])
+def test_per_endpoint_budget_honors_tuning_override(base: str, budget: int) -> None:
+    trips.set_patch(
+        base,
+        {
+            "plan": {
+                "legs": [{"origins": ["SFO"], "buckets": [{"name": "asia", "dests": DESTS}]}],
+                "tuning": {"expansion_budget_per_endpoint": budget},
+            }
+        },
+    )
+    rows = [
+        api_row(f"R{i}", "SFO", "NRT", f"2026-09-{5 + i:02d}", "united", biz(str(80000 + i)))
+        for i in range(15)
+    ]
+    doc = run(base, rows)
+    assert len(doc["candidates"]) == budget  # the tuned budget replaces the default 12
+    assert doc["truncation"]["NRT"] == {"considered": 15, "kept": budget}
+
+
 def test_budget_is_per_endpoint_not_global(base: str) -> None:
     rows = []
     for dest in ("NRT", "BKK"):
@@ -566,6 +586,33 @@ def test_onward_cash_after_cash_prices_carried_union(base: str) -> None:
     assert {(p["gateway"], p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {
         ("LAX", "SAN", "2026-09-03"),
     }
+
+
+def test_onward_optional_positioning_prices_home_gateway_via_skip(base: str) -> None:
+    # R-A cash lane: the onward pairs node departs the positioning dest (LAX) AND home (SFO, the
+    # boundary if the optional positioning leg is skipped) — skip transparency mirrors the sweep.
+    set_plan(
+        base,
+        legs=[
+            {
+                "id": "pos",
+                "mode": "cash",
+                "origins": ["SFO"],
+                "dests": ["LAX"],
+                "optional": True,
+                "window": {"start": "2026-09-01", "end": "2026-09-01"},
+            },
+            {
+                "id": "onward",
+                "mode": "cash",
+                "dests": ["NRT"],
+                "window": {"start": "2026-09-05", "end": "2026-09-05"},
+            },
+        ],
+    )
+    doc = shortlist.onward_minima(base, "onward", now=clock())
+    assert {p["gateway"] for p in doc["bridge_pairs"]} == {"LAX", "SFO"}
+    assert {(p["onward_dest"], p["date"]) for p in doc["bridge_pairs"]} == {("NRT", "2026-09-05")}
 
 
 def test_onward_either_after_pure_cash_prices_carried_union(base: str) -> None:

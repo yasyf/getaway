@@ -37,8 +37,24 @@ GENERATION_CUTTING_COMPLETENESS = frozenset({"complete", "searched_empty"})
 EXPANSION_BUDGET_PER_ENDPOINT = 12
 RETURN_EXPANSION_BUDGET_PER_ENDPOINT = 12
 # Chain-builder beam: candidate chains cheap-ranked on (miles, cash) are capped here BEFORE any
-# /trips expansion spends quota — only survivors expand (P3 lifts this into plan.tuning).
+# /trips expansion spends quota — only survivors expand. Overridable via plan.tuning.beam_width.
 COMPOSE_BEAM_WIDTH = 64
+
+# Per-trip search-width knobs; an absent key falls to its constant (the single default source).
+# Trip-scoped judgment, never a prefs key. Ranking constants (MILEAGE_BAND, notable/widen) fixed.
+TUNING_DEFAULTS = {
+    "presentation_limit": PRESENTATION_LIMIT,
+    "expansion_budget_per_endpoint": EXPANSION_BUDGET_PER_ENDPOINT,
+    "beam_width": COMPOSE_BEAM_WIDTH,
+    "sweep_page_budget": SWEEP_PAGE_BUDGET,
+    "date_padding_days": SOFT_DATE_SEARCH_PADDING_DAYS,
+}
+TUNING_KEYS = frozenset(TUNING_DEFAULTS)
+
+
+def tuned(plan: dict, key: str) -> int:
+    """A trip's effective value for a knob: the ``plan.tuning`` override, else the default."""
+    return plan.get("tuning", {}).get(key, TUNING_DEFAULTS[key])
 
 # Disjoint stores: prefs.py consumes DISJOINT_TRIP_DOC_KEYS to reject trip-doc keys.
 DISJOINT_DURABLE_PREF_KEYS = frozenset(
@@ -88,6 +104,8 @@ NODE_ROUTING = {
     "evidence": ROUTING_RESEARCH,
     "assess": ROUTING_RESEARCH,
     "stays": ROUTING_RESEARCH,
+    # scout proposes a discover leg's hub airports; research judgment, zero seats.aero quota.
+    "scout": ROUTING_RESEARCH,
 }
 
 # Freshness TTL (hours) per node kind; a kind absent here never expires by time.
@@ -95,12 +113,6 @@ NODE_TTL_HOURS = {
     "sweep": 24,
     "bridge": 24,
     "expand": 6,
-}
-
-# Worst-case seats.aero quota units per runnable node kind; derived/agent nodes spend none.
-NODE_QUOTA_COST = {
-    "sweep": (AUTO_WIDEN_CALL_BUDGET_PER_LEG + 1) * SWEEP_PAGE_BUDGET,
-    "expand": EXPANSION_BUDGET_PER_ENDPOINT,
 }
 
 EXIT_OK = 0

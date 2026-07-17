@@ -362,6 +362,58 @@ const positioningGraph = () => {
   };
 };
 
+// A discover leg: a zero-quota scout node proposes the leg's dest airports, which its sweep reads as
+// endpoints; the swept shortlist then composes like any award leg.
+const discoverGraph = () => {
+  const scoutArtifact = 'legs/explore/scout.json';
+  const exploreShortlist = 'legs/explore/shortlist.json';
+  return {
+    slug: SLUG,
+    trip_type: 'one_way',
+    lodging: false,
+    requires: [],
+    quota_budget: { total: 15, nodes: [] },
+    nodes: [
+      N('scout:explore', 'scout', { leg: 'explore', inputs: [], outputs: [scoutArtifact], routing: RESEARCH }),
+      N('sweep:explore', 'sweep', {
+        leg: 'explore',
+        inputs: [scoutArtifact],
+        outputs: ['legs/explore/sweep.json'],
+        command: ['getaway', 'sweep', 'run', SLUG, 'explore'],
+        quota: 3,
+        ttl: 24,
+      }),
+      N('shortlist:explore', 'shortlist', {
+        leg: 'explore',
+        inputs: ['legs/explore/sweep.json'],
+        outputs: [exploreShortlist],
+        command: ['getaway', 'shortlist', 'run', SLUG, '--leg', 'explore'],
+      }),
+      N('expand', 'expand', {
+        scope: 'journey',
+        inputs: [exploreShortlist],
+        outputs: ['expand.json'],
+        command: ['getaway', 'expand', 'run', SLUG],
+        quota: 12,
+        ttl: 6,
+      }),
+      N('assess', 'assess', { scope: 'journey', inputs: ['expand.json'], outputs: ['assess.json'], routing: RESEARCH }),
+      N('rank', 'rank', {
+        scope: 'journey',
+        inputs: [exploreShortlist, 'expand.json', 'assess.json'],
+        outputs: ['rank.json'],
+        command: ['getaway', 'rank', SLUG],
+      }),
+      N('finalize', 'finalize', {
+        scope: 'journey',
+        inputs: ['rank.json'],
+        outputs: ['finalists.json'],
+        command: ['getaway', 'trip', 'finalize', SLUG],
+      }),
+    ],
+  };
+};
+
 const WORKLIST = [
   {
     journey_id: 'outbound:AV1:J|return:AV9:J',
@@ -414,6 +466,10 @@ const baseScript = (graph, state, over = {}) => ({
   assess: () => {
     state.done.add('assess');
     return { ok: true, journeys: 4, notable_stretches: 1 };
+  },
+  'scout:*': (opts) => {
+    state.done.add(opts.label.replace(/^retry:/, ''));
+    return { ok: true, airports: 2 };
   },
   'evidence:*': { ok: true, count: 1 },
   'preflight:rooms_session': { loggedIn: true, pro: true },
@@ -532,6 +588,25 @@ test('positioning: a leading cash leg (pairs+bridge) and the award onward leg bo
   assert.ok(order.indexOf('shortlist:onward') < order.indexOf('expand'));
   assert.match(findCall(calls, 'pairs:positioning').prompt, /getaway shortlist onward my-trip --leg positioning\n/);
   assert.match(findCall(calls, 'bridge:positioning').prompt, /getaway bridge my-trip --leg positioning\n/);
+  for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
+});
+
+test('discover: the scout node runs on the research lane before its leg sweep, then the chain walks', async () => {
+  const state = mkState();
+  const { result, calls, labels } = await runWorkflow(ARGS, baseScript(discoverGraph(), state));
+
+  assert.strictEqual(result.status, 'complete');
+  const order = labels();
+  assert.ok(order.indexOf('scout:explore') < order.indexOf('sweep:explore'));
+  assert.ok(order.indexOf('sweep:explore') < order.indexOf('shortlist:explore'));
+  assert.ok(order.indexOf('shortlist:explore') < order.indexOf('expand'));
+
+  const scout = findCall(calls, 'scout:explore');
+  assert.strictEqual(scout.opts.model, 'opus');  // research routing, agent-shaped
+  assert.match(scout.prompt, /trip artifact write my-trip legs\/explore\/scout\.json\n/);
+  assert.match(scout.prompt, /trip phase-done my-trip scout:explore\n/);
+  assert.match(scout.prompt, /zero seats\.aero quota/);
+  assert.doesNotMatch(scout.prompt, /--quota-floor/);  // scout spends no quota
   for (const [id, s] of Object.entries(result.nodes)) assert.strictEqual(s.state, 'done', `${id} should be done`);
 });
 

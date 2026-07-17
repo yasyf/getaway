@@ -99,6 +99,8 @@ def _leg_spec(leg_id: str, trip: dict, prefs_doc: dict) -> dict:
         field = "dest"
         veto = set(prefs_doc["avoid_destinations"]) | set(trip["avoid_final_destinations"])
         budget = EXPANSION_BUDGET_PER_ENDPOINT
+    # One per-endpoint expansion knob overrides both directions; each branch keeps its own default.
+    budget = trip["plan"].get("tuning", {}).get("expansion_budget_per_endpoint", budget)
     return {
         "labels": labels,
         "endpoint_field": field,
@@ -245,14 +247,19 @@ def _onward_dests(leg: dict, home_origins: list[str]) -> list[str]:
     return landings
 
 
+def _dates_between(start: str, end: str) -> set[str]:
+    """Every ISO date in the inclusive ``[start, end]`` span."""
+    lo = dt.date.fromisoformat(start)
+    span = (dt.date.fromisoformat(end) - lo).days
+    return {(lo + dt.timedelta(days=offset)).isoformat() for offset in range(span + 1)}
+
+
 def _window_dates(trip: dict, leg: dict) -> set[str]:
     """Every date in the leg's own window (its absolute ``window`` or the trip window) — the
     candidate departure dates for a gateway with no observed predecessor arrival: a first-position
     cash leg, or a concrete airport carried forward from a prior cash leg."""
     window = leg["window"] if "window" in leg else trip["window"]
-    start = dt.date.fromisoformat(window["start"])
-    span = (dt.date.fromisoformat(window["end"]) - start).days
-    return {(start + dt.timedelta(days=offset)).isoformat() for offset in range(span + 1)}
+    return _dates_between(window["start"], window["end"])
 
 
 def _gateway_dates(
@@ -274,7 +281,7 @@ def _gateway_dates(
 
     An empty chained resolution is a data condition raised loud — bridge prices nothing on no
     gateways — mirroring the sweep lane's empty-gateway guard."""
-    from getaway.sweeps import _stay_shift
+    from getaway.sweeps import _skip_source_window, _stay_shift
 
     endpoint_source = node["endpoint_source"]
     stay = predecessor.get("stay_nights") if predecessor is not None else None
@@ -295,6 +302,16 @@ def _gateway_dates(
             window = _window_dates(trip, leg)
             for airport in union:
                 dates.setdefault(airport, set()).update(window)
+        # Each skip source resolves like the own chain source above: from-arrivals stay-shifted over
+        # the SHARED sweep-lane window (_skip_source_window), union dests over the leg's own window.
+        for src in endpoint_source.get("skip_sources", []):  # optional-run skip transparency (R-A)
+            if "from" in src:
+                span = _dates_between(*_skip_source_window(slug, trip, src))
+                prior = json.loads(trips.artifact_read(slug, src["from"]))
+                for cand in prior["candidates"]:
+                    dates.setdefault(cand[src["field"]], set()).update(span)
+            for airport in src.get("union", []):
+                dates.setdefault(airport, set()).update(_window_dates(trip, leg))
         if not dates:
             source = endpoint_source.get("from") or "carried union"
             raise NoData(f"cash pairs {node['id']!r} in {slug!r} has no gateways: {source} empty")
