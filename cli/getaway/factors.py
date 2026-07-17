@@ -643,6 +643,10 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     truncation = expand.get("provenance", {}).get("truncation")
     if truncation:
         doc["truncation"] = truncation
+    # Partial-chain leads pass through verbatim — never the lead["outbound"]-keyed lodging/verify.
+    partial_leads = expand.get("leads")
+    if partial_leads:
+        doc["partial_leads"] = partial_leads
     if "lodging" in plan:
         _thread_lodging(doc, plan, slug, now)
     _thread_verification(doc, slug)

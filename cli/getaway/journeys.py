@@ -7,10 +7,12 @@ intent's explicit override origins). An ``optional`` leg fans out to two variant
 it and chains skipping it (a skipped leading positioning leg departs the trip's home origins
 directly) — which compete on one Pareto front as ordinary journeys, their ids distinguishing them.
 Two-leg plans compose exhaustively (bounded by shortlist budgets, byte-identical to HEAD's pairing
-loop); a plan of three or more legs cheap-ranks its chains on ``(miles, cash cents)`` and keeps the
-top ``plan.tuning.beam_width`` (default :data:`COMPOSE_BEAM_WIDTH`) **before** any ``/trips``
-expansion spends quota, disclosing the cut count in ``expand.json`` provenance. Only surviving
-chains expand their award legs (cache-first; a miss spends quota through :class:`SeatsClient`).
+loop); a plan of three or more legs first drops any chain a cash boundary proves date-infeasible
+before expansion, then cheap-ranks the rest on ``(miles, cash cents)`` and keeps the top
+``plan.tuning.beam_width`` (default :data:`COMPOSE_BEAM_WIDTH`) **before** any ``/trips`` expansion
+spends quota, disclosing the beam cut and the provably-infeasible count separately in the
+``expand.json`` provenance. Only surviving chains expand their award legs (cache-first; a miss
+spends quota through :class:`SeatsClient`).
 
 Continuity refines with :func:`_structural_ok` on the expanded legs: a same-airport boundary
 compares full local timestamps with the preference min-connection floor; a stay-marked boundary
@@ -233,24 +235,37 @@ def _transit_points(legs: list[dict], intents: list[dict]) -> list[str]:
     return points
 
 
+def _stay_nights_ok(prior_arr: str, nxt_dep: str, stay: dict) -> bool:
+    """A stay-marked boundary: the whole-day gap between the prior arrival and the next departure
+    lands within ``[min .. max]`` nights (date arithmetic — safe across timezones)."""
+    nights = (dt.date.fromisoformat(nxt_dep[:10]) - dt.date.fromisoformat(prior_arr[:10])).days
+    return stay["min"] <= nights <= stay["max"]
+
+
+def _cross_airport_ok(prior_arr: str, nxt_dep: str) -> bool:
+    """A cross-airport surface hop of unknown timing: the next leg departs no earlier than the prior
+    leg's arrival DATE — seats.aero timestamps are naive local wall clocks, never subtracted across
+    airports."""
+    return dt.date.fromisoformat(nxt_dep[:10]) >= dt.date.fromisoformat(prior_arr[:10])
+
+
 def _structural_ok(prior: dict, nxt: dict, prior_intent: dict, min_connection: int) -> bool:
     """Does ``nxt`` continue physically from ``prior``?
 
-    A stay-marked boundary bounds the gap to ``[min .. max]`` nights (date arithmetic — safe across
-    timezones). A same-airport boundary compares full local timestamps with the connection floor
-    (one airport, one clock). A cross-airport surface hop of unknown timing compares dates only —
-    seats.aero timestamps are naive local wall clocks; never subtract them across airports.
+    A stay-marked boundary bounds the gap to ``[min .. max]`` nights (:func:`_stay_nights_ok`). A
+    same-airport boundary compares full local timestamps with the connection floor (one airport, one
+    clock). A cross-airport surface hop of unknown timing compares dates only
+    (:func:`_cross_airport_ok`).
     """
     _, prior_dest, _, prior_arr = _leg_bounds(prior)
     nxt_origin, _, nxt_dep, _ = _leg_bounds(nxt)
     stay = prior_intent.get("stay_nights")
     if stay is not None:
-        nights = (dt.date.fromisoformat(nxt_dep[:10]) - dt.date.fromisoformat(prior_arr[:10])).days
-        return stay["min"] <= nights <= stay["max"]
+        return _stay_nights_ok(prior_arr, nxt_dep, stay)
     if nxt_origin == prior_dest:
         gap = dt.datetime.fromisoformat(nxt_dep) - dt.datetime.fromisoformat(prior_arr)
         return gap >= dt.timedelta(minutes=min_connection)
-    return dt.date.fromisoformat(nxt_dep[:10]) >= dt.date.fromisoformat(prior_arr[:10])
+    return _cross_airport_ok(prior_arr, nxt_dep)
 
 
 def _chain_continuous(legs: list[dict], intents: list[dict], min_connection: int) -> bool:
@@ -401,6 +416,39 @@ def _build_chains(
         chains = extended
     chains.sort(key=lambda ch: (sum(c["miles"] for c in ch), sum(c["cash_cents"] for c in ch)))
     return chains
+
+
+def _pool_boundary_date_infeasible(prior: dict, nxt: dict, prior_intent: dict) -> bool:
+    """Is this pool-candidate boundary PROVABLY date-infeasible before any ``/trips`` expansion?
+
+    Only a boundary whose PRIOR leg is cash is provable: the quote carries ``arrives_local``, so its
+    arrival date is known, and the check reuses :func:`_structural_ok`'s exact date-level predicates
+    fed that arrival and the next leg's pre-expansion departure date. An award-prior boundary defers
+    (a shortlist candidate has no arrival date until expanded), as does a same-airport boundary (a
+    timestamp floor, not a date comparison) — both fall to :func:`_structural_ok` on the expanded
+    clocks.
+    """
+    if prior["kind"] != "cash":
+        return False
+    prior_arr = prior["quote"]["arrives_local"]
+    # A cash next-candidate judges by its quote's own clock — the value _structural_ok reads
+    # post-expansion; an award candidate's shortlist date IS its expanded departure date.
+    nxt_dep = nxt["quote"]["departs_local"] if nxt["kind"] == "cash" else nxt["date"]
+    stay = prior_intent.get("stay_nights")
+    if stay is not None:
+        return not _stay_nights_ok(prior_arr, nxt_dep, stay)
+    if nxt["origin"] == prior["dest"]:
+        return False
+    return not _cross_airport_ok(prior_arr, nxt_dep)
+
+
+def _chain_date_feasible(chain: list[dict], variant_legs: list[dict]) -> bool:
+    """No boundary in a pool-candidate chain is provably date-infeasible pre-expansion
+    (:func:`_pool_boundary_date_infeasible`) — the pre-beam superset over :func:`_structural_ok`."""
+    return not any(
+        _pool_boundary_date_infeasible(chain[i], chain[i + 1], variant_legs[i])
+        for i in range(len(chain) - 1)
+    )
 
 
 def _variant_trip(trip: dict, legs: list[dict], variant_legs: list[dict]) -> dict:
@@ -911,11 +959,15 @@ def run(
             tagged.append((variant_legs, chain))
     tagged.sort(key=lambda t: (sum(c["miles"] for c in t[1]), sum(c["cash_cents"] for c in t[1])))
 
-    # Two-leg plans compose exhaustively (HEAD-identical); ≥3-leg plans beam and disclose the cut.
+    # Two-leg plans compose exhaustively (HEAD-identical); ≥3-leg plans drop date-infeasible chains
+    # (R-J) before beaming — beam_cut counts only feasible chains cut.
     beam_cut = 0
+    date_infeasible = 0
     if len(legs) >= 3:
-        kept = tagged[: tuned(plan, "beam_width")]
-        beam_cut = len(tagged) - len(kept)
+        feasible = [t for t in tagged if _chain_date_feasible(t[1], t[0])]
+        date_infeasible = len(tagged) - len(feasible)
+        kept = feasible[: tuned(plan, "beam_width")]
+        beam_cut = len(feasible) - len(kept)
     else:
         kept = tagged
     journeys, gated, composed_heads, quota_stopped = _compose_chains(
@@ -981,6 +1033,8 @@ def run(
     provenance = {"fetched_at": now().isoformat(), "quota_stopped": quota_stopped}
     if beam_cut:
         provenance["truncation"] = {"beam_cut": beam_cut}
+    if date_infeasible:
+        provenance["date_infeasible"] = date_infeasible
     doc = {
         "journeys": journeys,
         "unpaired_outbounds": unpaired,

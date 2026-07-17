@@ -133,6 +133,44 @@ def test_no_truncation_key_when_expand_composed_within_the_beam(getaway_home: Pa
     assert "truncation" not in doc  # absent, not an empty stub
 
 
+MULTI_CITY_PLAN = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "dests": ["NRT"]},
+        {"id": "hop", "dests": ["BKK"], "stay_nights": {"min": 4, "max": 4}},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_partial_leads_thread_from_expand_onto_the_board(getaway_home: Path) -> None:
+    # A ≥3-leg plan with a dead middle market composes no journey; expand's partial-chain leads
+    # thread onto the board verbatim — a zero-journey board with live leads is never a bare board.
+    slug = _new(getaway_home, MULTI_CITY_PLAN)
+    leads = [
+        {
+            "prefix": [{"role": "outbound", "id": "OB", "dest": "NRT", "mileage": 80000}],
+            "reached": "NRT",
+            "remaining": {
+                "hop": {"state": "searched_empty"},
+                "return": {"state": "not_run", "reason": "no_predecessor"},
+            },
+        }
+    ]
+    write(slug, "expand.json", expand_doc(leads=leads))
+    write_rank(slug, [])  # the dead middle market yielded no bookable journey
+    doc = factors.finalize(slug, now=clock())
+    assert doc["journeys"] == []
+    assert doc["partial_leads"] == leads  # honest per-remaining-leg states carried, never dropped
+
+
+def test_no_partial_leads_key_when_expand_composed_a_full_chain(getaway_home: Path) -> None:
+    slug = _new(getaway_home, MULTI_CITY_PLAN)
+    write(slug, "expand.json", expand_doc())  # a full chain composed — no leads section
+    write_rank(slug, ["J0"])
+    doc = factors.finalize(slug, now=clock())
+    assert "partial_leads" not in doc  # absent, not an empty stub
+
+
 @pytest.mark.parametrize(
     "outbound_state",
     [

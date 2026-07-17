@@ -1017,6 +1017,99 @@ def test_multi_city_rejects_stay_violating_hop(home: Path) -> None:
     assert _run(slug)["journeys"] == []
 
 
+def test_award_prior_stay_boundary_never_pre_filtered(home: Path) -> None:
+    # The award outbound's stay is departure-proxy-infeasible (09-10 − 09-05 = 5 ≠ 4) but
+    # arrival-feasible (09-10 − overnight arrival 09-06 = 4); an award prior is never pre-filtered.
+    slug = make_trip(MULTI_CITY)
+    seed("OB", detail("OB", [seg("SFO", "NRT", "2026-09-05T10:00", "2026-09-06T14:00")]))
+    seed("HOP", detail("HOP", [seg("NRT", "BKK", "2026-09-10T10:00", "2026-09-10T14:00")]))
+    seed("RET", detail("RET", [seg("BKK", "SFO", "2026-09-14T16:00", "2026-09-14T20:00")]))
+    trips.artifact_write(
+        slug,
+        "legs/outbound/shortlist.json",
+        json.dumps(shortlist_doc([cand("OB", "SFO", "NRT", "2026-09-05")])),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/hop/shortlist.json",
+        json.dumps(shortlist_doc([cand("HOP", "NRT", "BKK", "2026-09-10")], leg="hop")),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET", "BKK", "SFO", "2026-09-14")], leg="return")),
+    )
+    doc = _run(slug)
+    assert len(doc["journeys"]) == 1  # the award-prior chain survived the pre-beam filter
+    assert "date_infeasible" not in doc["provenance"]  # no award-prior boundary was ever filtered
+
+
+HYBRID_STAY_ROUND_TRIP = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "either", "stay_nights": {"min": 4, "max": 7}},
+        {"id": "return", "dests": "$origins"},
+    ]
+}
+
+
+def test_cash_next_boundary_judged_by_its_quote_clock_not_its_date_field() -> None:
+    # A quote may cross midnight (date 09-06, departs_local 09-07T00:30): judge by the clock.
+    prior = {"kind": "cash", "dest": "OKA", "quote": {"arrives_local": "2026-09-03T18:00"}}
+    nxt = {
+        "kind": "cash",
+        "origin": "OKA",
+        "date": "2026-09-06",
+        "quote": {"departs_local": "2026-09-07T00:30"},
+    }
+    stay_intent = {"stay_nights": {"min": 4, "max": 7}}
+    assert not journeys._pool_boundary_date_infeasible(prior, nxt, stay_intent)
+
+
+def test_date_infeasible_cash_hops_drop_pre_beam_so_the_feasible_chain_composes(home: Path) -> None:
+    # A2: at beam_width 3 the three cheaper cash hops (each under the 4-night stay floor) would fill
+    # the beam and leave 0 journeys; the filter drops them so the one feasible chain composes.
+    slug = make_trip({**HYBRID_STAY_ROUND_TRIP, "tuning": {"beam_width": 3}})
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT"))  # SFO->NRT dep 09-05, arr 09-06T14:00
+    seed(
+        "RET-OKA",
+        ret_detail("RET-OKA", origin="OKA", dep="2026-09-11T16:00", arr="2026-09-11T20:00"),
+    )
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET-OKA", "OKA", "SFO", "2026-09-11")], leg="return")),
+    )
+    feasible = cash_quote(
+        "NRT",
+        "OKA",
+        200.0,  # dearer than the infeasibles, so only the filter keeps it in the beam
+        date="2026-09-06",
+        departs_local="2026-09-06T16:00",
+        arrives_local="2026-09-06T18:00",  # arr 09-06 -> return 09-11 = 5 nights, in [4,7]
+    )
+    infeasible = [
+        cash_quote(
+            "NRT",
+            "OKA",
+            100.0,
+            date=f"2026-09-{day:02d}",
+            departs_local=f"2026-09-{day:02d}T16:00",
+            arrives_local=f"2026-09-{day:02d}T18:00",  # -> return 09-11 = 3/2/1 nights, under floor
+        )
+        for day in (8, 9, 10)
+    ]
+    write_hybrid(slug, gateways=[gw_cand("GW-NRT", "NRT")], quotes=[feasible, *infeasible])
+
+    doc = _run(slug)
+
+    (journey,) = doc["journeys"]  # the one feasible chain composed
+    assert journey["kind"] == "award→cash→award · 1 stay"
+    assert journey["legs"][1]["cash"]["depart_date"] == "2026-09-06"  # the feasible hop
+    assert doc["provenance"]["date_infeasible"] == 3  # the 3 cheaper hops proved infeasible
+    assert "truncation" not in doc["provenance"]  # one feasible chain, so no beam cut
+
+
 POSITIONING = {
     "legs": [
         {

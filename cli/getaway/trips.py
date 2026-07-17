@@ -989,11 +989,13 @@ def _validate_finalists_artifact(doc: object, name: str) -> None:
             "dropped",
         },
         name,
-        optional=frozenset({"truncation"}),
+        optional=frozenset({"truncation", "partial_leads"}),
     )
     for key in ("journeys", "notable_stretches", "unpaired_leads", "dropped"):
         if not isinstance(doc[key], list):
             raise UsageError(f"{name}.{key} must be a list")
+    if "partial_leads" in doc and not isinstance(doc["partial_leads"], list):
+        raise UsageError(f"{name}.partial_leads must be a list")
 
 
 def _validate_assess_artifact(doc: object, name: str) -> None:

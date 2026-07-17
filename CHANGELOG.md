@@ -357,6 +357,20 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   validation, with no migration story.
 
 ### Fixed
+- The composition beam ranks only feasible chains, and an empty board
+  now explains itself. The founding NRT hybrid produced zero journeys
+  at the default beam width: all chains ranked purely on miles and
+  cash, so the cheapest survivors were date-infeasible cash hops that
+  died at the stay gate after crowding out 130 composable journeys —
+  and the resulting empty finalists carried no explanation despite 98
+  healthy prefix leads. Provably date-infeasible chains — a cash-prior
+  boundary whose quote clock breaks the stay or continuity bounds —
+  now drop before the beam (disclosed as `date_infeasible`, distinct
+  from `beam_cut`; award-prior boundaries keep their post-expansion
+  judgment, since a shortlist row's arrival is unknowable before
+  expansion), and finalize threads partial-chain leads onto the board
+  as `partial_leads`. A cash quote crossing midnight judges by its own
+  clock, never its date field.
 - Shortlist selection diversifies across cabins, closing the retrieval
   half of the business-drop bug (the v2 rank fix below closed the
   ranking half): `_cohort_select` cohorted only by date and source and
