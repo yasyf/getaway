@@ -6,7 +6,7 @@ import * as jsxRuntime from 'react/jsx-runtime';
 
 (globalThis as { window?: unknown }).window = {
   CcPresent: {
-    hostApi: 1,
+    hostApi: 2,
     React,
     jsxRuntime,
     reactDom: { createPortal: () => null },
@@ -14,6 +14,9 @@ import * as jsxRuntime from 'react/jsx-runtime';
       Clamped: () => null,
       renderMarkdown: (md: string) => md,
       renderInlineMarkdown: (md: string) => md,
+      tokens: {},
+      toast: () => {},
+      usePackState: <T>(_key: string, initial: T) => [initial, () => {}],
     },
   },
 };
@@ -27,9 +30,14 @@ const problems: string[] = [];
 if (!def) {
   problems.push('missing default export');
 } else {
-  if (def.hostApi !== 1) problems.push(`hostApi = ${String(def.hostApi)}, want 1`);
+  if (def.hostApi !== 2) problems.push(`hostApi = ${String(def.hostApi)}, want 2`);
   const blocks = def.blocks ?? {};
-  for (const name of ['itinerary', 'flight', 'availability', 'option-picker', 'stay']) {
+  const expectedBlocks = ['itinerary', 'flight', 'availability', 'stay', 'booking'];
+  const actualBlocks = Object.keys(blocks);
+  if (JSON.stringify(actualBlocks) !== JSON.stringify(expectedBlocks)) {
+    problems.push(`block keys = ${JSON.stringify(actualBlocks)}, want ${JSON.stringify(expectedBlocks)}`);
+  }
+  for (const name of expectedBlocks) {
     if (typeof blocks[name] !== 'function') {
       problems.push(`blocks.${name} is ${typeof blocks[name]}, want function`);
     }
@@ -42,4 +50,4 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
-console.log('pack smoke ok: default export { hostApi: 1, blocks: { itinerary, flight, availability, option-picker, stay } }');
+console.log('pack smoke ok: default export { hostApi: 2, blocks: { itinerary, flight, availability, stay, booking } }');

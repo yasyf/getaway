@@ -17,8 +17,8 @@ SLUG = "2026-09-warm"
 WINDOW = {"start": "2026-09-01", "end": "2026-09-14", "trip_length_days": 7}
 
 
-def clock() -> Callable[[], dt.datetime]:
-    return lambda: FROZEN
+def clock(moment: dt.datetime = FROZEN) -> Callable[[], dt.datetime]:
+    return lambda: moment
 
 
 def seg(
@@ -377,6 +377,36 @@ def test_mixed_cabin_cached_detail_expands(home: Path) -> None:
     assert doc["leg_states"]["outbound:OB:J"] == {"state": "expanded"}
     expanded_segments = doc["journeys"][0]["legs"][0]["detail"]["segments"]
     assert [segment["cabin"] for segment in expanded_segments] == ["J", "Y"]
+
+
+def test_cached_detail_leg_carries_stored_fetch_instant(home: Path) -> None:
+    slug = make_trip(ONE_WAY)
+    fetched_at = FROZEN - dt.timedelta(hours=3)
+    connect(cache_db(), now=clock(fetched_at)).trip_detail_put("OB", ob_detail("OB"))
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+
+    assert doc["journeys"][0]["legs"][0]["fetched_at"] == fetched_at.isoformat()
+
+
+def test_fresh_detail_leg_carries_fetch_instant(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _LiveDetail:
+        def __init__(self, store: object, floor: int) -> None:
+            pass
+
+        def trip_detail(self, cid: str, cabin: str) -> dict:
+            return ob_detail(cid)
+
+    monkeypatch.setattr(journeys, "SeatsClient", _LiveDetail)
+    slug = make_trip(ONE_WAY)
+    write_shortlists(slug, [cand("OB", "SFO", "NRT", "2026-09-05")])
+
+    doc = journeys.run(slug, now=clock()) and json.loads(trips.artifact_read(slug, "expand.json"))
+
+    assert doc["journeys"][0]["legs"][0]["fetched_at"] == FROZEN.isoformat()
 
 
 def test_cached_detail_without_requested_cabin_marks_leg_failed(

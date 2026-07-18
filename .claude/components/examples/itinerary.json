@@ -3,10 +3,15 @@
   "type": "getaway.itinerary",
   "program": "Aeroplan",
   "miles": 88000,
-  "taxes": { "amount": 12050, "currency": "USD" },
+  "taxes": [
+    { "amount": 12050, "currency": "USD" }
+  ],
   "remainingSeats": 3,
-  "bookingLink": { "label": "Book on Air Canada", "url": "https://www.aircanada.com/us/en/aco/home/book.html" },
-  "updatedAt": "2026-07-11T02:10:00Z",
+  "bookingLinks": [
+    { "label": "Book on Air Canada", "url": "https://www.aircanada.com/us/en/aco/home/book.html", "primary": true },
+    { "label": "Verify on Qatar Airways", "url": "https://www.qatarairways.com/en-us/homepage.html", "primary": false }
+  ],
+  "fetchedAt": "2026-07-11T02:10:00Z",
   "totalDurationMinutes": 1655,
   "segments": [
     {
@@ -17,6 +22,12 @@
       "arrivesAt": "2026-09-07T19:45",
       "cabin": "business",
       "aircraft": "Boeing 777-300ER",
+      "aircraftCode": "77W",
+      "seatQuality": {
+        "verdict": "suite",
+        "product": "Qsuite",
+        "note": "Choose an odd-numbered window suite for the most privacy."
+      },
       "durationMinutes": 975
     },
     {
@@ -27,6 +38,12 @@
       "arrivesAt": "2026-09-08T06:05",
       "cabin": "business",
       "aircraft": "Airbus A350-900",
+      "aircraftCode": "359",
+      "seatQuality": {
+        "verdict": "suite",
+        "product": "Qsuite",
+        "note": "Verify the operating aircraft before transferring points."
+      },
       "durationMinutes": 555
     }
   ]

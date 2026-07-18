@@ -31,7 +31,7 @@
         "id": { "type": "string", "minLength": 1 },
         "type": { "const": "getaway.stay" },
         "state": { "const": "deferred" },
-        "reason": { "enum": ["no_checkout", "date_in_past", "invalid_interval", "not_walked"] },
+        "reason": { "enum": ["no_checkout", "open_jaw_stop", "date_in_past", "invalid_interval", "not_walked"] },
         "destination": { "type": "string", "minLength": 1 },
         "airport": { "type": "string", "pattern": "^[A-Z]{3}$" }
       }

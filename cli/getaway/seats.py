@@ -112,6 +112,7 @@ def _normalize_segment(segment: Row) -> Row:
         "flight_number": flight_number,
         "carrier": flight_number[:2],
         "aircraft": segment["AircraftName"],
+        "aircraft_code": segment["AircraftCode"],
         "duration_minutes": segment["Duration"],
         "cabin": CABIN_PREFIX[segment["Cabin"]],
     }
@@ -553,7 +554,8 @@ def expand_cmd(
     if not refresh:
         cached = store.trip_detail_get(availability_id, fresh_within=parse_duration(fresh_within))
         if cached is not None:
-            click.echo(json.dumps(cached))
+            normalized, _fetched_at = cached
+            click.echo(json.dumps(normalized))
             return
     client = SeatsClient(store, floor=quota_floor)
     try:

@@ -664,6 +664,20 @@ def test_sweep_artifact_rejects_incoherent_superseded_rows(ready: Path, doc_kwar
         )
 
 
+def test_sweep_artifact_rejects_non_list_searched_without_superseded_rows(
+    ready: Path,
+) -> None:
+    trips.new(SLUG)
+    doc = _sweep_doc({"count": 1, "ids": ["A"]})
+    del doc["provenance"]["superseded_rows"]
+    doc["provenance"]["searched"] = "not-a-list"
+    with pytest.raises(
+        UsageError,
+        match=r"legs/outbound/sweep-asia\.json\.provenance\.searched must be a list",
+    ):
+        trips.artifact_write(SLUG, "legs/outbound/sweep-asia.json", json.dumps(doc))
+
+
 @pytest.mark.parametrize(
     ("count", "accepted"),
     [
@@ -1057,7 +1071,13 @@ def test_conventional_two_intent_matches_round_trip_graph(ready: Path) -> None:
         "assess.json",
         "enhance-verify.json",
     ]
-    assert _node(graph, "finalize")["inputs"] == ["rank.json", "enhance-verify.json"]
+    assert _node(graph, "finalize")["inputs"] == [
+        "rank.json",
+        "enhance-verify.json",
+        "enhance-seat-advice.json",
+        "legs/outbound/sweep-asia.json",
+        "legs/return/sweep.json",
+    ]
     assert _node(graph, "assess")["command"] is None
     assert graph["trip_type"] == "round_trip"
     assert graph["lodging"] is False
@@ -1393,7 +1413,14 @@ def test_lodging_adds_stays_node_and_requires_session(ready: Path) -> None:
     stays = _node(graph, "stays")
     assert stays["requires"] == ["rooms_session"]
     assert stays["outputs"] == ["stays.json"]
-    assert _node(graph, "finalize")["inputs"] == ["rank.json", "enhance-verify.json", "stays.json"]
+    assert _node(graph, "finalize")["inputs"] == [
+        "rank.json",
+        "enhance-verify.json",
+        "enhance-seat-advice.json",
+        "legs/outbound/sweep-asia.json",
+        "legs/return/sweep.json",
+        "stays.json",
+    ]
 
 
 def test_one_way_lodging_without_checkout_has_no_stays(ready: Path) -> None:

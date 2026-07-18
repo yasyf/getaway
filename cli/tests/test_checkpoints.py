@@ -127,6 +127,17 @@ def test_artifact_content_change_invalidates_dependent_node(trip: str) -> None:
     assert trips.phase_fresh(trip, "expand", now=at(1))
 
 
+def test_sweep_artifact_content_change_invalidates_finalize(trip: str) -> None:
+    trips.phase_done(trip, "finalize", now=at(0))
+    assert trips.phase_fresh(trip, "finalize", now=at(1))
+    _write(
+        trip,
+        "legs/outbound/sweep-asia.json",
+        sweep_envelope(searched=[{"start": "2026-09-01", "end": "2026-09-30"}]),
+    )
+    assert not trips.phase_fresh(trip, "finalize", now=at(1))
+
+
 def test_ttl_expiry_marks_sweep_stale(trip: str) -> None:
     trips.phase_done(trip, "sweep:outbound:asia", now=at(0))
     assert trips.phase_fresh(trip, "sweep:outbound:asia", now=at(23))

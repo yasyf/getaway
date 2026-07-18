@@ -4,9 +4,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from _api import expand_doc
+from _api import expand_doc, sweep_envelope
 
-from getaway import enhance, factors, prefs, trips
+from getaway import enhance, factors, prefs, quality, trips
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 SLUG = "2026-09-warm"
@@ -75,6 +75,48 @@ def write(slug: str, name: str, obj: object) -> None:
 
 def journey_ids(doc: dict) -> list[str]:
     return [e["journey"]["id"] for e in doc["journeys"]]
+
+
+def _award_leg(
+    role: str,
+    *,
+    carrier: str = "UA",
+    flight_number: str = "UA1",
+    aircraft: str = "Boeing 777-300ER",
+    aircraft_code: str = "77W",
+    cabin: str = "J",
+) -> dict:
+    return {
+        "role": role,
+        "id": f"{role}-award",
+        "cabin": cabin,
+        "source": "united",
+        "mode": "award",
+        "soft": False,
+        "airlines": carrier,
+        "fetched_at": None,
+        "detail": {
+            "segments": [
+                {
+                    "origin": "SFO",
+                    "dest": "NRT",
+                    "carrier": carrier,
+                    "flight_number": flight_number,
+                    "aircraft": aircraft,
+                    "aircraft_code": aircraft_code,
+                    "cabin": cabin,
+                }
+            ]
+        },
+    }
+
+
+def _rank_doc(ranked: list[dict], *, notable: list[dict] | None = None) -> dict:
+    return {
+        "ranked": [{"journey": j, "facts": {}, "verdicts": [], "cost_tier": 0} for j in ranked],
+        "notable_stretches": notable or [],
+        "dropped": [],
+    }
 
 
 def test_ranked_journeys_are_the_board_capped_at_presentation_limit(getaway_home: Path) -> None:
@@ -267,7 +309,7 @@ def test_notable_stretches_and_dropped_carry_through(getaway_home: Path) -> None
     write(slug, "expand.json", expand_doc())
     notable = [
         {
-            "journey": {"id": "LATE"},
+            "journey": {"id": "LATE", "legs": [_award_leg("outbound")]},
             "facts": {},
             "verdicts": [],
             "cost_tier": 1,
@@ -279,3 +321,182 @@ def test_notable_stretches_and_dropped_carry_through(getaway_home: Path) -> None
     doc = factors.finalize(slug, now=clock())
     assert [n["journey"]["id"] for n in doc["notable_stretches"]] == ["LATE"]
     assert [d["journey_id"] for d in doc["dropped"]] == ["TIGHT"]
+
+
+# --- seat advice threading -------------------------------------------------------------------
+
+
+def test_seat_advice_registry_always_attached(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert advice["leg_role"] == "outbound"
+    assert advice["flight_number"] == "UA1"
+    assert advice["carrier"] == "UA"
+    assert advice["aircraft_code"] == "77W"
+    assert advice["aircraft_name"] == "Boeing 777-300ER"
+    assert advice["cabin"] == "J"
+    assert advice["registry"] == quality.classify("UA", "Boeing 777-300ER", "business")
+    assert "live" not in advice
+
+
+def test_seat_advice_live_joined_when_matched(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    enhance.merge(
+        slug,
+        "seat-advice",
+        [
+            {
+                "target_id": "UA:77W:J",
+                "outcome": "found",
+                "checked_at": "2026-07-13T14:00:00+00:00",
+                "method": "public",
+                "observed": {
+                    "picks": [{"seat": "12A", "why": "extra legroom"}],
+                    "avoids": [],
+                    "tips": [],
+                    "sources": ["https://example.com/seat-guru"],
+                },
+                "evidence": "seat guide consensus",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert advice["live"] == {
+        "outcome": "found",
+        "checked_at": "2026-07-13T14:00:00+00:00",
+        "observed": {
+            "picks": [{"seat": "12A", "why": "extra legroom"}],
+            "avoids": [],
+            "tips": [],
+            "sources": ["https://example.com/seat-guru"],
+        },
+        "evidence": "seat guide consensus",
+    }
+
+
+def test_seat_advice_no_live_key_when_unmatched(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    enhance.merge(
+        slug,
+        "seat-advice",
+        [
+            {
+                "target_id": "DL:359:J",  # a different carrier/aircraft → no match for UA:77W:J
+                "outcome": "inconclusive",
+                "checked_at": "2026-07-13T14:00:00+00:00",
+                "method": "public",
+                "observed": None,
+                "evidence": "no consensus found",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert "live" not in advice
+
+
+def test_seat_advice_threads_notable_stretches(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    notable = [
+        {
+            "journey": {"id": "LATE", "legs": [_award_leg("outbound")]},
+            "facts": {},
+            "verdicts": [],
+            "cost_tier": 1,
+            "why": "suites, back Tuesday",
+        }
+    ]
+    write(slug, "rank.json", _rank_doc([], notable=notable))
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["notable_stretches"][0]["seat_advice"]
+    assert advice["carrier"] == "UA"
+    assert advice["aircraft_code"] == "77W"
+
+
+# --- sweep_summary ----------------------------------------------------------------------------
+
+
+def test_sweep_summary_aggregates_qualifying_sweep_artifacts(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write_rank(slug, ["J0"])
+    write(
+        slug,
+        "legs/outbound/sweep-asia.json",
+        sweep_envelope(
+            source="united",
+            searched=[{"start": "2026-09-01", "end": "2026-09-10"}],
+            fetched_at="2026-07-13T10:00:00+00:00",
+        ),
+    )
+    write(
+        slug,
+        "legs/return/sweep.json",
+        sweep_envelope(
+            source="alaska",
+            searched=[{"start": "2026-09-05", "end": "2026-09-20"}],
+            fetched_at="2026-07-13T15:00:00+00:00",
+        ),
+    )
+    doc = factors.finalize(slug, now=clock())
+    assert doc["sweep_summary"] == {
+        "programs": ["alaska", "united"],
+        "date_range": {"start": "2026-09-01", "end": "2026-09-20"},
+        "swept_at": "2026-07-13T15:00:00+00:00",
+    }
+
+
+def test_sweep_summary_excludes_orphaned_leg_artifact(getaway_home: Path) -> None:
+    slug = _new(getaway_home, ONE_WAY_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write_rank(slug, ["J0"])
+    write(
+        slug,
+        "legs/outbound/sweep-asia.json",
+        sweep_envelope(
+            source="united",
+            searched=[{"start": "2026-09-01", "end": "2026-09-10"}],
+            fetched_at="2026-07-13T10:00:00+00:00",
+        ),
+    )
+    write(
+        slug,
+        "legs/removed/sweep-december.json",
+        sweep_envelope(
+            source="alaska",
+            searched=[{"start": "2026-12-01", "end": "2026-12-20"}],
+            fetched_at="2026-07-13T15:00:00+00:00",
+        ),
+    )
+    doc = factors.finalize(slug, now=clock())
+    assert doc["sweep_summary"] == {
+        "programs": ["united"],
+        "date_range": {"start": "2026-09-01", "end": "2026-09-10"},
+        "swept_at": "2026-07-13T10:00:00+00:00",
+    }
+
+
+def test_sweep_summary_absent_when_every_searched_range_is_empty(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write_rank(slug, ["J0"])
+    write(slug, "legs/outbound/sweep.json", sweep_envelope(source="united", searched=[]))
+    doc = factors.finalize(slug, now=clock())
+    assert "sweep_summary" not in doc
+
+
+def test_sweep_summary_absent_without_any_sweep_artifact(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write_rank(slug, ["J0"])
+    doc = factors.finalize(slug, now=clock())
+    assert "sweep_summary" not in doc

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "title": "Booking sheet — Honolulu all-business",
+  "intro": "70,000 Alaska miles, San Diego to Honolulu in Boeing 777-300ER business via Los Angeles, home the same way. Your balance covers it outright. Everything you need to book, in order — ask me anything while you go.",
+  "presentation": "board",
+  "blocks": [
+    {
+      "id": "book-sheet",
+      "type": "getaway.booking",
+      "title": "Book San Diego to Honolulu, all business",
+      "subtitle": "One Alaska award, San Diego to Honolulu in Boeing 777-300ER business via Los Angeles",
+      "fetchedAt": "2026-07-18T14:32:00Z",
+      "totals": {
+        "miles": [{ "program": "Alaska Atmos Rewards", "miles": 70000 }],
+        "cash": [{ "amount": 5120, "currency": "USD" }]
+      },
+      "transfers": [],
+      "legs": [
+        {
+          "role": "Outbound",
+          "kind": "award",
+          "program": "Alaska Atmos Rewards",
+          "miles": 35000,
+          "taxes": [{ "amount": 2560, "currency": "USD" }],
+          "flights": [
+            { "flightNumber": "AA2401", "origin": "SAN", "destination": "LAX", "departsAt": "2026-08-30T07:00:00", "arrivesAt": "2026-08-30T07:55:00", "cabin": "first", "durationMinutes": 55, "aircraft": "Airbus A321", "aircraftCode": "321" },
+            { "flightNumber": "AA103", "origin": "LAX", "destination": "HNL", "departsAt": "2026-08-30T08:40:00", "arrivesAt": "2026-08-30T11:35:00", "cabin": "business", "durationMinutes": 355, "aircraft": "Boeing 777-300ER", "aircraftCode": "77W", "seat": { "verdict": "solid", "product": "Super Diamond era, Flagship Suite retrofit from Feb 2026", "picks": [{ "seat": "9A", "why": "true window, direct aisle access, forward of the galley" }], "avoids": [{ "seat": "12D", "why": "bulkhead center pair, bassinet position" }] } }
+          ],
+          "bookingLinks": [{ "label": "Book the award on Alaska", "url": "https://www.alaskaair.com/search/results?O=SAN&D=HNL&OD=2026-08-30", "primary": true }],
+          "notes": ["Tight 45-minute Los Angeles connection — one award, so it protects, but leave nothing to check."]
+        },
+        {
+          "role": "Return",
+          "kind": "award",
+          "program": "Alaska Atmos Rewards",
+          "miles": 35000,
+          "taxes": [{ "amount": 2560, "currency": "USD" }],
+          "flights": [
+            { "flightNumber": "AA104", "origin": "HNL", "destination": "LAX", "departsAt": "2026-09-06T09:00:00", "arrivesAt": "2026-09-06T17:05:00", "cabin": "business", "durationMinutes": 305, "aircraft": "Boeing 777-300ER", "aircraftCode": "77W", "seat": { "verdict": "solid", "product": "Super Diamond era, Flagship Suite retrofit from Feb 2026", "picks": [{ "seat": "9L", "why": "true window, direct aisle access, forward of the galley" }], "avoids": [{ "seat": "12G", "why": "bulkhead center pair, bassinet position" }] } },
+            { "flightNumber": "AA2530", "origin": "LAX", "destination": "SAN", "departsAt": "2026-09-06T18:30:00", "arrivesAt": "2026-09-06T19:25:00", "cabin": "first", "durationMinutes": 55, "aircraft": "Airbus A321", "aircraftCode": "321" }
+          ],
+          "bookingLinks": [{ "label": "Book the award on Alaska", "url": "https://www.alaskaair.com/search/results?O=HNL&D=SAN&OD=2026-09-06", "primary": true }],
+          "notes": ["Same 777-300ER business seat home; a normal 85-minute Los Angeles connection."]
+        }
+      ]
+    },
+    {
+      "id": "book-stay",
+      "type": "getaway.stay",
+      "state": "searched",
+      "destination": "Honolulu",
+      "airport": "HNL",
+      "session": "pro",
+      "checkedAt": "2026-07-18T14:20:00Z",
+      "searchState": "night_clamped",
+      "interval": { "checkIn": "2026-08-30", "checkOut": "2026-09-04", "nights": 5, "nightClamped": true, "requestedNights": 7 },
+      "rooms": [
+        {
+          "program": "World of Hyatt",
+          "name": "Hyatt Regency Waikiki Beach",
+          "currency": "USD",
+          "checkedAt": "2026-07-18T14:20:00Z",
+          "stale": false,
+          "offers": [
+            { "awardClass": "standard", "pointsPerNight": 25000, "cashPerNightCents": 42000, "centsPerPoint": 1.68 },
+            { "awardClass": "suite", "pointsPerNight": 42000, "cashPerNightCents": 78000, "centsPerPoint": 1.86 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "book-notes",
+      "type": "markdown",
+      "md": "**Before you book.** Taxes are $51.20 across the two Alaska awards — one program, no cross-summing. Your 90,000-mile Alaska balance covers the 70,000 outright, so no transfer. A US passport or green card covers this domestic travel. Your Alaska companion fare (expires 2027-06-30) does not apply to award tickets. rooms.aero clamped the 7-night stay to its 5-night maximum, so book the last two nights separately."
+    }
+  ]
+}

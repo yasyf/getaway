@@ -1,7 +1,9 @@
-import { Fragment } from 'react';
-import type { CSSProperties } from 'react';
+import { Fragment, useState } from 'react';
 import type { PackComponentProps } from './host/present';
+import { tokens } from './host/present';
 import { formatDateShort, formatMilesCompact } from './format';
+import { Badge, CapsLabel, capsStyle, cardShell, Disclosure } from './ui';
+import { NoteBar } from './notes';
 
 type Cabin = 'economy' | 'premium' | 'business' | 'first';
 
@@ -28,107 +30,222 @@ interface Selection {
   cabin: Cabin;
 }
 
+interface AvailabilityValue {
+  picks?: Selection[];
+  note?: string;
+}
+
+// economy → first, ascending quality; the last present entry is the top cabin.
 const CANONICAL: readonly Cabin[] = ['economy', 'premium', 'business', 'first'];
+const VISIBLE_ROWS = 10;
 
-const badgeStyle: CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: '0.7rem',
-  textTransform: 'uppercase',
-  letterSpacing: '0.05em',
-  padding: '0.1rem 0.5rem',
-  borderRadius: '999px',
-  color: 'var(--accent)',
-  background: 'color-mix(in srgb, var(--accent) 12%, var(--surface))',
-  border: '1px solid color-mix(in srgb, var(--accent) 30%, var(--border))',
-};
+// "12 dates · business from 84k" — date count plus the cheapest fare in the
+// highest-quality cabin present anywhere in the grid.
+function summarize(rows: Row[], present: Cabin[]): string {
+  const dates = `${rows.length} ${rows.length === 1 ? 'date' : 'dates'}`;
+  const top = present[present.length - 1];
+  if (!top) return dates;
+  let min = Infinity;
+  for (const row of rows) {
+    const cell = row.cabins[top];
+    if (cell && cell.miles < min) min = cell.miles;
+  }
+  return `${dates} · ${top} from ${formatMilesCompact(min)}`;
+}
 
-const headerCellStyle: CSSProperties = {
-  fontSize: '0.7rem',
-  textTransform: 'capitalize',
-  color: 'var(--muted)',
-  textAlign: 'center',
-  padding: '0 0.25rem',
-};
-
-export function Availability({ block, value, submit, disabled }: PackComponentProps) {
-  const avail = block as unknown as AvailabilityBlock;
-  const selected = value as Selection | null | undefined;
-  const present = CANONICAL.filter((c) => avail.rows.some((r) => r.cabins[c]));
-
+// A CapsLabel-styled affordance: dim at rest, text tone on hover.
+function GhostButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  const t = tokens();
+  const [hover, setHover] = useState(false);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', color: 'var(--text)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>
-          {avail.origin} → {avail.destination}
-        </span>
-        {avail.program && <span style={badgeStyle}>{avail.program}</span>}
-      </div>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...capsStyle(t),
+        color: hover && !disabled ? t.text : t.dim,
+        width: 'fit-content',
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
 
-      <div
+function CabinCell({
+  cell,
+  selected,
+  locked,
+  onToggle,
+}: {
+  cell: Cell | undefined;
+  selected: boolean;
+  locked: boolean;
+  onToggle: () => void;
+}) {
+  const t = tokens();
+  if (!cell) {
+    return <div style={{ textAlign: 'center', color: t.dim, alignSelf: 'center' }}>—</div>;
+  }
+  return (
+    <button
+      type="button"
+      disabled={locked}
+      aria-pressed={selected}
+      onClick={onToggle}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.15rem',
+        padding: '0.4rem 0.3rem',
+        cursor: locked ? 'not-allowed' : 'pointer',
+        borderRadius: t.radiusMd,
+        border: `1px solid ${selected ? t.accent : t.border}`,
+        background: selected ? `color-mix(in srgb, ${t.accent} 14%, ${t.surface})` : t.surface,
+        color: t.text,
+        opacity: locked && !selected ? 0.55 : 1,
+      }}
+    >
+      <span
         style={{
-          display: 'grid',
-          gridTemplateColumns: `auto repeat(${present.length}, minmax(0, 1fr))`,
-          gap: '0.4rem',
-          alignItems: 'stretch',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '0.2rem',
+          fontFamily: t.fontMono,
+          fontSize: '0.85rem',
+          fontWeight: 600,
         }}
       >
-        <div />
-        {present.map((c) => (
-          <div key={c} style={headerCellStyle}>
-            {c}
-          </div>
-        ))}
+        {selected && (
+          <span aria-hidden style={{ color: t.accent }}>
+            ✓
+          </span>
+        )}
+        {formatMilesCompact(cell.miles)}
+      </span>
+      <span style={{ fontSize: '0.68rem', color: t.dim }}>
+        {cell.seats} seats{cell.direct ? ' · nonstop' : ''}
+      </span>
+    </button>
+  );
+}
 
-        {avail.rows.map((row) => (
-          <Fragment key={row.date}>
+function Grid({
+  rows,
+  present,
+  showHeader,
+  isPicked,
+  toggle,
+  locked,
+}: {
+  rows: Row[];
+  present: Cabin[];
+  showHeader: boolean;
+  isPicked: (date: string, cabin: Cabin) => boolean;
+  toggle: (date: string, cabin: Cabin) => void;
+  locked: boolean;
+}) {
+  const t = tokens();
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `auto repeat(${present.length}, minmax(0, 1fr))`,
+        gap: '0.4rem',
+        alignItems: 'stretch',
+      }}
+    >
+      {showHeader && (
+        <>
+          <div />
+          {present.map((c) => (
             <div
-              title={row.date}
-              style={{ alignSelf: 'center', fontSize: '0.8rem', color: 'var(--muted)', whiteSpace: 'nowrap' }}
+              key={c}
+              style={{ fontSize: '0.7rem', textTransform: 'capitalize', color: t.dim, textAlign: 'center', padding: '0 0.25rem' }}
             >
-              {formatDateShort(row.date)}
+              {c}
             </div>
-            {present.map((cabin) => {
-              const cell = row.cabins[cabin];
-              if (!cell) {
-                return (
-                  <div key={cabin} style={{ textAlign: 'center', color: 'var(--muted)', alignSelf: 'center' }}>
-                    —
-                  </div>
-                );
-              }
-              const isSel = selected?.date === row.date && selected?.cabin === cabin;
-              return (
-                <button
-                  key={cabin}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={isSel}
-                  onClick={() => submit({ date: row.date, cabin })}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.15rem',
-                    padding: '0.4rem 0.3rem',
-                    cursor: disabled ? 'not-allowed' : 'pointer',
-                    borderRadius: 'var(--radius-md)',
-                    border: `1px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`,
-                    background: isSel ? 'color-mix(in srgb, var(--accent) 14%, var(--surface))' : 'var(--surface)',
-                    color: 'var(--text)',
-                    opacity: disabled && !isSel ? 0.55 : 1,
-                  }}
-                >
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', fontWeight: 600 }}>
-                    {formatMilesCompact(cell.miles)}
-                  </span>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>
-                    {cell.seats} seats{cell.direct ? ' · nonstop' : ''}
-                  </span>
-                </button>
-              );
-            })}
-          </Fragment>
-        ))}
+          ))}
+        </>
+      )}
+      {rows.map((row) => (
+        <Fragment key={row.date}>
+          <div title={row.date} style={{ alignSelf: 'center', fontSize: '0.8rem', color: t.dim, whiteSpace: 'nowrap' }}>
+            {formatDateShort(row.date)}
+          </div>
+          {present.map((cabin) => (
+            <CabinCell
+              key={cabin}
+              cell={row.cabins[cabin]}
+              selected={isPicked(row.date, cabin)}
+              locked={locked}
+              onToggle={() => toggle(row.date, cabin)}
+            />
+          ))}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+export function Availability({ block, value, submit, disabled, context }: PackComponentProps) {
+  const t = tokens();
+  const avail = block as unknown as AvailabilityBlock;
+  const val = value as AvailabilityValue | null | undefined;
+  const picks = val?.picks ?? [];
+  const present = CANONICAL.filter((c) => avail.rows.some((r) => r.cabins[c]));
+  const locked = disabled || context.closed || context.roundOver;
+
+  const isPicked = (date: string, cabin: Cabin) => picks.some((p) => p.date === date && p.cabin === cabin);
+  // Every tap re-submits the whole merged object, so a note already on this block
+  // rides beside the new picks instead of being cleared.
+  const toggle = (date: string, cabin: Cabin) => {
+    const next = isPicked(date, cabin)
+      ? picks.filter((p) => !(p.date === date && p.cabin === cabin))
+      : [...picks, { date, cabin }];
+    submit({ ...(val ?? {}), picks: next });
+  };
+  const clear = () => submit({ ...(val ?? {}), picks: [] });
+
+  const visible = avail.rows.slice(0, VISIBLE_ROWS);
+  const overflow = avail.rows.slice(VISIBLE_ROWS);
+
+  return (
+    <div style={{ ...cardShell(t), opacity: context.closed ? 0.6 : 1 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, fontSize: '1.05rem' }}>
+            {avail.origin} → {avail.destination}
+          </span>
+          {avail.program && <Badge>{avail.program}</Badge>}
+        </div>
+        <span style={{ color: t.dim, fontSize: '0.8rem' }}>{summarize(avail.rows, present)}</span>
       </div>
+
+      <Grid rows={visible} present={present} showHeader isPicked={isPicked} toggle={toggle} locked={locked} />
+
+      {overflow.length > 0 && (
+        <Disclosure label={`show all ${avail.rows.length} dates`}>
+          <div style={{ marginTop: '0.4rem' }}>
+            <Grid rows={overflow} present={present} showHeader={false} isPicked={isPicked} toggle={toggle} locked={locked} />
+          </div>
+        </Disclosure>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <CapsLabel>{picks.length} picked</CapsLabel>
+        {picks.length > 0 && <GhostButton label="clear" disabled={locked} onClick={clear} />}
+      </div>
+
+      <NoteBar value={value} submit={submit} disabled={disabled} context={context} />
     </div>
   );
 }

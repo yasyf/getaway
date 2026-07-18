@@ -1,33 +1,36 @@
-host_api = 1
+host_api = 2
 name = "getaway"
-version = "0.1.0"
-description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, an option picker, and a lodging stay."
+version = "0.2.0"
+description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, a lodging stay, and a final booking sheet."
 entry = "dist/pack.js"
 reference = "reference/blocks.md"
 
 [blocks.itinerary]
 description = "Renders one bookable award itinerary as a card: route, program, miles plus taxes, seats left, per-leg flights with layovers, and a booking link. Reach for it to show a single multi-segment award the human is deciding on."
 schema = "schema/itinerary.json"
+interaction = "schema/itinerary.interaction.json"
 examples = ["examples/itinerary.json"]
 
 [blocks.flight]
 description = "Renders a single flight leg as a compact card with wall-clock times, duration, flight number, and cabin. Shows aircraft on an award leg or a cash price on a positioning leg. Reach for it to surface one leg on its own."
 schema = "schema/flight.json"
+interaction = "schema/flight.interaction.json"
 examples = ["examples/flight.json", "examples/flight-positioning.json"]
 
 [blocks.availability]
-description = "An interactive award-availability calendar: date rows by cabin, each cell showing miles, seats, and nonstop status. The human taps a date-and-cabin cell and the pick streams back. Reach for it to let the human choose when and in which cabin to fly."
+description = "An interactive award-availability calendar: date rows by cabin, each cell showing miles, seats, and nonstop status. The human can submit multi-select date-and-cabin picks. Reach for it to let the human choose when and in which cabins to fly."
 schema = "schema/availability.json"
 interaction = "schema/availability.interaction.json"
 examples = ["examples/availability.json"]
 
-[blocks.option-picker]
-description = "An interactive single-choice picker over competing award options (route, date, program, miles, taxes). The human selects one and the choice streams back. Reach for it to have the human pick between routings or programs."
-schema = "schema/option-picker.json"
-interaction = "schema/option-picker.interaction.json"
-examples = ["examples/option-picker.json"]
-
 [blocks.stay]
 description = "Renders one journey's lodging: per-hotel award and cash rooms.aero rooms with per-night points and cash in the property-local currency, standard and suite offers, per-room freshness with a stale warning, and a night-clamp disclosure. Renders the honest deferral reason when a journey's lodging was skipped. Reach for it to show where the human sleeps once a journey is paired."
 schema = "schema/stay.json"
+interaction = "schema/stay.interaction.json"
 examples = ["examples/stay.json", "examples/stay-deferred.json"]
+
+[blocks.booking]
+description = "The final booking sheet once a trip is chosen — every link, transfer, tax, and seat pick needed to book."
+schema = "schema/booking.json"
+interaction = "schema/booking.interaction.json"
+examples = ["examples/booking.json"]

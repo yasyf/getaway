@@ -1,0 +1,127 @@
+{
+  "id": "booking-lax-cpt-qr",
+  "type": "getaway.booking",
+  "title": "Book Los Angeles to Cape Town",
+  "subtitle": "Position to San Francisco, then fly Qatar Airways business class via Doha",
+  "fetchedAt": "2026-07-11T02:10:00Z",
+  "totals": {
+    "miles": [
+      { "program": "Air Canada Aeroplan", "miles": 88000 }
+    ],
+    "cash": [
+      { "amount": 42550, "currency": "USD" },
+      { "amount": 37500, "currency": "ZAR" }
+    ]
+  },
+  "transfers": [
+    {
+      "from": "Chase Ultimate Rewards",
+      "to": "Air Canada Aeroplan",
+      "amount": 88000,
+      "note": "Transfer only after the award space is visible in Aeroplan."
+    }
+  ],
+  "legs": [
+    {
+      "role": "Positioning",
+      "kind": "cash",
+      "price": { "amount": 30500, "currency": "USD" },
+      "flights": [
+        {
+          "flightNumber": "UA1682",
+          "origin": "LAX",
+          "destination": "SFO",
+          "departsAt": "2026-09-06T12:15",
+          "arrivesAt": "2026-09-06T13:45",
+          "cabin": "economy",
+          "durationMinutes": 90
+        }
+      ],
+      "bookingLinks": [
+        {
+          "label": "Book the positioning flight on United",
+          "url": "https://www.united.com/en/us/book-flight/united-reservations",
+          "primary": true
+        }
+      ],
+      "notes": [
+        "Allow at least three hours in San Francisco because this is a separate ticket."
+      ]
+    },
+    {
+      "role": "Long-haul award",
+      "kind": "award",
+      "program": "Air Canada Aeroplan",
+      "miles": 88000,
+      "taxes": [
+        { "amount": 12050, "currency": "USD" },
+        { "amount": 37500, "currency": "ZAR" }
+      ],
+      "flights": [
+        {
+          "flightNumber": "QR738",
+          "origin": "SFO",
+          "destination": "DOH",
+          "departsAt": "2026-09-06T17:30",
+          "arrivesAt": "2026-09-07T19:45",
+          "cabin": "business",
+          "durationMinutes": 975,
+          "aircraft": "Boeing 777-300ER",
+          "aircraftCode": "77W",
+          "seat": {
+            "verdict": "suite",
+            "product": "Qsuite",
+            "note": "Odd-numbered window suites face the window.",
+            "picks": [
+              { "seat": "11A", "why": "True window, closes fully." },
+              { "seat": "11K", "why": "True window, closes fully." }
+            ],
+            "avoids": [
+              { "seat": "10E", "why": "Center pair is less private for a solo traveler." },
+              { "seat": "10F", "why": "Center pair is less private for a solo traveler." }
+            ]
+          }
+        },
+        {
+          "flightNumber": "QR1369",
+          "origin": "DOH",
+          "destination": "CPT",
+          "departsAt": "2026-09-07T21:50",
+          "arrivesAt": "2026-09-08T06:05",
+          "cabin": "business",
+          "durationMinutes": 555,
+          "aircraft": "Airbus A350-900",
+          "aircraftCode": "359",
+          "seat": {
+            "verdict": "suite",
+            "product": "Qsuite",
+            "note": "Confirm the seat map after ticketing in case of an aircraft swap.",
+            "picks": [
+              { "seat": "3A", "why": "True window, closes fully." },
+              { "seat": "3K", "why": "True window, closes fully." }
+            ],
+            "avoids": [
+              { "seat": "1E", "why": "Close to the galley and bassinets." },
+              { "seat": "1F", "why": "Close to the galley and bassinets." }
+            ]
+          }
+        }
+      ],
+      "bookingLinks": [
+        {
+          "label": "Book the award on Air Canada",
+          "url": "https://www.aircanada.com/us/en/aco/home/book.html",
+          "primary": true
+        },
+        {
+          "label": "Choose seats on Qatar Airways",
+          "url": "https://booking.qatarairways.com/nsp/views/retrievePnr.xhtml",
+          "primary": false
+        }
+      ],
+      "notes": [
+        "Search and ticket both Qatar Airways flights as one Aeroplan award."
+      ]
+    }
+  ]
+}

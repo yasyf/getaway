@@ -57,6 +57,7 @@ def _seg(origin: str, dest: str, dep: str, arr: str) -> dict:
         "carrier": "UA",
         "flight_number": "UA1",
         "aircraft": "77W",
+        "aircraft_code": "77W",
     }
 
 

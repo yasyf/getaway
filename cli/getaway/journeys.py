@@ -106,44 +106,45 @@ class _Expander:
     first time a live fetch would cross the floor — the caller records the quota stop.
     """
 
-    def __init__(self, store: Any, floor: int, now: dt.datetime) -> None:
+    def __init__(self, store: Any, floor: int) -> None:
         self._store = store
         self._floor = floor
-        self._now = now
         self._client: SeatsClient | None = None
-        self._memo: dict[tuple[str, str], tuple[Detail | None, str | None]] = {}
+        self._memo: dict[tuple[str, str], tuple[Detail, str] | None] = {}
 
     def _seats_client(self) -> SeatsClient:  # built on first miss — a fully cached run needs no key
         if self._client is None:
             self._client = SeatsClient(self._store, floor=self._floor)
         return self._client
 
-    def expand(self, cid: str, letter: str) -> tuple[Detail | None, str | None]:
-        """Return ``(detail, fetched_at)`` for a candidate, or ``(None, None)`` when the
-        availability has no bookable itinerary in ``letter``."""
+    def expand(self, cid: str, letter: str) -> tuple[Detail, str] | None:
+        """Return ``(detail, fetched_at)`` for a candidate, or ``None`` when the availability
+        has no bookable itinerary in ``letter``."""
         key = (cid, letter)
         if key in self._memo:
             return self._memo[key]
         cached = self._store.trip_detail_get(cid, fresh_within=_DETAIL_TTL)
-        if cached is not None and not cached["segments"]:  # known-empty cache reads as no itinerary
-            self._memo[key] = (None, None)
-            return None, None
-        if cached is not None and _detail_matches_cabin(cached, letter):
-            result: tuple[Detail | None, str | None] = (cached, None)
-            self._memo[key] = result
-            return result
+        if cached is not None:
+            detail, fetched_at = cached
+            if not detail["segments"]:  # known-empty cache reads as no itinerary
+                self._memo[key] = None
+                return None
+            if _detail_matches_cabin(detail, letter):
+                result = (detail, fetched_at)
+                self._memo[key] = result
+                return result
         try:
             detail = self._seats_client().trip_detail(cid, letter)
         except NoData:
-            self._memo[key] = (None, None)
-            return None, None
-        self._store.trip_detail_put(cid, detail)
-        result = (detail, self._now.isoformat())
+            self._memo[key] = None
+            return None
+        fetched_at = self._store.trip_detail_put(cid, detail)
+        result = (detail, fetched_at)
         self._memo[key] = result
         return result
 
 
-def _leg(role: str, cand: Row, detail: Detail, fetched_at: str | None) -> dict:
+def _leg(role: str, cand: Row, detail: Detail, fetched_at: str) -> dict:
     return {
         "role": role,
         "id": cand["id"],
@@ -547,15 +548,16 @@ def _compose_chains(
             row = cand["cand"]
             key = f"{role}:{row['id']}:{row['cabin']}"
             try:
-                detail, fetched_at = expander.expand(row["id"], row["cabin"])
+                expanded = expander.expand(row["id"], row["cabin"])
             except QuotaFloorError:
                 leg_states[key] = {"state": "not_run", "reason": "quota_floor"}
                 quota_stopped = True
                 break
-            if detail is None:
+            if expanded is None:
                 leg_states[key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
                 fail_reason = f"leg {role!r} has no bookable {row['cabin']} itinerary"
                 break
+            detail, fetched_at = expanded
             leg_states[key] = {"state": "expanded"}
             legs_typed.append(_leg(role, row, detail, fetched_at))
         if quota_stopped:
@@ -669,14 +671,15 @@ def _lead_journeys(
         row = cand["cand"]
         key = f"{first_leg_id}:{row['id']}:{row['cabin']}"
         try:
-            detail, fetched_at = expander.expand(row["id"], row["cabin"])
+            expanded = expander.expand(row["id"], row["cabin"])
         except QuotaFloorError:
             leg_states[key] = {"state": "not_run", "reason": "quota_floor"}
             quota_stopped = True
             break
-        if detail is None:
+        if expanded is None:
             leg_states[key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
             continue
+        detail, fetched_at = expanded
         leg_states.setdefault(key, {"state": "expanded"})
         outbound_legs.append(_leg(first_leg_id, row, detail, fetched_at))
     return_prov = _sweep_provenance(slug, f"legs/{return_leg_id}/sweep.json")
@@ -796,14 +799,15 @@ def _partial_leads(
                 row = cand["cand"]
                 key = f"{role}:{row['id']}:{row['cabin']}"
                 try:
-                    detail, fetched_at = expander.expand(row["id"], row["cabin"])
+                    expanded = expander.expand(row["id"], row["cabin"])
                 except QuotaFloorError:
                     leg_states[key] = {"state": "not_run", "reason": "quota_floor"}
                     return leads, True
-                if detail is None:
+                if expanded is None:
                     leg_states[key] = {"state": "failed", "reason": "no_itinerary_in_cabin"}
                     failed = True
                     break
+                detail, fetched_at = expanded
                 leg_states.setdefault(key, {"state": "expanded"})
                 legs_typed.append(_leg(role, row, detail, fetched_at))
             if failed or not _chain_continuous(legs_typed, legs[:k], min_connection):
@@ -957,7 +961,7 @@ def run(
     pools = [_leg_pool(slug, leg, shortlists.get(leg["id"])) for leg in legs]
 
     store = connect(cache_db(), now=now)
-    expander = _Expander(store, quota_floor, now())
+    expander = _Expander(store, quota_floor)
     leg_states: dict = {}
 
     # Optional legs fan out to include/skip variants sharing one cheap-rank front; no optional leg ⇒

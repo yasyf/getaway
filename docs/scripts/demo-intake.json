@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "title": "Planning: warm, beachy week on points",
+  "intro": "Here's what I already know, and what I need from you. Adjust anything, leave the rest blank to keep it, and press Start the search.",
+  "presentation": "board",
+  "stats": [
+    { "label": "Alaska", "value": "90,000" },
+    { "label": "Aeroplan", "value": "88,000" },
+    { "label": "Amex", "value": "150,000" },
+    { "label": "quota left", "value": "1,000" }
+  ],
+  "submit": { "label": "Start the search", "note": "I sweep 28 programs and come back with ranked journeys." },
+  "blocks": [
+    {
+      "id": "in-context",
+      "type": "markdown",
+      "md": "**What I know.** Home airports: SFO, SJC, SAN, PDX. Top balances: 90k Alaska, 88k Aeroplan, 150k Amex, 80k Chase. Avoid landing at: ICN, GMP, NRT, HND. Expiring instrument: Alaska companion fare, 2027-06-30. No open or prior trips on file."
+    },
+    {
+      "id": "in-dest",
+      "type": "choice",
+      "prompt": "Where should I sweep? Pick any that appeal — I price the rest as leads.",
+      "multi": true,
+      "options": [
+        {
+          "id": "hawaii",
+          "label": "Hawaii",
+          "hint": "shortest lie-flat beach on points",
+          "facts": [
+            { "label": "season", "value": "dry, warm", "tone": "good" },
+            { "label": "flight", "value": "5–6h" },
+            { "label": "coverage", "value": "Alaska, American" }
+          ],
+          "detail": {
+            "pros": ["Nonstop award space from the west coast", "In-season and dry through September"],
+            "cons": ["Business award seats are thin outside Alaska"]
+          }
+        },
+        {
+          "id": "mexico-pacific",
+          "label": "Pacific Mexico",
+          "hint": "warm, cheap, close",
+          "facts": [
+            { "label": "season", "value": "humid, warm" },
+            { "label": "flight", "value": "4–5h" },
+            { "label": "coverage", "value": "Aeroplan, Alaska" }
+          ],
+          "detail": {
+            "pros": ["Cheapest business awards in the set"],
+            "cons": ["Tail end of the rainy season across the window"]
+          }
+        },
+        {
+          "id": "caribbean",
+          "label": "Caribbean",
+          "hint": "farther, but classic beach",
+          "facts": [
+            { "label": "season", "value": "hurricane watch", "tone": "warn" },
+            { "label": "flight", "value": "7–9h, 1 stop" },
+            { "label": "coverage", "value": "Aeroplan, JetBlue" }
+          ],
+          "detail": {
+            "pros": ["Deep award space via east-coast hubs"],
+            "cons": ["Peak hurricane season in September — a real weather risk, not just a preference"]
+          }
+        }
+      ]
+    },
+    { "id": "in-dest-other", "type": "input", "label": "Somewhere else warm? (comma-separated cities or airports)", "placeholder": "flexible" },
+    {
+      "id": "in-window",
+      "type": "choice",
+      "prompt": "Which window works?",
+      "multi": true,
+      "options": [
+        { "id": "early-sep", "label": "Sep 6 – Sep 20", "hint": "your stated range", "facts": [{ "label": "nights", "value": "7" }] },
+        { "id": "late-sep", "label": "Sep 20 – Oct 4", "hint": "shoulder — cheaper award space", "facts": [{ "label": "nights", "value": "7" }] }
+      ]
+    },
+    { "id": "in-dates", "type": "input", "label": "Exact dates instead? (YYYY-MM-DD to YYYY-MM-DD)", "placeholder": "flexible" },
+    {
+      "id": "in-cabin",
+      "type": "choice",
+      "prompt": "Which cabins should compete?",
+      "multi": true,
+      "options": [
+        { "id": "business", "label": "Business", "hint": "primary — what you asked for", "facts": [{ "label": "priority", "value": "primary", "tone": "good" }] },
+        { "id": "premium", "label": "Premium economy", "hint": "the fallback when business is thin" },
+        { "id": "economy", "label": "Economy", "hint": "priced as a floor" }
+      ]
+    },
+    { "id": "in-party", "type": "input", "label": "How many travelling?", "placeholder": "2" },
+    {
+      "id": "in-scope",
+      "type": "choice",
+      "prompt": "What should I plan?",
+      "multi": true,
+      "options": [
+        { "id": "flights", "label": "Flights", "hint": "always on" },
+        { "id": "hotel", "label": "Hotel award nights", "hint": "rooms.aero at the destination" },
+        { "id": "creative", "label": "Open to creative routings", "hint": "a cash positioning hop, an award stitched across programs" }
+      ]
+    },
+    { "id": "in-constraints", "type": "input", "label": "Hard constraints only — blank means flexible", "placeholder": "none", "multiline": true },
+    { "id": "in-notes", "type": "input", "label": "Anything else I should weigh?", "placeholder": "none", "multiline": true }
+  ]
+}

@@ -341,6 +341,7 @@ def test_trip_detail_normalizes_itinerary(client: SeatsClient) -> None:
     assert first["carrier"] == "AA"
     assert first["flight_number"] == "AA715"
     assert first["aircraft"] == "Airbus A321"
+    assert first["aircraft_code"] == "321"
     assert first["cabin"] == "J"
     assert first["duration_minutes"] == 300
     assert detail["layovers"] == [90]

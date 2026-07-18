@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "getaway.booking",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "title", "legs", "fetchedAt"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "type": { "const": "getaway.booking" },
+    "title": { "type": "string", "minLength": 1 },
+    "subtitle": { "type": "string", "minLength": 1 },
+    "fetchedAt": { "$ref": "#/$defs/utcStamp" },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["miles", "cash"],
+      "properties": {
+        "miles": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["program", "miles"],
+            "properties": {
+              "program": { "type": "string", "minLength": 1 },
+              "miles": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "cash": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/money" }
+        }
+      }
+    },
+    "transfers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "amount"],
+        "properties": {
+          "from": { "type": "string", "minLength": 1 },
+          "to": { "type": "string", "minLength": 1 },
+          "amount": { "type": "integer", "minimum": 1 },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "legs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/leg" }
+    }
+  },
+  "$defs": {
+    "money": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "integer", "minimum": 0 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "utcStamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "seat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "properties": {
+        "verdict": { "enum": ["suite", "solid", "dated", "barely", "verify"] },
+        "product": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] },
+        "picks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["seat", "why"],
+            "properties": {
+              "seat": { "type": "string", "minLength": 1 },
+              "why": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "avoids": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["seat", "why"],
+            "properties": {
+              "seat": { "type": "string", "minLength": 1 },
+              "why": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "flight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flightNumber", "origin", "destination", "departsAt", "arrivesAt", "durationMinutes"],
+      "properties": {
+        "flightNumber": { "type": "string", "pattern": "^[A-Z0-9]{2}[0-9]{1,4}$" },
+        "origin": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "destination": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "departsAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?$" },
+        "arrivesAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?$" },
+        "cabin": { "enum": ["economy", "premium", "business", "first"] },
+        "durationMinutes": { "type": "integer", "minimum": 1 },
+        "aircraft": { "type": "string", "minLength": 1 },
+        "aircraftCode": { "type": "string", "pattern": "^[A-Z0-9]{3,4}$" },
+        "seat": { "$ref": "#/$defs/seat" }
+      }
+    },
+    "leg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "kind", "flights", "bookingLinks"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["award", "cash"] },
+        "program": { "type": "string", "minLength": 1 },
+        "miles": { "type": "integer", "minimum": 1 },
+        "taxes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/money" }
+        },
+        "taxesNote": { "type": "string", "minLength": 1 },
+        "price": { "$ref": "#/$defs/money" },
+        "flights": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/flight" }
+        },
+        "bookingLinks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "url", "primary"],
+            "properties": {
+              "label": { "type": "string", "minLength": 1 },
+              "url": { "type": "string", "pattern": "^https://" },
+              "primary": { "type": "boolean" }
+            }
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "award" } } },
+          "then": { "required": ["program", "miles"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "cash" } } },
+          "then": { "required": ["price"] }
+        }
+      ]
+    }
+  }
+}

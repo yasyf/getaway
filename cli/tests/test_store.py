@@ -143,6 +143,19 @@ def test_user_version_mismatch_deletes_and_recreates(db_path: Path) -> None:
     assert recreated.stats()["availability"] == 0
 
 
+def test_user_version_2_invalidates_legacy_trip_details(db_path: Path) -> None:
+    legacy = store.connect(db_path, now=_clock(FROZEN))
+    legacy.trip_detail_put("T1", {"segments": [{"aircraft": "77W"}]})
+    tamper = sqlite3.connect(str(db_path))
+    tamper.execute("PRAGMA user_version=2")
+    tamper.commit()
+    tamper.close()
+
+    recreated = store.connect(db_path, now=_clock(FROZEN))
+
+    assert recreated.trip_detail_get("T1") is None
+
+
 def test_foreign_application_id_deletes_and_recreates(db_path: Path) -> None:
     foreign = sqlite3.connect(str(db_path))
     foreign.execute("CREATE TABLE junk (x INTEGER)")
@@ -812,9 +825,10 @@ def test_availability_scope_carries_source_and_every_constrained_region(
 def test_trip_detail_roundtrip_and_freshness(db_path: Path) -> None:
     normalized = {"id": "T1", "mileage": 44000, "segments": []}
     st = store.connect(db_path, now=_clock(FROZEN))
-    st.trip_detail_put("T1", normalized)
-    assert st.trip_detail_get("T1") == normalized
-    assert st.trip_detail_get("T1", fresh_within=dt.timedelta(hours=6)) == normalized
+    assert st.trip_detail_put("T1", normalized) == FROZEN.isoformat()
+    entry = (normalized, FROZEN.isoformat())
+    assert st.trip_detail_get("T1") == entry
+    assert st.trip_detail_get("T1", fresh_within=dt.timedelta(hours=6)) == entry
     stale = store.connect(db_path, now=_clock(FROZEN + dt.timedelta(hours=7)))
     assert stale.trip_detail_get("T1", fresh_within=dt.timedelta(hours=6)) is None
     assert stale.trip_detail_get("missing") is None

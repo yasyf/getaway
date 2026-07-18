@@ -21,6 +21,22 @@ export function formatMilesExact(n: number): string {
   return new Intl.NumberFormat(undefined, { useGrouping: true }).format(n);
 }
 
+// Group by currency and sum within each; never across, since minor-unit
+// exponents differ. Empty input is the empty string.
+export function formatTaxes(taxes: Money[]): string {
+  const byCurrency = new Map<string, number>();
+  for (const { amount, currency } of taxes) {
+    byCurrency.set(currency, (byCurrency.get(currency) ?? 0) + amount);
+  }
+  return [...byCurrency].map(([currency, amount]) => formatMoney({ amount, currency })).join(' + ');
+}
+
+// A dotted list of per-program mileage; the dot avoids implying a cross-program
+// sum, which mixed programs never share.
+export function formatMilesByProgram(entries: { program: string; miles: number }[]): string {
+  return entries.map(({ program, miles }) => `${program} ${formatMilesExact(miles)}`).join(' · ');
+}
+
 export function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

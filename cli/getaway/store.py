@@ -17,7 +17,7 @@ from getaway import paths, registry
 from getaway.constants import EXIT_NEGATIVE, EXIT_NO_DATA
 
 APPLICATION_ID = 0x47544157  # 'GTAW'
-USER_VERSION = 2
+USER_VERSION = 3
 BUSY_TIMEOUT_MS = 5000
 # A reservation older than this is an abandoned in-flight call (the process died
 # mid-request); reserve prunes it so a crash can't lock quota below the floor forever.
@@ -522,7 +522,7 @@ class Store:
 
     def trip_detail_get(
         self, availability_id: str, fresh_within: dt.timedelta | None = None
-    ) -> Row | None:
+    ) -> tuple[Row, str] | None:
         row = self._conn.execute(
             "SELECT normalized, fetched_at FROM trip_details WHERE id = ?", (availability_id,)
         ).fetchone()
@@ -532,16 +532,18 @@ class Store:
             fetched = dt.datetime.fromisoformat(row["fetched_at"])
             if fetched < self._now() - fresh_within:
                 return None
-        return json.loads(row["normalized"])
+        return json.loads(row["normalized"]), row["fetched_at"]
 
-    def trip_detail_put(self, availability_id: str, normalized: Row) -> None:
+    def trip_detail_put(self, availability_id: str, normalized: Row) -> str:
+        fetched_at = self._now().isoformat()
         self._conn.execute(
             "INSERT INTO trip_details (id, normalized, fetched_at) VALUES (?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET "
             " normalized=excluded.normalized, fetched_at=excluded.fetched_at",
-            (availability_id, json.dumps(normalized), self._now().isoformat()),
+            (availability_id, json.dumps(normalized), fetched_at),
         )
         self._conn.commit()
+        return fetched_at
 
     def record_quota(self, endpoint: str, remaining: int) -> None:
         self._conn.execute(

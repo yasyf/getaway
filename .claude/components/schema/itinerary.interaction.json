@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "getaway.option-picker interaction",
+  "title": "getaway.itinerary interaction",
   "type": "object",
   "additionalProperties": false,
-  "required": ["optionId"],
+  "required": ["note"],
   "properties": {
-    "optionId": { "type": "string", "minLength": 1 }
+    "note": { "type": "string", "minLength": 1, "maxLength": 2000 }
   }
 }

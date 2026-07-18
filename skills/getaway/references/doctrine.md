@@ -26,6 +26,10 @@ A `barely` seat-quality verdict soft-demotes within its cost tier: the journey s
 
 Background verification is incremental enhancement: fire-and-forget agents that never block the walk, the board, or the user, whose failure is silence, and whose results land only through the flock-guarded `enhance merge` — never a whole-file artifact write, never a journey mutation. Rank folds them as facts plus deterministic verdicts: `gone` and `degraded` demote within the cost tier, `confirmed` annotates and never promotes — ordering must not depend on verifier reach. A verified-gone finalist keeps its board row with a prominent flag. (cc-notes 81efec6c)
 
+## One artifact per trip; rounds are phases
+
+A trip is one live cc-present artifact, and its phases — intake, finalists, head to head, booking sheet — are rounds on that one board, never separate pushes or separate artifacts. Each phase transition is a `submit`, a drained `outcomes`, and one full `push` filling the round the submit opened; inside a round only `update-block`, `reply`, and `remove-block` touch the board, because a full push mid-round stamps the whole document into the current round and drops the live blocks a verifier is still annotating. A row the human has seen never disappears: a verified-gone finalist keeps its row with a prominent flag, and phase-namespaced ids (`in-`, `fin-`, `cmp-`, `book-`) keep a reused id from inheriting a stale verdict across rounds. (cc-notes 894403d6)
+
 ## Expansion is budgeted, and truncation is disclosed
 
 The per-endpoint expansion budget — default twelve, overridable per trip through `plan.tuning.expansion_budget_per_endpoint` — diversifies selection across date, program, and cost cohorts, truncation always disclosed. No global cap: one hot endpoint never starves the others into false returnlessness. (cc-notes fdd212c0, 664182ee)

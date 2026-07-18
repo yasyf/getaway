@@ -869,6 +869,14 @@ def _validate_sweep_artifact(doc: object, name: str) -> None:
             raise UsageError(f"{name}.search_states[{endpoint!r}] must be an object")
     if not isinstance(doc["rows"], list):
         raise UsageError(f"{name}.rows must be a list")
+    searched = provenance["searched"]
+    if not isinstance(searched, list):
+        raise UsageError(f"{name}.provenance.searched must be a list")
+    for index, window in enumerate(searched):
+        label = f"{name}.provenance.searched[{index}]"
+        window = require_keys(window, {"start", "end"}, label)
+        require_str(window["start"], f"{label}.start")
+        require_str(window["end"], f"{label}.end")
     if "superseded_rows" in provenance:
         label = f"{name}.provenance.superseded_rows"
         superseded = require_keys(provenance["superseded_rows"], {"count", "ids"}, label)
@@ -881,9 +889,7 @@ def _validate_sweep_artifact(doc: object, name: str) -> None:
             raise UsageError(f"{label}.ids must not repeat an id")
         if len(ids) != min(count, 50):
             raise UsageError(f"{label}.ids must list min(count, 50) entries")
-        if not isinstance(provenance["searched"], list):
-            raise UsageError(f"{name}.provenance.searched must be a list")
-        if not provenance["searched"]:
+        if not searched:
             raise UsageError(f"{label} cannot accompany a sweep that searched nothing")
         completeness = require_str(
             provenance["completeness"], f"{name}.provenance.completeness"
@@ -989,7 +995,7 @@ def _validate_finalists_artifact(doc: object, name: str) -> None:
             "dropped",
         },
         name,
-        optional=frozenset({"truncation", "partial_leads"}),
+        optional=frozenset({"truncation", "partial_leads", "sweep_summary"}),
     )
     for key in ("journeys", "notable_stretches", "unpaired_leads", "dropped"):
         if not isinstance(doc[key], list):
@@ -1358,6 +1364,15 @@ def _leg_sweep_labels(leg: dict, leg_id: str) -> list[str | None]:
     return labels or [None]
 
 
+def sweep_artifact_leaves(plan: dict) -> list[str]:
+    return [
+        f"legs/{leg['id']}/{'sweep.json' if label is None else f'sweep-{label}.json'}"
+        for leg in plan["legs"]
+        if leg["mode"] in ("award", "either")
+        for label in _leg_sweep_labels(leg, leg["id"])
+    ]
+
+
 def _leg_override(leg: dict) -> dict | None:
     """Explicit endpoints that override the chained defaults (open jaw / non-``$origins`` home)."""
     override: dict = {}
@@ -1628,7 +1643,12 @@ def compile_graph(slug: str) -> dict:
             command=["getaway", "rank", slug],
         )
     )
-    finalize_inputs = ["rank.json", "enhance-verify.json"]
+    finalize_inputs = [
+        "rank.json",
+        "enhance-verify.json",
+        "enhance-seat-advice.json",
+        *sweep_artifact_leaves(plan),
+    ]
     if has_stays:
         finalize_inputs.append("stays.json")
     nodes.append(

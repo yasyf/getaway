@@ -44,6 +44,47 @@ def _leg(role: str, origin: str, dest: str, *, arr: str, dep: str) -> dict:
     }
 
 
+def _award_leg(role: str, origin: str, dest: str) -> dict:
+    """A top-level composed award leg — read by finalize's seat-advice threading, distinct from
+    the ``_leg`` fit-fact stubs ``derive_intervals`` reads."""
+    return {
+        "role": role,
+        "id": f"{role}-award",
+        "cabin": "J",
+        "source": "united",
+        "mode": "award",
+        "soft": False,
+        "airlines": "UA",
+        "fetched_at": None,
+        "detail": {
+            "segments": [
+                {
+                    "origin": origin,
+                    "dest": dest,
+                    "carrier": "UA",
+                    "flight_number": "UA1",
+                    "aircraft": "Boeing 777-300ER",
+                    "aircraft_code": "77W",
+                    "cabin": "J",
+                }
+            ]
+        },
+    }
+
+
+def _cash_leg(role: str, origin: str, dest: str) -> dict:
+    return {
+        "role": role,
+        "id": f"{role}-cash",
+        "cabin": "economy",
+        "source": None,
+        "mode": "cash",
+        "origin": origin,
+        "dest": dest,
+        "cash": {},
+    }
+
+
 def journey(
     jid: str,
     *,
@@ -54,9 +95,11 @@ def journey(
     origin: str = "SFO",
 ) -> dict:
     legs = [_leg("outbound", origin, dest, arr=ob_arr, dep="2026-09-10T00:00")]
+    award_legs = [_award_leg("outbound", origin, dest)]
     if ret_dep is not None:
         legs.append(_leg("return", ret_origin or dest, origin, arr="2026-09-14T23:00", dep=ret_dep))
-    return {"id": jid, "fit_facts": {"legs": legs}}
+        award_legs.append(_award_leg("return", ret_origin or dest, origin))
+    return {"id": jid, "legs": award_legs, "fit_facts": {"legs": legs}}
 
 
 def hybrid_journey(
@@ -69,7 +112,12 @@ def hybrid_journey(
         _leg("onward", gateway, onward, arr="2026-09-10T18:00", dep="2026-09-10T16:00"),
         _leg("return", onward, origin, arr="2026-09-14T23:00", dep="2026-09-14T09:00"),
     ]
-    return {"id": jid, "fit_facts": {"legs": legs}}
+    award_legs = [
+        _award_leg("outbound", origin, gateway),
+        _cash_leg("onward", gateway, onward),
+        _award_leg("return", onward, origin),
+    ]
+    return {"id": jid, "legs": award_legs, "fit_facts": {"legs": legs}}
 
 
 def rank_entry(jrny: dict) -> dict:

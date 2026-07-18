@@ -1,397 +1,210 @@
 {
- "version": 1,
- "title": "Warm & beachy week — rank's live finalists",
- "intro": "Rank's own cut from a live run of the leg-intent engine: six Honolulu round trips — economy one way, premium the other, split across Alaska and American — plus its one notable stretch, an all-business round trip on Alaska alone. Every ranked finalist misses your business preference on both legs; the stretch clears it, and pays with a risky-short Phoenix connection out and a dead-long Los Angeles layover home. The return lands wherever the west-coast home union is cheapest — Phoenix, San Diego, or San Francisco — and every outbound rides the soft-date padding just ahead of your September 6 window, because the near-misses won on price. Pick a journey, or leave feedback under any card. The six ranked journeys sit out the picker: their American premium legs carry taxes in an unstated currency, and a picker row needs one.",
- "submit": {
-  "label": "Send my pick",
-  "note": "I'll pull transfer paths and booking steps for the journey you choose."
- },
- "blocks": [
-  {
-   "id": "picker",
-   "type": "getaway.option-picker",
-   "label": "Which journey should I book?",
-   "options": [
-    {
-     "optionId": "outbound:32YWE55R31Gt7oB9EKco9Vd739X:J|return:32tcJvXpl3EkW8L7be1D9bAhJko:J",
-     "origin": "SAN",
-     "destination": "HNL",
-     "date": "2026-08-30",
-     "program": "Alaska Atmos Rewards",
-     "miles": 70000,
-     "taxes": {
-      "amount": 5120,
-      "currency": "USD"
-     },
-     "cabin": "business"
-    }
-   ]
+  "version": 1,
+  "title": "Warm & beachy week — rank's live finalists",
+  "intro": "Rank's own cut from a live run of the leg-intent engine: two cheap Honolulu round trips — one split Alaska and American, one all-Alaska — plus its one notable stretch, an all-business round trip on Boeing 777-300ER metal that clears your cabin preference and pays with a risky-short Los Angeles connection. Every ranked finalist misses business on both legs; the stretch is the one that clears it. Pick one to book, several to compare, or leave a note under any card.",
+  "presentation": "board",
+  "stats": [
+    { "label": "programs swept", "value": "28" },
+    { "label": "journeys expanded", "value": "34" },
+    { "label": "quota spent", "value": "61" },
+    { "label": "cache age", "value": "2h" }
+  ],
+  "submit": {
+    "label": "Send my pick",
+    "note": "Several picks and I verify and compare them; one pick and I go straight to the booking sheet."
   },
-  {
-   "id": "card-j1",
-   "type": "card",
-   "title": "1 · Honolulu — 62,000 miles (Alaska + American), Aug 31 out, Sep 6 home to PHX",
-   "children": [
+  "blocks": [
     {
-     "id": "leg-j1-outbound",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-08-31&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-17T00:58:29.17272Z",
-     "totalDurationMinutes": 358,
-     "segments": [
-      {
-       "flightNumber": "AS809",
-       "origin": "LAX",
-       "destination": "HNL",
-       "departsAt": "2026-08-31T18:10:00",
-       "arrivesAt": "2026-08-31T21:08:00",
-       "cabin": "economy",
-       "aircraft": "Airbus A330-200",
-       "durationMinutes": 358
-      }
-     ]
+      "id": "fin-sweep",
+      "type": "markdown",
+      "md": "Swept Alaska, American, Aeroplan, and 25 more across Aug 30 – Oct 4 — soft dates padded seven days past your Sep 6 window, because the near-misses won on price. Both balances cover every ranked option outright. Availability last read 2 hours ago; each card carries its own freshness stamp."
     },
     {
-     "id": "leg-j1-return",
-     "type": "markdown",
-     "md": "**Return — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA694 HNL to PHX, departs 2026-09-06 22:30, arrives 2026-09-07 07:15 local · premium economy · Boeing 787-8 · 345 min nonstop · 0 seats reported · availability updated 2026-07-17T09:30:01.387046Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=HNL&to=PHX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-09-06&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
+      "id": "fin-shortlist",
+      "type": "choice",
+      "prompt": "Which journeys are in play?",
+      "multi": true,
+      "options": [
+        {
+          "id": "j1",
+          "label": "Honolulu — 62k, Alaska + American",
+          "hint": "cheapest mix; misses business both ways",
+          "facts": [
+            { "label": "miles", "value": "12.5k AS + 49.5k AA" },
+            { "label": "taxes", "value": "$11.20" },
+            { "label": "cabin", "value": "economy / premium", "tone": "warn" },
+            { "label": "dates", "value": "Aug 31 – Sep 6" },
+            { "label": "seats", "value": "4" }
+          ],
+          "detail": {
+            "pros": ["Both balances cover it outright", "Nonstop each way"],
+            "cons": ["Below your business preference on both legs"]
+          }
+        },
+        {
+          "id": "j2",
+          "label": "Honolulu — 25k, all Alaska",
+          "hint": "fewest miles; economy both ways, home to San Diego",
+          "facts": [
+            { "label": "miles", "value": "25k AS" },
+            { "label": "taxes", "value": "$11.20" },
+            { "label": "cabin", "value": "economy", "tone": "warn" },
+            { "label": "dates", "value": "Sep 1 – Sep 9" },
+            { "label": "seats", "value": "9" }
+          ],
+          "detail": {
+            "pros": ["Fewest miles in the set", "Returns into San Diego, your closest home airport"],
+            "cons": ["Economy both ways", "+2 nights past your seven-night target"]
+          }
+        },
+        {
+          "id": "stretch",
+          "label": "Honolulu all-business — 70k Alaska",
+          "hint": "stretch: clears business, pays with a risky-short LAX connection",
+          "facts": [
+            { "label": "miles", "value": "70k AS" },
+            { "label": "taxes", "value": "$51.20" },
+            { "label": "cabin", "value": "business", "tone": "good" },
+            { "label": "dates", "value": "Aug 30 – Sep 6" },
+            { "label": "seats", "value": "2" }
+          ],
+          "detail": {
+            "pros": ["The one option that clears your business preference", "Boeing 777-300ER business on both transpacific legs"],
+            "cons": ["45-minute LAX connection, 30 under your 75-minute floor"]
+          }
+        }
+      ]
     },
     {
-     "id": "ev-j1",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 12,500 Alaska Atmos Rewards + 49,500 American AAdvantage miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — economy out, premium economy home; 358 + 345 minutes below your business preference."
+      "id": "fin-j1",
+      "type": "card",
+      "title": "1 · Honolulu — 62,000 miles (Alaska + American), Aug 31 out, Sep 6 home to PHX",
+      "summary": "Cheapest mix. Nonstop each way; economy out, premium economy home.",
+      "children": [
+        {
+          "id": "fin-j1-out",
+          "type": "getaway.itinerary",
+          "program": "Alaska Atmos Rewards",
+          "miles": 12500,
+          "taxes": [{ "amount": 560, "currency": "USD" }],
+          "remainingSeats": 9,
+          "bookingLinks": [{ "label": "Book via Alaska", "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-08-31", "primary": true }],
+          "fetchedAt": "2026-07-17T00:58:29Z",
+          "totalDurationMinutes": 358,
+          "segments": [
+            { "flightNumber": "AS809", "origin": "LAX", "destination": "HNL", "departsAt": "2026-08-31T18:10:00", "arrivesAt": "2026-08-31T21:08:00", "cabin": "economy", "aircraft": "Airbus A330-200", "aircraftCode": "332", "durationMinutes": 358 }
+          ]
+        },
+        {
+          "id": "fin-j1-ret",
+          "type": "getaway.itinerary",
+          "program": "American AAdvantage",
+          "miles": 49500,
+          "taxes": [{ "amount": 560, "currency": "USD" }],
+          "remainingSeats": 4,
+          "bookingLinks": [{ "label": "Book via American", "url": "https://www.aa.com/booking/search?type=OneWay&from=HNL&to=PHX&depart=2026-09-06", "primary": true }],
+          "fetchedAt": "2026-07-17T09:30:01Z",
+          "totalDurationMinutes": 345,
+          "segments": [
+            { "flightNumber": "AA694", "origin": "HNL", "destination": "PHX", "departsAt": "2026-09-06T22:30:00", "arrivesAt": "2026-09-07T07:15:00", "cabin": "premium", "aircraft": "Boeing 787-8", "aircraftCode": "788", "durationMinutes": 345 }
+          ]
+        },
+        {
+          "id": "fin-j1-ev",
+          "type": "markdown",
+          "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — 12,500 Alaska + 49,500 American miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — economy out, premium economy home; both legs below your business preference."
+        }
+      ]
+    },
+    {
+      "id": "fin-j2",
+      "type": "card",
+      "title": "2 · Honolulu — 25,000 miles (Alaska), Sep 1 out, Sep 9 home to SAN",
+      "summary": "Fewest miles, all Alaska; economy both ways, two nights past your seven-night target.",
+      "children": [
+        {
+          "id": "fin-j2-out",
+          "type": "getaway.itinerary",
+          "program": "Alaska Atmos Rewards",
+          "miles": 12500,
+          "taxes": [{ "amount": 560, "currency": "USD" }],
+          "remainingSeats": 9,
+          "bookingLinks": [{ "label": "Book via Alaska", "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-09-01", "primary": true }],
+          "fetchedAt": "2026-07-16T23:31:11Z",
+          "totalDurationMinutes": 358,
+          "segments": [
+            { "flightNumber": "AS809", "origin": "LAX", "destination": "HNL", "departsAt": "2026-09-01T18:10:00", "arrivesAt": "2026-09-01T21:08:00", "cabin": "economy", "aircraft": "Airbus A330-200", "aircraftCode": "332", "durationMinutes": 358 }
+          ]
+        },
+        {
+          "id": "fin-j2-ret",
+          "type": "getaway.itinerary",
+          "program": "Alaska Atmos Rewards",
+          "miles": 12500,
+          "taxes": [{ "amount": 560, "currency": "USD" }],
+          "remainingSeats": 9,
+          "bookingLinks": [{ "label": "Book via Alaska", "url": "https://www.alaskaair.com/search/results?O=HNL&D=SAN&OD=2026-09-09", "primary": true }],
+          "fetchedAt": "2026-07-16T01:58:20Z",
+          "totalDurationMinutes": 340,
+          "segments": [
+            { "flightNumber": "AS93", "origin": "HNL", "destination": "SAN", "departsAt": "2026-09-09T22:12:00", "arrivesAt": "2026-09-10T06:52:00", "cabin": "economy", "aircraft": "Boeing 737 MAX 9", "aircraftCode": "7M9", "durationMinutes": 340 }
+          ]
+        },
+        {
+          "id": "fin-j2-ev",
+          "type": "markdown",
+          "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — 25,000 Alaska miles round trip; balance covers.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Trip length** — +2 days past your seven-night target.\n- ⚠️ **Cabin** — economy both ways; below your business preference."
+        }
+      ]
+    },
+    {
+      "id": "fin-stretch",
+      "type": "card",
+      "title": "3 · Stretch · Honolulu all-business — 70,000 Alaska miles, San Diego round trip via Los Angeles",
+      "summary": "The one finalist that clears business — Boeing 777-300ER on both transpacific legs; pays with a risky-short Los Angeles connection out.",
+      "chips": [{ "label": "business", "tone": "demo" }, { "label": "stretch", "tone": "flag" }],
+      "children": [
+        {
+          "id": "fin-stretch-out",
+          "type": "getaway.itinerary",
+          "program": "Alaska Atmos Rewards",
+          "miles": 35000,
+          "taxes": [{ "amount": 2560, "currency": "USD" }],
+          "remainingSeats": 2,
+          "bookingLinks": [{ "label": "Book via Alaska", "url": "https://www.alaskaair.com/search/results?O=SAN&D=HNL&OD=2026-08-30", "primary": true }],
+          "fetchedAt": "2026-07-17T09:29:47Z",
+          "totalDurationMinutes": 455,
+          "segments": [
+            { "flightNumber": "AA2401", "origin": "SAN", "destination": "LAX", "departsAt": "2026-08-30T07:00:00", "arrivesAt": "2026-08-30T07:55:00", "cabin": "first", "aircraft": "Airbus A321", "aircraftCode": "321", "durationMinutes": 55 },
+            { "flightNumber": "AA103", "origin": "LAX", "destination": "HNL", "departsAt": "2026-08-30T08:40:00", "arrivesAt": "2026-08-30T11:35:00", "cabin": "business", "aircraft": "Boeing 777-300ER", "aircraftCode": "77W", "seatQuality": { "verdict": "solid", "product": "Super Diamond era, Flagship Suite retrofit from Feb 2026", "note": "Retrofit completes 2027; refitted frames rate suite." }, "durationMinutes": 355 }
+          ]
+        },
+        {
+          "id": "fin-stretch-ret",
+          "type": "getaway.itinerary",
+          "program": "Alaska Atmos Rewards",
+          "miles": 35000,
+          "taxes": [{ "amount": 2560, "currency": "USD" }],
+          "remainingSeats": 2,
+          "bookingLinks": [{ "label": "Book via Alaska", "url": "https://www.alaskaair.com/search/results?O=HNL&D=SAN&OD=2026-09-06", "primary": true }],
+          "fetchedAt": "2026-07-17T09:29:47Z",
+          "totalDurationMinutes": 445,
+          "segments": [
+            { "flightNumber": "AA104", "origin": "HNL", "destination": "LAX", "departsAt": "2026-09-06T09:00:00", "arrivesAt": "2026-09-06T17:05:00", "cabin": "business", "aircraft": "Boeing 777-300ER", "aircraftCode": "77W", "seatQuality": { "verdict": "solid", "product": "Super Diamond era, Flagship Suite retrofit from Feb 2026", "note": "Retrofit completes 2027; refitted frames rate suite." }, "durationMinutes": 305 },
+            { "flightNumber": "AA2530", "origin": "LAX", "destination": "SAN", "departsAt": "2026-09-06T18:30:00", "arrivesAt": "2026-09-06T19:25:00", "cabin": "first", "aircraft": "Airbus A321", "aircraftCode": "321", "durationMinutes": 55 }
+          ]
+        },
+        {
+          "id": "fin-stretch-ev",
+          "type": "markdown",
+          "md": "**Why it boarded** — the run's note verbatim: \"clears your business cabin preference — every ranked finalist misses it.\"\n\n**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — 70,000 Alaska miles; your balance covers.\n- ✅ **Seat** — Boeing 777-300ER business (registry: solid) on both transpacific legs.\n- ⚠️ **Layovers** — demote: \"Risky-short 45-min LAX connection out — 30 min under your 75-min floor.\""
+        }
+      ]
+    },
+    {
+      "id": "fin-leads",
+      "type": "markdown",
+      "md": "**Unpaired leads.** Kona (KOA) surfaced a 30,000-mile Alaska business outbound but no business return in the window; the return searched 2 hours ago and came back `searched_empty`. A lead, not a verdict — an expired empty reads unverified, never \"no space\". Say the word and I recheck it live."
     }
-   ]
-  },
-  {
-   "id": "card-j2",
-   "type": "card",
-   "title": "2 · Honolulu — 62,000 miles (Alaska + American), Aug 31 out, Sep 7 home to PHX",
-   "children": [
-    {
-     "id": "leg-j2-outbound",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-08-31&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-17T00:58:29.17272Z",
-     "totalDurationMinutes": 358,
-     "segments": [
-      {
-       "flightNumber": "AS809",
-       "origin": "LAX",
-       "destination": "HNL",
-       "departsAt": "2026-08-31T18:10:00",
-       "arrivesAt": "2026-08-31T21:08:00",
-       "cabin": "economy",
-       "aircraft": "Airbus A330-200",
-       "durationMinutes": 358
-      }
-     ]
-    },
-    {
-     "id": "leg-j2-return",
-     "type": "markdown",
-     "md": "**Return — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA694 HNL to PHX, departs 2026-09-07 22:30, arrives 2026-09-08 07:15 local · premium economy · Boeing 787-8 · 345 min nonstop · 0 seats reported · availability updated 2026-07-17T09:29:54.54094Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=HNL&to=PHX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-09-07&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
-    },
-    {
-     "id": "ev-j2",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 12,500 Alaska Atmos Rewards + 49,500 American AAdvantage miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — economy out, premium economy home; 358 + 345 minutes below your business preference."
-    }
-   ]
-  },
-  {
-   "id": "card-j3",
-   "type": "card",
-   "title": "3 · Honolulu — 62,000 miles (Alaska + American), Sep 1 out, Sep 6 home to PHX",
-   "children": [
-    {
-     "id": "leg-j3-outbound",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-09-01&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-16T23:31:11.821641Z",
-     "totalDurationMinutes": 358,
-     "segments": [
-      {
-       "flightNumber": "AS809",
-       "origin": "LAX",
-       "destination": "HNL",
-       "departsAt": "2026-09-01T18:10:00",
-       "arrivesAt": "2026-09-01T21:08:00",
-       "cabin": "economy",
-       "aircraft": "Airbus A330-200",
-       "durationMinutes": 358
-      }
-     ]
-    },
-    {
-     "id": "leg-j3-return",
-     "type": "markdown",
-     "md": "**Return — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA694 HNL to PHX, departs 2026-09-06 22:30, arrives 2026-09-07 07:15 local · premium economy · Boeing 787-8 · 345 min nonstop · 0 seats reported · availability updated 2026-07-17T09:30:01.387046Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=HNL&to=PHX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-09-06&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
-    },
-    {
-     "id": "ev-j3",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 12,500 Alaska Atmos Rewards + 49,500 American AAdvantage miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — economy out, premium economy home; 358 + 345 minutes below your business preference."
-    }
-   ]
-  },
-  {
-   "id": "card-j4",
-   "type": "card",
-   "title": "4 · Honolulu — 62,000 miles (Alaska + American), Sep 1 out, Sep 7 home to PHX",
-   "children": [
-    {
-     "id": "leg-j4-outbound",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=LAX&D=HNL&OD=2026-09-01&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-16T23:31:11.821641Z",
-     "totalDurationMinutes": 358,
-     "segments": [
-      {
-       "flightNumber": "AS809",
-       "origin": "LAX",
-       "destination": "HNL",
-       "departsAt": "2026-09-01T18:10:00",
-       "arrivesAt": "2026-09-01T21:08:00",
-       "cabin": "economy",
-       "aircraft": "Airbus A330-200",
-       "durationMinutes": 358
-      }
-     ]
-    },
-    {
-     "id": "leg-j4-return",
-     "type": "markdown",
-     "md": "**Return — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA694 HNL to PHX, departs 2026-09-07 22:30, arrives 2026-09-08 07:15 local · premium economy · Boeing 787-8 · 345 min nonstop · 0 seats reported · availability updated 2026-07-17T09:29:54.54094Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=HNL&to=PHX&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-09-07&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
-    },
-    {
-     "id": "ev-j4",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 12,500 Alaska Atmos Rewards + 49,500 American AAdvantage miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — economy out, premium economy home; 358 + 345 minutes below your business preference."
-    }
-   ]
-  },
-  {
-   "id": "card-j5",
-   "type": "card",
-   "title": "5 · Honolulu — 62,000 miles (Alaska + American), Aug 30 out, Sep 9 home to SAN",
-   "children": [
-    {
-     "id": "leg-j5-outbound",
-     "type": "markdown",
-     "md": "**Outbound — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA675 PHX to HNL, departs 2026-08-30 11:14, arrives 2026-08-30 15:02 local · premium economy · Boeing 787-8 · 408 min nonstop · 0 seats reported · availability updated 2026-07-13T19:36:18.701442Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=PHX&to=HNL&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-08-30&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
-    },
-    {
-     "id": "leg-j5-return",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=HNL&D=SAN&OD=2026-09-09&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-16T01:58:20.209446Z",
-     "totalDurationMinutes": 340,
-     "segments": [
-      {
-       "flightNumber": "AS93",
-       "origin": "HNL",
-       "destination": "SAN",
-       "departsAt": "2026-09-09T22:12:00",
-       "arrivesAt": "2026-09-10T06:52:00",
-       "cabin": "economy",
-       "aircraft": "Boeing 737 MAX 9",
-       "durationMinutes": 340
-      }
-     ]
-    },
-    {
-     "id": "ev-j5",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 49,500 American AAdvantage + 12,500 Alaska Atmos Rewards miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — premium economy out, economy home; 408 + 340 minutes below your business preference."
-    }
-   ]
-  },
-  {
-   "id": "card-j6",
-   "type": "card",
-   "title": "6 · Honolulu — 62,000 miles (Alaska + American), Aug 30 out, Sep 10 home to SFO",
-   "children": [
-    {
-     "id": "leg-j6-outbound",
-     "type": "markdown",
-     "md": "**Outbound — American AAdvantage** · 49,500 miles + 560 taxes (currency unstated in the artifact) · AA675 PHX to HNL, departs 2026-08-30 11:14, arrives 2026-08-30 15:02 local · premium economy · Boeing 787-8 · 408 min nonstop · 0 seats reported · availability updated 2026-07-13T19:36:18.701442Z · [Book via American AAdvantage](https://www.aa.com/booking/search?type=OneWay&searchType=Award&from=PHX&to=HNL&pax=1&cabin=&locale=en_US&nearbyAirports=true&depart=2026-08-30&carriers=ALL&pos=US&adult=1&utm_source=seatsaero)\n\nRendered as text: the artifact carries no taxes currency for this leg, and an itinerary card requires one."
-    },
-    {
-     "id": "leg-j6-return",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 12500,
-     "taxes": {
-      "amount": 560,
-      "currency": "USD"
-     },
-     "remainingSeats": 9,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=HNL&D=SFO&OD=2026-09-10&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-16T00:57:40.056453Z",
-     "totalDurationMinutes": 313,
-     "segments": [
-      {
-       "flightNumber": "AS812",
-       "origin": "HNL",
-       "destination": "SFO",
-       "departsAt": "2026-09-10T12:10:00",
-       "arrivesAt": "2026-09-10T20:23:00",
-       "cabin": "economy",
-       "aircraft": "Airbus A330-200",
-       "durationMinutes": 313
-      }
-     ]
-    },
-    {
-     "id": "ev-j6",
-     "type": "markdown",
-     "md": "**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 49,500 American AAdvantage + 12,500 Alaska Atmos Rewards miles; both balances cover.\n- ℹ️ **Layovers** — neutral both directions: nonstop, no connection to weigh.\n- ⚠️ **Cabin** — premium economy out, economy home; 408 + 313 minutes below your business preference."
-    }
-   ]
-  },
-  {
-   "id": "card-stretch",
-   "type": "card",
-   "title": "7 · Stretch · Honolulu all-business — 70,000 Alaska miles, San Diego out, Las Vegas home",
-   "children": [
-    {
-     "id": "leg-stretch-outbound",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 35000,
-     "taxes": {
-      "amount": 2560,
-      "currency": "USD"
-     },
-     "remainingSeats": 2,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=SAN&D=HNL&OD=2026-08-30&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-13T19:32:13.707281Z",
-     "totalDurationMinutes": 542,
-     "segments": [
-      {
-       "flightNumber": "AA625",
-       "origin": "SAN",
-       "destination": "PHX",
-       "departsAt": "2026-08-30T06:25:00",
-       "arrivesAt": "2026-08-30T07:58:00",
-       "cabin": "first",
-       "aircraft": "Airbus A321",
-       "durationMinutes": 93
-      },
-      {
-       "flightNumber": "AA693",
-       "origin": "PHX",
-       "destination": "HNL",
-       "departsAt": "2026-08-30T08:45:00",
-       "arrivesAt": "2026-08-30T12:27:00",
-       "cabin": "business",
-       "aircraft": "Airbus A321neo/Lr/Xlr",
-       "durationMinutes": 402
-      }
-     ]
-    },
-    {
-     "id": "leg-stretch-return",
-     "type": "getaway.itinerary",
-     "program": "Alaska Atmos Rewards",
-     "miles": 35000,
-     "taxes": {
-      "amount": 2560,
-      "currency": "USD"
-     },
-     "remainingSeats": 1,
-     "bookingLink": {
-      "label": "Book via Alaska Atmos Rewards",
-      "url": "https://www.alaskaair.com/search/results?O=HNL&D=LAS&OD=2026-09-06&A=1&C=0&L=0&RT=false&ShoppingMethod=onlineaward&utm_source=seatsaero"
-     },
-     "updatedAt": "2026-07-17T09:29:47.714079Z",
-     "totalDurationMinutes": 854,
-     "segments": [
-      {
-       "flightNumber": "AA144",
-       "origin": "HNL",
-       "destination": "LAX",
-       "departsAt": "2026-09-06T20:30:00",
-       "arrivesAt": "2026-09-07T05:03:00",
-       "cabin": "business",
-       "aircraft": "Airbus A321neo/Lr/Xlr",
-       "durationMinutes": 333
-      },
-      {
-       "flightNumber": "AA2529",
-       "origin": "LAX",
-       "destination": "LAS",
-       "departsAt": "2026-09-07T12:22:00",
-       "arrivesAt": "2026-09-07T13:44:00",
-       "cabin": "first",
-       "aircraft": "Boeing 737-800",
-       "durationMinutes": 82
-      }
-     ]
-    },
-    {
-     "id": "ev-stretch",
-     "type": "markdown",
-     "md": "**Why it boarded** — the run's own note, verbatim: \"clears your business cabin preference — every finalist misses it\"\n\n**Judgment** — the run's verdicts for this journey:\n- ✅ **Affordability** — promote: 70,000 Alaska miles; your balance covers.\n- ⚠️ **Layovers** — demote both directions: \"Risky-short 47-min PHX connection — 28 min under your 75-min floor.\" and \"7h19m LAX layover — dead-long for a minimize-style traveler.\"\n\nThis journey rides the picker alone: it is the one finalist whose taxes carry a stated currency on both legs."
-    }
-   ]
-  }
- ]
+  ]
 }

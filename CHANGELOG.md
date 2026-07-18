@@ -13,6 +13,17 @@ annotated outbounds. This is a clean cutover: a pre-v2
 onboarding, and in-flight v1 trips are discarded, not migrated.
 
 ### Changed
+- The block pack rebuilds on cc-present host API 2 (pack 0.2.0): every
+  block styles through the host's theme tokens with a one-bold-line
+  summary tier and expand-on-demand disclosure, carries an inline note
+  the agent answers live under the block, and the availability grid
+  multi-selects dates and cabins. `getaway.option-picker` is deleted
+  outright — shortlists ride the built-in `choice` block (multi-select,
+  fact columns, pros/cons drill-down). Itinerary moves to the v3 data
+  shapes: per-currency tax lines (never cross-summed), every booking
+  link labeled with the primary flagged, `fetchedAt` as the leg's true
+  fetch instant even on cache hits, and per-segment aircraft codes with
+  registry seat verdicts.
 - The skill flips from a twelve-step mandate to a primitives catalog:
   "Invent the shape, then price it" leads SKILL.md with the leg-intent
   vocabulary — chained and open-jaw endpoints, `either`-mode legs, stay
@@ -48,6 +59,24 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   getaway@getaway`, no dependency marketplaces to add by hand.
 
 ### Added
+- The board flow: one cc-present artifact carries the whole trip as
+  rounds — a context-rich multi-select intake board replaces the
+  AskUserQuestion intake, the finalist board opens with what was swept
+  (the new `sweep_summary` fold), a multi-pick shortlist fans into a
+  head-to-head verification round, and the locked pick lands on a
+  read-only booking sheet before `close --summary`. boards.md holds the
+  four board shapes; planning.md the event protocol — notes on any
+  block get answered in place, and a row the user has seen never
+  disappears.
+- `getaway.booking`, the final booking sheet block: transfer-first
+  numbered actions, every booking link, per-currency tax and cash
+  totals, and per-flight seat advice — the packaged seat-quality
+  registry verdict merged with live picks and avoids from the new
+  seat-advice enhancer, whose researchers work a deduped per-airframe
+  worklist (aeroLOPA first, SeatGuru only behind a browser) and merge
+  `{seat, why}` rows finalize folds onto every award segment.
+- CI builds the pack: typecheck, committed-bundle-matches-src, smoke,
+  and a real `cc-present pack lint` gate on every push.
 - The primitives layer on the leg-intent engine — structured mechanisms
   the planning agent calls out to when it deems fit: `plan.tuning`
   per-trip knobs (presentation limit, expansion budget, beam width,

@@ -4,9 +4,9 @@ An enhancer is fire-and-forget: it never blocks the walk or the board, its failu
 and results land only through ``enhance merge`` — a flock-guarded upsert — never a whole-file
 ``trip artifact write`` that would clobber under concurrency. ``enhance targets`` computes the
 worklist over the trip's cached artifacts; ``enhance merge`` folds background results into
-``enhance-<name>.json``. The first enhancer is ``verify``: live-site checks on award rows the
-trip is doubling down on. Rank re-derives its join keys from the legs, so nothing here stores a
-target list the rank fold could drift from.
+``enhance-<name>.json``. ``verify`` runs live-site checks on award rows the trip is doubling down
+on; ``seat-advice`` crowdsources per-(carrier, aircraft, cabin) seat picks. Rank re-derives its
+join keys from the legs, so nothing here stores a target list the rank fold could drift from.
 """
 
 import datetime as dt
@@ -15,8 +15,8 @@ from collections import Counter
 
 import click
 
-from getaway import registry, trips
-from getaway.constants import NODE_TTL_HOURS
+from getaway import quality, registry, trips
+from getaway.constants import CABIN_PREFIX, NODE_TTL_HOURS
 from getaway.paths import (
     StateConflictError,
     UsageError,
@@ -25,10 +25,19 @@ from getaway.paths import (
     map_errors,
     require_keys,
     require_str,
+    require_str_list,
 )
 
-ENHANCERS = ("verify",)
-OUTCOMES = frozenset({"confirmed", "gone", "degraded", "inconclusive"})
+ENHANCERS = ("verify", "seat-advice")
+OUTCOMES_BY_ENHANCER: dict[str, frozenset[str]] = {
+    "verify": frozenset({"confirmed", "gone", "degraded", "inconclusive"}),
+    "seat-advice": frozenset({"found", "inconclusive"}),
+}
+# Per enhancer, the outcomes whose row carries a populated (never null) ``observed`` object.
+_OBSERVED_OUTCOMES: dict[str, frozenset[str]] = {
+    "verify": frozenset({"confirmed", "degraded"}),
+    "seat-advice": frozenset({"found"}),
+}
 METHODS = frozenset({"public", "cookie"})
 STALE_HOURS = NODE_TTL_HOURS["expand"]
 
@@ -68,22 +77,51 @@ def _checked_at(row: dict) -> dt.datetime:
     return dt.datetime.fromisoformat(row["checked_at"])
 
 
-def _validate_result_row(row: object, label: str) -> dict:
+def _validate_advice_note(note: object, label: str) -> None:
+    note = require_keys(note, {"seat", "why"}, label)
+    require_str(note["seat"], f"{label}.seat")
+    require_str(note["why"], f"{label}.why")
+
+
+def _validate_seat_advice_observed(observed: object, label: str) -> None:
+    observed = require_keys(observed, {"picks", "avoids", "tips", "sources"}, label)
+    for key in ("picks", "avoids"):
+        notes = observed[key]
+        if not isinstance(notes, list):
+            raise UsageError(f"{label}.{key} must be a list")
+        for i, note in enumerate(notes):
+            _validate_advice_note(note, f"{label}.{key}[{i}]")
+    require_str_list(observed["tips"], f"{label}.tips")
+    sources = observed["sources"]
+    if not isinstance(sources, list) or not sources:
+        raise UsageError(f"{label}.sources must be a non-empty list")
+    for i, source in enumerate(sources):
+        url = require_str(source, f"{label}.sources[{i}]")
+        if not url.startswith("https://"):
+            raise UsageError(f"{label}.sources[{i}] must be an https URL")
+    if not (observed["picks"] or observed["avoids"] or observed["tips"]):
+        raise UsageError(f"{label} must have at least one of picks, avoids, tips")
+
+
+def _validate_result_row(row: object, label: str, enhancer: str) -> dict:
     row = require_keys(
         row, {"target_id", "outcome", "checked_at", "method", "observed", "evidence"}, label
     )
     require_str(row["target_id"], f"{label}.target_id")
     require_str(row["outcome"], f"{label}.outcome")
-    if row["outcome"] not in OUTCOMES:
-        raise UsageError(f"{label}.outcome {row['outcome']!r} must be one of {sorted(OUTCOMES)}")
+    outcomes = OUTCOMES_BY_ENHANCER[enhancer]
+    if row["outcome"] not in outcomes:
+        raise UsageError(f"{label}.outcome {row['outcome']!r} must be one of {sorted(outcomes)}")
     _require_checked_at(row["checked_at"], f"{label}.checked_at")
     require_str(row["method"], f"{label}.method")
     if row["method"] not in METHODS:
         raise UsageError(f"{label}.method {row['method']!r} must be one of {sorted(METHODS)}")
     observed = row["observed"]
-    if row["outcome"] in ("confirmed", "degraded"):
+    if row["outcome"] in _OBSERVED_OUTCOMES[enhancer]:
         if not isinstance(observed, dict):
             raise UsageError(f"{label}.observed must be an object for {row['outcome']}")
+        if enhancer == "seat-advice":
+            _validate_seat_advice_observed(observed, f"{label}.observed")
     elif observed is not None:
         raise UsageError(f"{label}.observed must be null for {row['outcome']}")
     require_str(row["evidence"], f"{label}.evidence")
@@ -103,7 +141,7 @@ def validate_enhancer_doc(doc: object, name: str) -> None:
         raise UsageError(f"{name}.results must be an object")
     for target_id, row in results.items():
         label = f"{name}.results[{target_id!r}]"
-        _validate_result_row(row, label)
+        _validate_result_row(row, label, enhancer)
         if row["target_id"] != target_id:
             raise UsageError(
                 f"{label}.target_id {row['target_id']!r} does not match key {target_id!r}"
@@ -210,6 +248,46 @@ def _lead_targets(leads: list[dict], party: int, window: dict, programs: dict) -
     return list(by_key.values())
 
 
+def _seat_advice_target(
+    carrier: str, aircraft_code: str, cabin: str, segment: dict, leg: dict, letter_to_cabin: dict
+) -> dict:
+    aircraft_name = segment["aircraft"]
+    cabin_name = letter_to_cabin[cabin]
+    return {
+        "target_id": f"{carrier}:{aircraft_code}:{cabin}",
+        "carrier": carrier,
+        "carrier_name": leg["detail"]["raw"]["carriers"][carrier],
+        "aircraft_code": aircraft_code,
+        "aircraft_name": aircraft_name,
+        "cabin": cabin,
+        "cabin_name": cabin_name,
+        "flight_numbers": [],
+        "journey_ids": [],
+        "registry": quality.classify(carrier, aircraft_name, cabin_name),
+    }
+
+
+def _seat_advice_targets(journeys: list[dict]) -> list[dict]:
+    letter_to_cabin = {letter: name for name, letter in CABIN_PREFIX.items()}
+    by_key: dict[tuple[str, str, str], dict] = {}
+    for journey in journeys:
+        jid = journey["id"]
+        for leg in journey["legs"]:
+            if leg["mode"] != "award":
+                continue
+            for segment in leg["detail"]["segments"]:
+                key = (segment["carrier"], segment["aircraft_code"], segment["cabin"])
+                target = by_key.get(key)
+                if target is None:
+                    target = _seat_advice_target(*key, segment, leg, letter_to_cabin)
+                    by_key[key] = target
+                if segment["flight_number"] not in target["flight_numbers"]:
+                    target["flight_numbers"].append(segment["flight_number"])
+                if jid not in target["journey_ids"]:
+                    target["journey_ids"].append(jid)
+    return list(by_key.values())
+
+
 def targets(slug: str, name: str) -> list[dict]:
     _require_enhancer(name)
     if "expand.json" not in trips.artifact_list(slug):
@@ -218,13 +296,17 @@ def targets(slug: str, name: str) -> list[dict]:
     if "finalists.json" in trips.artifact_list(slug):
         finalists = json.loads(trips.artifact_read(slug, "finalists.json"))
         journeys = [entry["journey"] for entry in finalists["journeys"]]
+        if name == "seat-advice":
+            journeys += [entry["journey"] for entry in finalists["notable_stretches"]]
     else:
         journeys = expand["journeys"]
-    trip = trips.show(slug)
-    party = trip["party"]
-    programs = registry.programs()
-    rows = _award_targets(journeys, party, programs)
-    rows += _lead_targets(expand["unpaired_outbounds"], party, trip["window"], programs)
+    if name == "seat-advice":
+        rows = _seat_advice_targets(journeys)
+    else:
+        trip = trips.show(slug)
+        programs = registry.programs()
+        rows = _award_targets(journeys, trip["party"], programs)
+        rows += _lead_targets(expand["unpaired_outbounds"], trip["party"], trip["window"], programs)
     rows.sort(key=lambda target: target["target_id"])
     return rows
 
@@ -240,7 +322,7 @@ def merge(slug: str, name: str, rows: object) -> dict:
     if not isinstance(rows, list):
         raise UsageError("enhance merge expects a JSON array on stdin")
     validated = [
-        _validate_result_row(row, f"enhance merge input[{i}]") for i, row in enumerate(rows)
+        _validate_result_row(row, f"enhance merge input[{i}]", name) for i, row in enumerate(rows)
     ]
 
     def mutate(current: dict) -> dict:

@@ -8,5 +8,11 @@
   "arrivesAt": "2026-09-07T19:45",
   "cabin": "business",
   "durationMinutes": 975,
-  "aircraft": "Boeing 777-300ER"
+  "aircraft": "Boeing 777-300ER",
+  "aircraftCode": "77W",
+  "seatQuality": {
+    "verdict": "suite",
+    "product": "Qsuite",
+    "note": "Choose an odd-numbered window suite for the most privacy."
+  }
 }

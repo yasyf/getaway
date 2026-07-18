@@ -65,3 +65,30 @@ jobs:
         run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json
       - name: Lint capt-hook pack
         run: uvx 'capt-hook>=9.9.0' pack lint "$GITHUB_WORKSPACE"
+
+  pack:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: .claude/components
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Type-check pack
+        run: bun run typecheck
+      - name: Build pack
+        run: bun run build
+      - name: Committed bundle matches src
+        run: git diff --exit-code -- dist/pack.js
+      - name: Smoke built bundle
+        run: bun run smoke
+      - name: Pack lint
+        run: |
+          curl -fsSLO https://github.com/yasyf/cc-present/releases/download/v0.10.0/cc-present_linux_amd64
+          curl -fsSL https://github.com/yasyf/cc-present/releases/download/v0.10.0/checksums.txt \
+            | grep ' cc-present_linux_amd64$' | sha256sum -c -
+          chmod +x cc-present_linux_amd64
+          ./cc-present_linux_amd64 pack lint .

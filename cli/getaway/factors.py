@@ -25,7 +25,7 @@ from typing import Any
 
 import click
 
-from getaway import afford, enhance, fit, prefs, registry, stays, trips
+from getaway import afford, enhance, fit, prefs, quality, registry, stays, trips
 from getaway.constants import CABIN_PREFIX, MILEAGE_BAND, cabin_rank, tuned
 from getaway.paths import UsageError, emit, map_errors, utcnow
 
@@ -621,6 +621,81 @@ def _thread_verification(doc: dict, slug: str) -> None:
     doc["unpaired_leads"] = leads
 
 
+def _seat_advice_row(leg: dict, segment: dict, live_results: dict, letter_to_cabin: dict) -> dict:
+    carrier = segment["carrier"]
+    aircraft_code = segment["aircraft_code"]
+    cabin = segment["cabin"]
+    row = {
+        "leg_role": leg["role"],
+        "flight_number": segment["flight_number"],
+        "carrier": carrier,
+        "aircraft_code": aircraft_code,
+        "aircraft_name": segment["aircraft"],
+        "cabin": cabin,
+        "registry": quality.classify(carrier, segment["aircraft"], letter_to_cabin[cabin]),
+    }
+    live = live_results.get(f"{carrier}:{aircraft_code}:{cabin}")
+    if live is not None:
+        row["live"] = {k: live[k] for k in ("outcome", "checked_at", "observed", "evidence")}
+    return row
+
+
+def _journey_seat_advice(journey: dict, live_results: dict, letter_to_cabin: dict) -> list[dict]:
+    return [
+        _seat_advice_row(leg, segment, live_results, letter_to_cabin)
+        for leg in journey["legs"]
+        if leg["mode"] == "award"
+        for segment in leg["detail"]["segments"]
+    ]
+
+
+def _thread_seat_advice(doc: dict, slug: str) -> None:
+    """Attach the seat-quality registry verdict (and any matched live seat-advice enhancer result)
+    to every award-leg segment in each board journey. The registry classification is unconditional;
+    ``live`` appears only when a merged enhance-seat-advice.json row matches the segment's
+    (carrier, aircraft_code, cabin)."""
+    live_results = enhance.results_index(slug, "seat-advice")
+    letter_to_cabin = {letter: name for name, letter in CABIN_PREFIX.items()}
+    for section in ("journeys", "notable_stretches"):
+        doc[section] = [
+            {
+                **entry,
+                "seat_advice": _journey_seat_advice(
+                    entry["journey"], live_results, letter_to_cabin
+                ),
+            }
+            for entry in doc[section]
+        ]
+
+
+def _sweep_summary(slug: str) -> dict | None:
+    """Coverage rolled up across current-plan sweep artifacts that actually searched something —
+    a sweep that never made a call (``not_run``) contributes no program, no range, no timestamp.
+    Absent entirely when nothing qualifies, the same honest-absence pattern as a segment's missing
+    ``live`` key."""
+    leaves = trips.existing_artifacts(slug, trips.sweep_artifact_leaves(trips.show(slug)["plan"]))
+    programs: set[str] = set()
+    starts: list[str] = []
+    ends: list[str] = []
+    fetched_ats: list[dt.datetime] = []
+    for leaf in leaves:
+        provenance = json.loads(trips.artifact_read(slug, leaf))["provenance"]
+        searched = provenance["searched"]
+        if not searched:
+            continue
+        programs.add(provenance["source"])
+        starts += [window["start"] for window in searched]
+        ends += [window["end"] for window in searched]
+        fetched_ats.append(dt.datetime.fromisoformat(provenance["fetched_at"]))
+    if not fetched_ats:
+        return None
+    return {
+        "programs": sorted(programs),
+        "date_range": {"start": min(starts), "end": max(ends)},
+        "swept_at": max(fetched_ats).isoformat(),
+    }
+
+
 def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     upstream_fp = trips.capture_upstream_fp(slug, "finalize")  # before any input artifact is read
     trip = trips.show(slug)
@@ -650,6 +725,10 @@ def finalize(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     if "lodging" in plan:
         _thread_lodging(doc, plan, slug, now)
     _thread_verification(doc, slug)
+    _thread_seat_advice(doc, slug)
+    summary = _sweep_summary(slug)
+    if summary is not None:
+        doc["sweep_summary"] = summary
     trips.artifact_write(slug, "finalists.json", json.dumps(doc, separators=(",", ":")))
     trips.phase_done(slug, "finalize", now=now, inputs_fp=inputs_fp, upstream_fp=upstream_fp)
     return doc

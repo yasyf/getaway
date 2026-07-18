@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from _api import expand_doc
 
-from getaway import enhance, prefs, trips
+from getaway import enhance, prefs, quality, trips
 from getaway.paths import StateConflictError, UsageError
 
 FROZEN = dt.datetime(2026, 7, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
@@ -49,6 +49,11 @@ def award_leg(
     mileage: int = 80000,
     origin: str = "SFO",
     dest: str = "NRT",
+    carrier: str = "UA",
+    carrier_name: str = "United Airlines",
+    flight_number: str = "UA1",
+    aircraft: str = "Boeing 777-300ER",
+    aircraft_code: str = "77W",
 ) -> dict:
     return {
         "role": role,
@@ -71,8 +76,14 @@ def award_leg(
                     "dest": dest,
                     "departs_local": "2026-09-05T10:00",
                     "arrives_local": "2026-09-06T14:00",
+                    "carrier": carrier,
+                    "flight_number": flight_number,
+                    "aircraft": aircraft,
+                    "aircraft_code": aircraft_code,
+                    "cabin": cabin,
                 }
             ],
+            "raw": {"carriers": {carrier: carrier_name}},
         },
     }
 
@@ -358,6 +369,121 @@ def test_unknown_enhancer_name_raises(trip: str) -> None:
         enhance.targets(trip, "boost")
 
 
+# ---- seat-advice targets ---------------------------------------------------------------------
+
+
+def test_seat_advice_targets_dedupe_across_journeys(trip: str) -> None:
+    shared = award_leg("outbound", "united", lid="SHARED")
+    js = [
+        journey("J1", [shared], [leg_fact(state="unknown")]),
+        journey("J2", [shared], [leg_fact(state="unknown")]),
+    ]
+    write_expand(trip, journeys=js)
+    rows = enhance.targets(trip, "seat-advice")
+    assert [r["target_id"] for r in rows] == ["UA:77W:J"]
+    assert rows[0]["journey_ids"] == ["J1", "J2"]
+    assert rows[0]["flight_numbers"] == ["UA1"]
+
+
+def test_seat_advice_target_row_carries_registry_and_target_id_shape(trip: str) -> None:
+    js = [
+        journey(
+            "A",
+            [
+                award_leg(
+                    "outbound",
+                    "united",
+                    lid="AV1",
+                    carrier="ZZ",
+                    carrier_name="Zephyr Air",
+                    flight_number="ZZ42",
+                    aircraft="Test Aircrafter 9000",
+                    aircraft_code="T9K",
+                    cabin="J",
+                )
+            ],
+            [leg_fact(state="unknown")],
+        )
+    ]
+    write_expand(trip, journeys=js)
+    (row,) = enhance.targets(trip, "seat-advice")
+    assert row == {
+        "target_id": "ZZ:T9K:J",
+        "carrier": "ZZ",
+        "carrier_name": "Zephyr Air",
+        "aircraft_code": "T9K",
+        "aircraft_name": "Test Aircrafter 9000",
+        "cabin": "J",
+        "cabin_name": "business",
+        "flight_numbers": ["ZZ42"],
+        "journey_ids": ["A"],
+        "registry": quality.classify("ZZ", "Test Aircrafter 9000", "business"),
+    }
+    # "ZZ" is not a real carrier in the seat-quality registry — the deterministic verify fallback.
+    assert row["registry"] == {"verdict": "verify", "product": None, "note": None, "matched": None}
+
+
+def test_seat_advice_targets_ignore_cash_legs(trip: str) -> None:
+    cash = {"role": "onward", "id": "cash:X", "cabin": "J", "source": None, "mode": "cash"}
+    write_expand(trip, journeys=[journey("H", [cash], [leg_fact(mode="cash")])])
+    assert enhance.targets(trip, "seat-advice") == []
+
+
+def test_seat_advice_targets_combine_flight_numbers_and_journeys_by_aircraft_key(trip: str) -> None:
+    js = [
+        journey(
+            "A",
+            [award_leg("outbound", "united", lid="A1", flight_number="UA100")],
+            [leg_fact(state="unknown")],
+        ),
+        journey(
+            "B",
+            [award_leg("outbound", "united", lid="A2", flight_number="UA200")],
+            [leg_fact(state="unknown")],
+        ),
+    ]
+    write_expand(trip, journeys=js)
+    (row,) = enhance.targets(trip, "seat-advice")
+    assert row["flight_numbers"] == ["UA100", "UA200"]
+    assert row["journey_ids"] == ["A", "B"]
+
+
+def test_seat_advice_targets_include_notable_stretch_equipment(trip: str) -> None:
+    finalist = journey(
+        "FINALIST",
+        [award_leg("outbound", "united", lid="FINALIST-LEG")],
+        [leg_fact(state="unknown")],
+    )
+    notable = journey(
+        "NOTABLE",
+        [
+            award_leg(
+                "outbound",
+                "united",
+                lid="NOTABLE-LEG",
+                aircraft="Airbus A350-900",
+                aircraft_code="359",
+            )
+        ],
+        [leg_fact(state="unknown")],
+    )
+    write_expand(trip, journeys=[])
+    finalists = {
+        "trip_type": "round_trip",
+        "journeys": [{"journey": finalist}],
+        "notable_stretches": [{"journey": notable, "why": "best seat despite the timing"}],
+        "unpaired_leads": [],
+        "search_states": {},
+        "dropped": [],
+    }
+    trips.artifact_write(trip, "finalists.json", json.dumps(finalists))
+
+    rows = enhance.targets(trip, "seat-advice")
+
+    assert [row["target_id"] for row in rows] == ["UA:359:J", "UA:77W:J"]
+    assert [row["journey_ids"] for row in rows] == [["NOTABLE"], ["FINALIST"]]
+
+
 # ---- merge ---------------------------------------------------------------------------------
 
 
@@ -462,6 +588,121 @@ def test_concurrent_subprocess_merges_all_land(trip: str) -> None:
     for result in results:
         assert result.returncode == 0, result.stderr
     assert set(read_verify(trip)["results"]) == {f"T{i}:J" for i in range(8)}
+
+
+# ---- seat-advice merge -----------------------------------------------------------------------
+
+
+def seat_advice_row(
+    target_id: str,
+    outcome: str = "found",
+    *,
+    checked_at: str = "2026-07-13T14:00:00+00:00",
+    method: str = "public",
+    observed: dict | None = None,
+    evidence: str = "seat guide consensus",
+) -> dict:
+    if outcome == "found" and observed is None:
+        observed = {
+            "picks": [{"seat": "12A", "why": "extra legroom"}],
+            "avoids": [],
+            "tips": [],
+            "sources": ["https://example.com/seat-guru"],
+        }
+    return {
+        "target_id": target_id,
+        "outcome": outcome,
+        "checked_at": checked_at,
+        "method": method,
+        "observed": observed,
+        "evidence": evidence,
+    }
+
+
+def read_seat_advice(slug: str) -> dict:
+    return json.loads(trips.artifact_read(slug, "enhance-seat-advice.json"))
+
+
+def test_seat_advice_merge_accepts_valid_found_row(trip: str) -> None:
+    enhance.merge(trip, "seat-advice", [seat_advice_row("UA:77W:J")])
+    doc = read_seat_advice(trip)
+    assert doc["enhancer"] == "seat-advice"
+    assert doc["results"]["UA:77W:J"]["outcome"] == "found"
+
+
+def test_seat_advice_merge_rejects_verify_only_outcome(trip: str) -> None:
+    with pytest.raises(UsageError, match="outcome"):
+        enhance.merge(
+            trip, "seat-advice", [seat_advice_row("UA:77W:J", outcome="confirmed", observed=None)]
+        )
+
+
+def test_seat_advice_merge_rejects_found_with_all_advice_lists_empty(trip: str) -> None:
+    empty = {"picks": [], "avoids": [], "tips": [], "sources": ["https://example.com/x"]}
+    with pytest.raises(UsageError, match="at least one of picks, avoids, tips"):
+        enhance.merge(trip, "seat-advice", [seat_advice_row("UA:77W:J", observed=empty)])
+
+
+def test_seat_advice_merge_rejects_non_null_observed_on_inconclusive(trip: str) -> None:
+    with pytest.raises(UsageError, match="observed must be null"):
+        enhance.merge(
+            trip,
+            "seat-advice",
+            [seat_advice_row("UA:77W:J", outcome="inconclusive", observed={"picks": []})],
+        )
+
+
+def test_seat_advice_merge_later_checked_at_wins_upsert(trip: str) -> None:
+    enhance.merge(
+        trip, "seat-advice", [seat_advice_row("UA:77W:J", checked_at="2026-07-13T12:00:00+00:00")]
+    )
+    later_observed = {
+        "picks": [],
+        "avoids": [{"seat": "30E", "why": "no recline, near the lavatory"}],
+        "tips": [],
+        "sources": ["https://example.com/y"],
+    }
+    enhance.merge(
+        trip,
+        "seat-advice",
+        [
+            seat_advice_row(
+                "UA:77W:J", checked_at="2026-07-13T15:00:00+00:00", observed=later_observed
+            )
+        ],
+    )
+    row = read_seat_advice(trip)["results"]["UA:77W:J"]
+    assert row["checked_at"] == "2026-07-13T15:00:00+00:00"
+    assert row["observed"] == later_observed
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        pytest.param(
+            lambda o: {**o, "sources": []}, "sources must be a non-empty list", id="empty-sources"
+        ),
+        pytest.param(
+            lambda o: {**o, "sources": ["http://example.com/x"]},
+            "must be an https URL",
+            id="non-https-source",
+        ),
+        pytest.param(
+            lambda o: {**o, "picks": [{"seat": "12A"}]}, "why", id="pick-missing-why"
+        ),
+        pytest.param(
+            lambda o: {**o, "tips": [1]}, "must be a list of strings", id="non-string-tip"
+        ),
+    ],
+)
+def test_validate_rejects_bad_seat_advice_observed(
+    mutate: Callable[[dict], dict], match: str
+) -> None:
+    row = seat_advice_row("UA:77W:J")
+    row["observed"] = mutate(row["observed"])
+    doc = {"enhancer": "seat-advice", "results": {"UA:77W:J": row}}
+    with pytest.raises(UsageError, match=match):
+        enhance.validate_enhancer_doc(doc, "seat-advice")
 
 
 # ---- validator -----------------------------------------------------------------------------

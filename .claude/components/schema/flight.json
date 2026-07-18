@@ -15,6 +15,8 @@
     "cabin": { "$ref": "#/$defs/cabin" },
     "durationMinutes": { "type": "integer", "minimum": 1 },
     "aircraft": { "type": "string", "minLength": 1 },
+    "aircraftCode": { "type": "string", "pattern": "^[A-Z0-9]{3,4}$" },
+    "seatQuality": { "$ref": "#/$defs/seatQuality" },
     "price": { "$ref": "#/$defs/money" }
   },
   "$defs": {
@@ -25,6 +27,16 @@
       "properties": {
         "amount": { "type": "integer", "minimum": 0 },
         "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "seatQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "properties": {
+        "verdict": { "enum": ["suite", "solid", "dated", "barely", "verify"] },
+        "product": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] }
       }
     },
     "cabin": { "enum": ["economy", "premium", "business", "first"] }

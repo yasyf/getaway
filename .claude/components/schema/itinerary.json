@@ -3,24 +3,25 @@
   "title": "getaway.itinerary",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "type", "program", "miles", "taxes", "remainingSeats", "bookingLink", "updatedAt", "totalDurationMinutes", "segments"],
+  "required": ["id", "type", "program", "miles", "taxes", "remainingSeats", "bookingLinks", "fetchedAt", "totalDurationMinutes", "segments"],
   "properties": {
     "id": { "type": "string", "minLength": 1 },
     "type": { "const": "getaway.itinerary" },
     "program": { "type": "string", "minLength": 1 },
     "miles": { "type": "integer", "minimum": 1 },
-    "taxes": { "$ref": "#/$defs/money" },
-    "remainingSeats": { "type": "integer", "minimum": 0 },
-    "bookingLink": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["label", "url"],
-      "properties": {
-        "label": { "type": "string", "minLength": 1 },
-        "url": { "type": "string", "pattern": "^https://" }
-      }
+    "taxes": {
+      "type": "array",
+      "minItems": 0,
+      "items": { "$ref": "#/$defs/taxLine" }
     },
-    "updatedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" },
+    "taxesNote": { "type": "string", "minLength": 1 },
+    "remainingSeats": { "type": "integer", "minimum": 0 },
+    "bookingLinks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/bookingLink" }
+    },
+    "fetchedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" },
     "totalDurationMinutes": { "type": "integer", "minimum": 1 },
     "segments": {
       "type": "array",
@@ -38,6 +39,35 @@
         "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
       }
     },
+    "taxLine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency"],
+      "properties": {
+        "amount": { "type": "integer", "minimum": 0 },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }
+      }
+    },
+    "seatQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict"],
+      "properties": {
+        "verdict": { "enum": ["suite", "solid", "dated", "barely", "verify"] },
+        "product": { "type": ["string", "null"] },
+        "note": { "type": ["string", "null"] }
+      }
+    },
+    "bookingLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url", "primary"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https://" },
+        "primary": { "type": "boolean" }
+      }
+    },
     "cabin": { "enum": ["economy", "premium", "business", "first"] },
     "segment": {
       "type": "object",
@@ -51,6 +81,8 @@
         "arrivesAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?$" },
         "cabin": { "$ref": "#/$defs/cabin" },
         "aircraft": { "type": "string", "minLength": 1 },
+        "aircraftCode": { "type": "string", "pattern": "^[A-Z0-9]{3,4}$" },
+        "seatQuality": { "$ref": "#/$defs/seatQuality" },
         "durationMinutes": { "type": "integer", "minimum": 1 }
       }
     }

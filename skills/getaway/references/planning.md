@@ -78,18 +78,46 @@ Lodging is in scope only when the ask puts it there: "a week somewhere warm" imp
 
 The data source is rooms.aero, seats.aero's hotel product: six programs (Hyatt, Hilton, Marriott, IHG, Choice, Wyndham), no public API, driven by one browser agent through the seeded Pro session (`agent-browser-with-cookies`; the walker preflights the session before dispatch). The walk searches each eligible journey's exact interval and pipes normalized rows to `stays ingest`. rooms.aero prices blocks of at most five consecutive nights, so a longer stay clamps to five with the clamp disclosed. Per-night points and cash (in the property's local currency) are the source of truth — any stay total is an estimate. Only the Pro session refreshes stale rows, so freshness stamps and `stale` flags travel to the board. Stays spend zero seats.aero quota and never wait on the quota floor.
 
-## Presenting options
+## The board flow
 
-Present the board as a live cc-present artifact (the `cc-present:present` skill). The plugin ships the `getaway` block pack; every block and field is documented in [.claude/components/reference/blocks.md](../../../.claude/components/reference/blocks.md). Rows come from `trip artifact read <slug> finalists.json`, whose result classes map straight onto the board:
+Present a trip as one live cc-present artifact (the `cc-present:present` skill) and move it through four phases as rounds on that one board: an intake round gathers the ask, a **Finalists** round ranks journeys, a **Head to head** round compares the shortlist, and a **Booking sheet** round delivers the pick. Exactly one shortlist pick skips Head to head and lands on the booking sheet. [boards.md](boards.md) carries the shape of each board — the envelope, the blocks, and JSON that validates; this section is the flow between them.
 
-- Ranked journeys (at most six, post-assess): one `getaway.option-picker` for the set, `optionId` keyed by journey id; per journey, a `getaway.itinerary` per award leg fed only from expanded detail — integer miles, taxes as integer minor units with a currency, remaining seats, booking link, and `UpdatedAt` as the freshness stamp — and a `getaway.flight` with `price` for each cash leg. Costs stay per program plus cash, unpriced components named; never sum across programs.
-- Preference misses always render. Every journey's `preference_misses` annotations ("+1 day past your Monday preference") appear in its evidence section verbatim — the renderer guarantees this, not the model's discretion.
-- Notable stretches — assess-selected journeys from beyond the cut whose excellence outweighs a miss — get their own short section, each with the miss named beside what makes it worth it.
-- Unpaired outbound leads trail the board, ordered by outbound mileage, each line carrying when its return search ran and the cache age. "No J space home as of Tuesday" is a lead, not a verdict, and an expired empty reads "unverified".
-- Verification annotations from `enhance-verify.json` ride the rows they checked: "verified live 14:32" beside the freshness stamp on a confirmed row, a prominent gone-on-`<host>` warning on a row the live site killed — the journey keeps its board spot, demoted in-tier, never silently dropped. A rescued lead — an empty return a verifier found space on — carries the rescue note in its leads line.
+The spine is doctrine: one artifact per trip, the rounds are the phases, and a row the human has seen never disappears (see [doctrine.md](doctrine.md)). The intake round opens the artifact with `cc-present start --new` — one artifact per trip, and a plain `start` resumes the window's previous artifact instead. Wire event delivery once, at that start, per the `cc-present:present` skill's channel section — don't restate it here.
+
+### Finalists: result classes map to blocks
+
+Rows come from `trip artifact read <slug> finalists.json`, and each result class maps onto the finalist board:
+
+- Ranked journeys (at most six, post-assess): one `fin-j<i>` card per journey wrapping a `getaway.itinerary` per award leg — fed only from expanded detail, with integer `miles`, `taxes` as a list of minor-unit amounts each carrying a currency, remaining seats, `bookingLinks`, and `fetchedAt` as the freshness stamp — and a `getaway.flight` with `price` for each cash leg. The shortlist itself is the built-in `fin-shortlist` choice, `multi: true`, one option per journey. Costs stay per program plus cash, unpriced components named; never sum across programs.
+- Preference misses always render. Every journey's `preference_misses` annotations ("+1 day past your Monday preference") appear in its evidence markdown verbatim — the renderer guarantees this, not the model's discretion.
+- Notable stretches — assess-selected journeys from beyond the cut whose excellence outweighs a miss — get their own card and a shortlist option, the named miss in the option's `hint`.
+- Unpaired outbound leads trail the board in a `fin-leads` markdown, ordered by outbound mileage, each line carrying when its return search ran and the cache age. "No J space home as of Tuesday" is a lead, not a verdict, and an expired empty reads "unverified".
+- Verification annotations from `enhance-verify.json` ride the rows they checked: "verified live 14:32" beside the freshness stamp on a confirmed row, a prominent gone-on-`<host>` warning on a row the live site killed — the journey keeps its spot, demoted in-tier, never silently dropped. A rescued lead — an empty return a verifier found space on — carries the rescue note in its leads line.
 - A `partial`, `not_run`, or `failed` return search surfaces as exactly that, with its reason — never as "no space".
-- Stays ride one `getaway.stay` block per journey. A walked entry maps fields verbatim: `provenance.session` fills `session`, `provenance.fetched_at` fills `checkedAt`, `provenance.night_clamped` fills `interval.nightClamped` (pass the journey's true nights as `requestedNights` when clamped), the entry's `search_state` fills `searchState`, `destination.query` fills `destination`, each room's `last_checked_at` fills its `checkedAt`, and registry slugs resolve to display names. A deferred `lodging_search` maps to the block's `deferred` state with its reason. The block owns the honesty invariants; the agent only maps fields.
-- A `getaway.availability` grid when the user asks about other dates or cabins — built from `cache query`, zero API calls; a tapped cell asks for that date and cabin expanded.
-- Beside the picker, one evidence `section` block per journey: one line per active factor from its verdict map — funding position, seat product (a `barely` verdict phrased as a warning), the layover line covering both duration and how interesting the city is, cash-anomaly notes, and the fit lines. A `demote` verdict reads as a warning, not a footnote. Pack schemas are closed: evidence rides `section` blocks, never extra fields on pack blocks.
+- Stays ride one `getaway.stay` block per journey, fields mapped verbatim from the walk; the block owns the honesty invariants and the pack reference owns the field map. A deferred `lodging_search` maps to the block's `deferred` state with its reason.
+- A `getaway.availability` grid rides the board on request — built from `cache query`, zero API calls, `update-block`ed under the journey a note asks about; a tapped cell asks for that date and cabin expanded.
 
-`AskUserQuestion` stays the lightweight path — at most 4 quick questions in one call — when a full board is overkill.
+Evidence rides each card's `markdown` leaf: one line per active factor from the verdict map — funding position, seat product (a `barely` verdict phrased as a warning), the layover line covering both duration and how interesting the city is, cash-anomaly notes, and the fit lines. A `demote` verdict reads as a warning, not a footnote. Pack schemas are closed: evidence rides `markdown`, never extra fields on pack blocks.
+
+### The event protocol
+
+Each event routes to one action:
+
+| Event | Action |
+|---|---|
+| `pack.interaction` | Handle every field the payload carries — the interaction accumulates, so a date toggle after a note arrives as `{note, picks}` in one payload. Answer a `note` in the same turn, zero-quota first (`cache query`, trip artifacts, `registry`), `cc-present reply --block <blockId>`, and `update-block` the owning block when the answer changed its data; act on availability `picks` by expanding those dates and cabins (`cache query`/`expand detail`) and upserting the grid or a card. The payload is last-write-wins, so dedup against what a prior delivery already handled — the same note text seen twice is already answered. Never open a round for a note. |
+| `feedback.created` | Reply; when it demands a redraft, `update-block` the affected blocks with `"status": "redrafted"`, same round. |
+| `choice.selected` / `input.submitted` | Informational until submit; no reaction. |
+| `decision.created` | Act per verdict — rare in this flow. |
+| `submit` | Answer any un-replied notes, then drain `outcomes --no-doc`, summarize the verdicts in chat, apply writes at the main level (`trip set`, `trip log`), and phase-transition (`round --title` then the one full `push`) or `close`. |
+| `channel.changed` / `present.closed` | Nothing. |
+
+The routing rule underneath, three lines:
+
+- **reply** when you're answering and no data changed;
+- **reply + update-block** when the block's own data changed, same round;
+- **new round** only at a phase boundary, or when feedback invalidates the current set — "actually, let's do October" means re-sweep and a fresh finalist round, not an annotation.
+
+### When the board is down
+
+At intake, `cc-present push --dry-run` then `start`. When the binary is missing after one install attempt, `start` errors, or the human reports the URL unreachable, fall back: run the intake as one `AskUserQuestion` (at most four questions, concrete options each) and present finalists as chat prose closing on a single-pick `AskUserQuestion`, then `trip log` that the artifact lane was down. A lone mid-flow micro-question is an `AskUserQuestion` too — the board is for the trip, not for every one-off clarification.
