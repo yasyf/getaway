@@ -3,9 +3,10 @@
 seats.aero timestamps are local wall clocks with a misleading ``Z`` (seats._strip_z drops it,
 leaving naive local time). The discipline here: compare calendar preferences in endpoint-local
 dates, take elapsed flight time from ``TotalDuration``, and only ever subtract two timestamps that
-share one airport (hence one timezone) — never a cross-airport pair. Phase 3 composes journeys and
-calls :func:`journey_fit`; ranking (factors.py) weighs what these primitives report and the
-renderer always shows the misses. Nothing here gates.
+share one airport (hence one timezone). Cross-airport pairs subtract only after IANA-timezone
+conversion in journeys' structural check; fit's own math stays same-airport naive. Phase 3 composes
+journeys and calls :func:`journey_fit`; ranking (factors.py) weighs what these primitives report and
+the renderer always shows the misses. Nothing here gates.
 """
 
 import datetime as dt

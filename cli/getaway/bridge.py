@@ -28,7 +28,7 @@ from typing import Any
 
 import click
 
-from getaway import prefs, serp, trips
+from getaway import airports, prefs, serp, trips
 from getaway.paths import emit, map_errors, utcnow
 
 Row = dict[str, Any]
@@ -38,26 +38,6 @@ Row = dict[str, Any]
 _ALIAS_FROM = "NAH"
 _ALIAS_TO = "OKA"
 _TOP_N = 5
-
-# Origin-local day offsets for the positioning hubs where the JST-ahead trap actually bites; an
-# unknown gateway skips the past-date guard and relies on the zero-results -> failed surface.
-_UTC_OFFSET_HOURS = {
-    "HND": 9,
-    "NRT": 9,
-    "KIX": 9,
-    "ITM": 9,
-    "OKA": 9,
-    "FUK": 9,
-    "CTS": 9,
-    "ICN": 9,
-    "GMP": 9,
-    "PVG": 8,
-    "PEK": 8,
-    "HKG": 8,
-    "TPE": 8,
-    "SIN": 8,
-    "BKK": 7,
-}
 
 _oka_installed = False
 
@@ -94,13 +74,6 @@ def _install_oka_fix() -> None:
 
     flights_model.FlightSearchFilters.format = format
     _oka_installed = True
-
-
-def _origin_local_today(gateway: str, now: dt.datetime) -> dt.date | None:
-    offset = _UTC_OFFSET_HOURS.get(gateway)
-    if offset is None:
-        return None
-    return (now.astimezone(dt.timezone.utc) + dt.timedelta(hours=offset)).date()
 
 
 def _search_flights(origin: str, dest: str, date: str) -> list | None:
@@ -191,8 +164,8 @@ def _quote(gateway: str, dest: str, date: str, result: Any, source: str) -> dict
 def _price_pair(pair: Row, now: Callable[[], dt.datetime], search: Callable) -> dict:
     gateway, dest, date = pair["gateway"], pair["onward_dest"], pair["date"]
     base = {"gateway": gateway, "onward_dest": dest, "date": date}
-    local_today = _origin_local_today(gateway, now())
-    if local_today is not None and dt.date.fromisoformat(date) < local_today:
+    local_today = airports.local_today(gateway, now())
+    if dt.date.fromisoformat(date) < local_today:
         return {
             "state": "failed",
             **base,

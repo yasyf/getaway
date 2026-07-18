@@ -401,7 +401,7 @@ const runAssess = async (node, title, prefix) => {
   return agent(
     `Weigh every composed journey and produce assess.json — zero seats.aero quota, run only the getaway commands named here.\n` +
     `Read the trip's guidance and judged factors (judgment.guidance, and judgment.factors with their priority lanes):\n${CLI} trip show ${slug}\n` +
-    `Read the traveler's layover preferences (layovers.style, layovers.min_connection_minutes, layovers.prefer_cities, layovers.avoid_cities):\n${CLI} prefs show\n` +
+    `Read the traveler's layover preferences (layovers.style, layovers.min_connection_minutes, layovers.min_airport_transfer_minutes, layovers.prefer_cities, layovers.avoid_cities):\n${CLI} prefs show\n` +
     `Read the composed journeys:\n${CLI} trip artifact read ${slug} expand.json\n` +
     (evidenceReads ? `Read the collected evidence:\n${evidenceReads}\n` : ``) +
     `\nJourneys carry typed legs: an "award" leg has expanded seat detail; a "cash" leg carries elapsed time and cost only, so a factor that needs cabin or seat detail has nothing to judge on it — that is neutral, never a demotion. Each journey already carries CLI-computed fit_facts and preference_misses: weigh them, never recompute them, and never let a preference gate — a miss orders and annotates.\n` +

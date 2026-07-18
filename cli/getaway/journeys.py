@@ -16,8 +16,8 @@ spends quota through :class:`SeatsClient`).
 
 Continuity refines with :func:`_structural_ok` on the expanded legs: a same-airport boundary
 compares full local timestamps with the preference min-connection floor; a stay-marked boundary
-bounds the gap to the declared nights; a cross-airport boundary compares dates only (seats.aero
-clocks are naive local wall times — never do cross-airport clock math). Each surviving chain draws
+bounds the gap to the declared nights; a cross-airport boundary subtracts clocks only after IANA
+timezone conversion, with the preference airport-transfer floor. Each surviving chain draws
 fit facts and mandatory preference misses from :func:`fit.journey_fit`, then per-program cost
 vectors and journey-level seat sufficiency. A journey with a *known* insufficient leg gates out;
 ``unknown`` stays visible with a verification warning. Round-trip outbounds with no bookable return
@@ -35,7 +35,7 @@ from typing import Any
 
 import click
 
-from getaway import fit, prefs, trips
+from getaway import airports, fit, prefs, trips
 from getaway.constants import (
     DEFAULT_QUOTA_FLOOR,
     EXIT_AUTH,
@@ -243,20 +243,39 @@ def _stay_nights_ok(prior_arr: str, nxt_dep: str, stay: dict) -> bool:
     return stay["min"] <= nights <= stay["max"]
 
 
-def _cross_airport_ok(prior_arr: str, nxt_dep: str) -> bool:
-    """A cross-airport surface hop of unknown timing: the next leg departs no earlier than the prior
-    leg's arrival DATE — seats.aero timestamps are naive local wall clocks, never subtracted across
-    airports."""
-    return dt.date.fromisoformat(nxt_dep[:10]) >= dt.date.fromisoformat(prior_arr[:10])
+def _aware_utc(stamp: str, airport: str) -> dt.datetime:
+    value = dt.datetime.fromisoformat(stamp)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=airports.zone(airport))
+    return value.astimezone(dt.timezone.utc)
 
 
-def _structural_ok(prior: dict, nxt: dict, prior_intent: dict, min_connection: int) -> bool:
+def _cross_airport_ok(
+    prior_dest: str, nxt_origin: str, prior_arr: str, nxt_dep: str, min_transfer: int
+) -> bool:
+    """Cross-airport clocks subtract in UTC after naive stamps gain their airport timezone.
+
+    An already-offset-bearing stamp keeps its own offset. The gap is floored at the ground-transfer
+    preference.
+    """
+    arrival = _aware_utc(prior_arr, prior_dest)
+    departure = _aware_utc(nxt_dep, nxt_origin)
+    return departure - arrival >= dt.timedelta(minutes=min_transfer)
+
+
+def _structural_ok(
+    prior: dict,
+    nxt: dict,
+    prior_intent: dict,
+    min_connection: int,
+    min_transfer: int,
+) -> bool:
     """Does ``nxt`` continue physically from ``prior``?
 
     A stay-marked boundary bounds the gap to ``[min .. max]`` nights (:func:`_stay_nights_ok`). A
     same-airport boundary compares full local timestamps with the connection floor (one airport, one
-    clock). A cross-airport surface hop of unknown timing compares dates only
-    (:func:`_cross_airport_ok`).
+    clock). A cross-airport surface hop converts both clocks to IANA timezones before applying the
+    airport-transfer floor (:func:`_cross_airport_ok`).
     """
     _, prior_dest, _, prior_arr = _leg_bounds(prior)
     nxt_origin, _, nxt_dep, _ = _leg_bounds(nxt)
@@ -266,20 +285,36 @@ def _structural_ok(prior: dict, nxt: dict, prior_intent: dict, min_connection: i
     if nxt_origin == prior_dest:
         gap = dt.datetime.fromisoformat(nxt_dep) - dt.datetime.fromisoformat(prior_arr)
         return gap >= dt.timedelta(minutes=min_connection)
-    return _cross_airport_ok(prior_arr, nxt_dep)
+    return _cross_airport_ok(prior_dest, nxt_origin, prior_arr, nxt_dep, min_transfer=min_transfer)
 
 
-def _chain_continuous(legs: list[dict], intents: list[dict], min_connection: int) -> bool:
+def _chain_continuous(
+    legs: list[dict], intents: list[dict], min_connection: int, min_transfer: int
+) -> bool:
     return all(
-        _structural_ok(legs[i], legs[i + 1], intents[i], min_connection)
+        _structural_ok(
+            legs[i],
+            legs[i + 1],
+            intents[i],
+            min_connection=min_connection,
+            min_transfer=min_transfer,
+        )
         for i in range(len(legs) - 1)
     )
 
 
-def _continuity_reason(legs: list[dict], intents: list[dict], min_connection: int) -> str:
+def _continuity_reason(
+    legs: list[dict], intents: list[dict], min_connection: int, min_transfer: int
+) -> str:
     """The first boundary where a manual chain fails to physically chain — its honest rejection."""
     for i in range(len(legs) - 1):
-        if not _structural_ok(legs[i], legs[i + 1], intents[i], min_connection):
+        if not _structural_ok(
+            legs[i],
+            legs[i + 1],
+            intents[i],
+            min_connection=min_connection,
+            min_transfer=min_transfer,
+        ):
             return (
                 f"leg {intents[i + 1]['id']!r} does not continue from leg {intents[i]['id']!r} "
                 "(airports or timing do not chain)"
@@ -419,35 +454,46 @@ def _build_chains(
     return chains
 
 
-def _pool_boundary_date_infeasible(prior: dict, nxt: dict, prior_intent: dict) -> bool:
+def _pool_boundary_date_infeasible(
+    prior: dict, nxt: dict, prior_intent: dict, min_transfer: int
+) -> bool:
     """Is this pool-candidate boundary PROVABLY date-infeasible before any ``/trips`` expansion?
 
     Only a boundary whose PRIOR leg is cash is provable: the quote carries ``arrives_local``, so its
-    arrival date is known, and the check reuses :func:`_structural_ok`'s exact date-level predicates
-    fed that arrival and the next leg's pre-expansion departure date. An award-prior boundary defers
-    (a shortlist candidate has no arrival date until expanded), as does a same-airport boundary (a
-    timestamp floor, not a date comparison) — both fall to :func:`_structural_ok` on the expanded
-    clocks.
+    arrival clock is known, and the check reuses :func:`_structural_ok`'s predicates. A clock-based
+    award-next boundary is fed the next-local-midnight supremum over its in-date departures,
+    preserving the pre-beam superset; a stay boundary continues to use its calendar date. An
+    award-prior boundary defers (a shortlist candidate has no arrival clock until expanded), as
+    does a same-airport boundary (a timestamp floor, not a date comparison) — both fall to
+    :func:`_structural_ok` on the expanded clocks.
     """
     if prior["kind"] != "cash":
         return False
     prior_arr = prior["quote"]["arrives_local"]
-    # A cash next-candidate judges by its quote's own clock — the value _structural_ok reads
-    # post-expansion; an award candidate's shortlist date IS its expanded departure date.
-    nxt_dep = nxt["quote"]["departs_local"] if nxt["kind"] == "cash" else nxt["date"]
+    nxt_dep = (
+        nxt["quote"]["departs_local"]
+        if nxt["kind"] == "cash"
+        else (dt.date.fromisoformat(nxt["date"]) + dt.timedelta(days=1)).isoformat() + "T00:00"
+    )
     stay = prior_intent.get("stay_nights")
     if stay is not None:
-        return not _stay_nights_ok(prior_arr, nxt_dep, stay)
+        stay_dep = nxt_dep if nxt["kind"] == "cash" else nxt["date"]
+        return not _stay_nights_ok(prior_arr, stay_dep, stay)
     if nxt["origin"] == prior["dest"]:
         return False
-    return not _cross_airport_ok(prior_arr, nxt_dep)
+    return not _cross_airport_ok(
+        prior["dest"], nxt["origin"], prior_arr, nxt_dep, min_transfer=min_transfer
+    )
 
 
-def _chain_date_feasible(chain: list[dict], variant_legs: list[dict]) -> bool:
-    """No boundary in a pool-candidate chain is provably date-infeasible pre-expansion
-    (:func:`_pool_boundary_date_infeasible`) — the pre-beam superset over :func:`_structural_ok`."""
+def _chain_date_feasible(chain: list[dict], variant_legs: list[dict], min_transfer: int) -> bool:
+    """No boundary is provably date-infeasible pre-expansion; award-next boundaries are fed the
+    next-local-midnight supremum over in-date departures, preserving the superset over
+    :func:`_structural_ok`."""
     return not any(
-        _pool_boundary_date_infeasible(chain[i], chain[i + 1], variant_legs[i])
+        _pool_boundary_date_infeasible(
+            chain[i], chain[i + 1], variant_legs[i], min_transfer=min_transfer
+        )
         for i in range(len(chain) - 1)
     )
 
@@ -506,6 +552,7 @@ def _compose_chains(
     expander: _Expander,
     avoid_transit: set[str],
     min_connection: int,
+    min_transfer: int,
     leg_states: dict,
     now: Callable[[], dt.datetime],
     manual_rejected: list[dict] | None = None,
@@ -568,11 +615,21 @@ def _compose_chains(
                 manual_rejected.append({"chain": ref, "reason": fail_reason})
             continue
         stats["chains_expanded"] += 1
-        if not _chain_continuous(legs_typed, variant_legs, min_connection):
+        if not _chain_continuous(
+            legs_typed,
+            variant_legs,
+            min_connection=min_connection,
+            min_transfer=min_transfer,
+        ):
             stats["dropped_continuity"] += 1
             if manual_rejected is not None:
                 ref = _manual_chain_ref(variant_legs, chain)
-                reason = _continuity_reason(legs_typed, variant_legs, min_connection)
+                reason = _continuity_reason(
+                    legs_typed,
+                    variant_legs,
+                    min_connection=min_connection,
+                    min_transfer=min_transfer,
+                )
                 manual_rejected.append({"chain": ref, "reason": reason})
             continue
         jid = _journey_id(legs_typed)
@@ -776,6 +833,7 @@ def _partial_leads(
     expander: _Expander,
     leg_states: dict,
     min_connection: int,
+    min_transfer: int,
     now: Callable[[], dt.datetime],
 ) -> tuple[list[dict], bool]:
     """The longest composable prefix reaching a stay point, surfaced as leads with each remaining
@@ -810,7 +868,12 @@ def _partial_leads(
                 detail, fetched_at = expanded
                 leg_states.setdefault(key, {"state": "expanded"})
                 legs_typed.append(_leg(role, row, detail, fetched_at))
-            if failed or not _chain_continuous(legs_typed, legs[:k], min_connection):
+            if failed or not _chain_continuous(
+                legs_typed,
+                legs[:k],
+                min_connection=min_connection,
+                min_transfer=min_transfer,
+            ):
                 continue
             jid = _journey_id(legs_typed)
             if jid in seen:
@@ -951,6 +1014,7 @@ def run(
         raise UsageError("plan.legs must be a non-empty list before compiling")
     inputs_fp = trips.capture_inputs_fp(trip, prefs_doc, "expand")
     min_connection = prefs_doc["layovers"]["min_connection_minutes"]
+    min_transfer = prefs_doc["layovers"]["min_airport_transfer_minutes"]
     avoid_transit = set(prefs_doc["avoid_transit"])
 
     shortlists = {
@@ -981,14 +1045,25 @@ def run(
     beam_cut = 0
     date_infeasible = 0
     if len(legs) >= 3:
-        feasible = [t for t in tagged if _chain_date_feasible(t[1], t[0])]
+        feasible = [
+            t for t in tagged if _chain_date_feasible(t[1], t[0], min_transfer=min_transfer)
+        ]
         date_infeasible = len(tagged) - len(feasible)
         kept = feasible[: tuned(plan, "beam_width")]
         beam_cut = len(feasible) - len(kept)
     else:
         kept = tagged
     journeys, gated, composed_heads, quota_stopped, variant_stats = _compose_chains(
-        trip, prefs_doc, legs, kept, expander, avoid_transit, min_connection, leg_states, now
+        trip,
+        prefs_doc,
+        legs,
+        kept,
+        expander,
+        avoid_transit,
+        min_connection=min_connection,
+        min_transfer=min_transfer,
+        leg_states=leg_states,
+        now=now,
     )
 
     # Agent-declared manual chains, priced through the same path; dedup by id, absent ⇒ inert.
@@ -998,8 +1073,17 @@ def run(
         if manual_doc is not None:
             tagged_manual = _manual_tagged(legs, pools, manual_doc, manual_rejected)
             m_journeys, m_gated, m_heads, m_quota, _ = _compose_chains(
-                trip, prefs_doc, legs, tagged_manual, expander, avoid_transit,
-                min_connection, leg_states, now, manual_rejected=manual_rejected,
+                trip,
+                prefs_doc,
+                legs,
+                tagged_manual,
+                expander,
+                avoid_transit,
+                min_connection=min_connection,
+                min_transfer=min_transfer,
+                leg_states=leg_states,
+                now=now,
+                manual_rejected=manual_rejected,
             )
             seen_ids = {j["id"] for j in journeys}
             for journey in m_journeys:
@@ -1038,7 +1122,15 @@ def run(
     partial_leads: list[dict] = []
     if len(legs) >= 3 and not journeys and not quota_stopped:
         partial_leads, lead_quota_stopped = _partial_leads(
-            slug, legs, pools, shortlists, expander, leg_states, min_connection, now
+            slug,
+            legs,
+            pools,
+            shortlists,
+            expander,
+            leg_states,
+            min_connection=min_connection,
+            min_transfer=min_transfer,
+            now=now,
         )
         quota_stopped = quota_stopped or lead_quota_stopped
 

@@ -387,6 +387,14 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   validation, with no migration story.
 
 ### Fixed
+- Cross-airport connections are clock-checked: composition converts both
+  sides of an airport-change boundary to UTC through IANA timezones
+  (`airportsdata`) and enforces `layovers.min_airport_transfer_minutes`
+  (default 180), so a 23:50 arrival no longer pairs with a same-day
+  06:00 departure across town — while westward date-line chains the old
+  date-only rule wrongly pruned now compose. The past-date cash-quote
+  guard widens from a 15-hub offset table to every gateway, and stays'
+  home-origin "today" is airport-local, never UTC.
 - Date-padded rows no longer crowd requested dates off the shortlist,
   and optional-leg variants are never silently starved. The P5
   positioning ask surfaced both: padding rows shared each per-cabin

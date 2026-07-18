@@ -26,7 +26,7 @@ from typing import Any
 
 import click
 
-from getaway import prefs, registry, trips
+from getaway import airports, prefs, registry, trips
 from getaway.constants import tuned
 from getaway.paths import (
     UsageError,
@@ -73,15 +73,6 @@ def _outbound_and_return(journey: Journey) -> tuple[list[dict], dict | None]:
 
 def _home_origin(journey: Journey) -> str:
     return journey["fit_facts"]["legs"][0]["origin"]
-
-
-def _origin_local_today(origin: str, now_dt: dt.datetime) -> dt.date:
-    """Origin-local "today" for the past-check-in guard, mirroring the bridge A8 rule; a home
-    origin absent from the hub UTC-offset map falls back to UTC (a whole-day staleness guard)."""
-    from getaway import bridge
-
-    local = bridge._origin_local_today(origin, now_dt)
-    return local if local is not None else now_dt.date()
 
 
 def _deferred(reason: str, dest: str, extra: dict | None = None) -> dict:
@@ -208,7 +199,7 @@ def intervals(slug: str, now: Callable[[], dt.datetime] = utcnow) -> dict:
     rank_doc = json.loads(trips.artifact_read(slug, "rank.json"))
     out: list[dict] = []
     for journey in _board_journeys(rank_doc, plan):
-        today = _origin_local_today(_home_origin(journey), now())
+        today = airports.local_today(_home_origin(journey), now())
         for derived in derive_intervals(journey, plan, today):
             out.append(_worklist_entry(journey["id"], derived))
     return {
@@ -228,7 +219,7 @@ def board_lodging(
     in ``stays.json``; one it should have walked but did not surfaces as ``not_walked`` — a
     walk gap named honestly, never masked as no availability.
     """
-    derived = derive_intervals(journey, plan, _origin_local_today(_home_origin(journey), now()))
+    derived = derive_intervals(journey, plan, airports.local_today(_home_origin(journey), now()))
     if not any(stop["disposition"] == "walk" for stop in derived):
         return {"lodging_search": {"state": "deferred", "reason": derived[0]["reason"]}}
     stays = stays_doc["stays"].get(journey["id"])

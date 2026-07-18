@@ -26,7 +26,15 @@ from getaway.paths import (
 LAYOVER_STYLES = frozenset({"minimize", "explore"})
 AIRLINE_STRENGTHS = frozenset({"soft", "hard"})
 DAY_TOKENS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
-LAYOVER_KEYS = frozenset({"style", "min_connection_minutes", "prefer_cities", "avoid_cities"})
+LAYOVER_KEYS = frozenset(
+    {
+        "style",
+        "min_connection_minutes",
+        "min_airport_transfer_minutes",
+        "prefer_cities",
+        "avoid_cities",
+    }
+)
 
 INSTRUMENT_TYPES = frozenset({"monetary_credit", "hotel_night_certificate", "companion_fare"})
 CERT_CAP_TYPES = frozenset({"points", "category", "anytime"})
@@ -52,6 +60,7 @@ def _template() -> dict:
         "layovers": {
             "style": "minimize",
             "min_connection_minutes": 75,
+            "min_airport_transfer_minutes": 180,
             "prefer_cities": [],
             "avoid_cities": [],
         },
@@ -212,6 +221,7 @@ def _validate(doc: dict) -> None:
     if lay["style"] not in LAYOVER_STYLES:
         raise UsageError(f"layovers.style must be one of {sorted(LAYOVER_STYLES)}")
     require_int(lay["min_connection_minutes"], "layovers.min_connection_minutes")
+    require_int(lay["min_airport_transfer_minutes"], "layovers.min_airport_transfer_minutes")
     require_str_list(lay["prefer_cities"], "layovers.prefer_cities")
     require_str_list(lay["avoid_cities"], "layovers.avoid_cities")
     if not isinstance(doc["statuses"], dict):

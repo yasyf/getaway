@@ -4,9 +4,11 @@ version = "2.0.0"
 description = "Plan award flights from Claude Code, backed by seats.aero availability across 28 mileage programs."
 requires-python = ">=3.12"
 dependencies = [
+    "airportsdata",
     "click",
     "httpx",
     "flights",
+    "tzdata",
 ]
 
 [project.scripts]

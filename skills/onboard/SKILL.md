@@ -202,6 +202,7 @@ This document passes `cc-present push --dry-run`:
     { "id": "sec-layovers", "type": "section", "title": "Layovers" },
     { "id": "layovers-style", "type": "input", "label": "Layover style — minimize (shortest workable connections) or explore (happy to leave the airport on a long stop)", "placeholder": "minimize" },
     { "id": "layovers-min-connection", "type": "input", "label": "Shortest acceptable connection, in minutes", "placeholder": "75" },
+    { "id": "layovers-min-transfer", "type": "input", "label": "Shortest acceptable airport change — landing at one airport and departing from another, in minutes", "placeholder": "180" },
     { "id": "layovers-prefer-cities", "type": "input", "label": "Cities worth a long layover — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "layovers-avoid-cities", "type": "input", "label": "Cities never worth a long layover — comma-separated IATA or seats.aero region codes; a region code expands to its airports on save", "placeholder": "none" },
     { "id": "sec-balances", "type": "section", "title": "Mileage balances", "md": "List every program you hold. Format: program:points, comma-separated." },
@@ -257,15 +258,17 @@ the preference schema differ:
   ET) and build the full object.
 - Layover answers map to the `layovers` object. The style accepts only
   `minimize` or `explore` — reject anything else. The shortest
-  connection parses to a positive integer of minutes. The two city
-  lists split on commas, and a region pseudo-code expands to its member
-  airports at save — the `avoid_transit` doctrine, because layover
-  scoring matches literal segment IATA codes. A literal `none` clears a
-  list to `[]`. The merge warning applies here too: the patch replaces
-  the whole `layovers` object and `prefs set` rejects a partial one, so
-  always send all four fields, merged with the current values — a blank
-  field keeps its current subvalue, and a partially answered section
-  still sends the full object.
+  connection (`min_connection_minutes`) and the shortest airport change
+  (`min_airport_transfer_minutes`) each parse to a positive integer of
+  minutes. The two city lists split on commas, and a region pseudo-code
+  expands to its member airports at save — the `avoid_transit`
+  doctrine, because layover scoring matches literal segment IATA codes.
+  A literal `none` clears a list to `[]`. The merge warning applies
+  here too: the patch replaces the whole `layovers` object and
+  `prefs set` rejects a partial one, so always send all five fields,
+  merged with the current values — a blank field keeps its current
+  subvalue, and a partially answered section still sends the full
+  object.
 - Balance answers are `program:points` free text — the airline, hotel,
   and transferable fields all parse the same way. Parse the points to
   integers; resolve names to registry slugs (Alaska is `alaska`,

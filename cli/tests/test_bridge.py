@@ -470,7 +470,7 @@ def test_past_origin_local_date_is_nonretryable_and_never_queried(getaway_home: 
     assert "past in origin-local time" in failure["reason"]
 
 
-def test_unknown_gateway_offset_skips_the_past_date_guard(getaway_home: Path) -> None:
+def test_unknown_gateway_code_crashes(getaway_home: Path) -> None:
     make_trip()
     write_onward([{"gateway": "ZZZ", "onward_dest": "OKA", "date": "2026-08-01"}])
     calls: list[str] = []
@@ -479,10 +479,28 @@ def test_unknown_gateway_offset_skips_the_past_date_guard(getaway_home: Path) ->
         calls.append(date)
         return [fake_result(90.0)]
 
-    bridge.run(SLUG, "outbound", now=clock(), search=search)
-    assert calls == [
-        "2026-08-01"
-    ]  # no offset known -> rely on the zero-results surface, still query
+    with pytest.raises(KeyError, match="ZZZ"):
+        bridge.run(SLUG, "outbound", now=clock(), search=search)
+    assert calls == []
+
+
+def test_non_table_gateway_gets_past_date_guard(getaway_home: Path) -> None:
+    make_trip()
+    write_onward([{"gateway": "SYD", "onward_dest": "OKA", "date": "2026-08-01"}])
+    calls: list[str] = []
+
+    def search(g: str, d: str, date: str) -> list:
+        calls.append(date)
+        return [fake_result(90.0)]
+
+    assert bridge.run(SLUG, "outbound", now=clock(), search=search) == {
+        "quotes": 0,
+        "failures": 1,
+    }
+    assert calls == []
+    failure = bridge_out()["failures"][0]
+    assert failure["retryable"] is False
+    assert failure["reason"] == "departure date past in origin-local time"
 
 
 def test_oka_alias_fix_patches_encode_and_decode(getaway_home: Path) -> None:

@@ -159,6 +159,77 @@ def home(getaway_home: Path) -> Path:
     return getaway_home
 
 
+def test_cross_airport_ok_enforces_transfer_floor() -> None:
+    assert not journeys._cross_airport_ok(
+        "OKA",
+        "FUK",
+        "2026-09-08T12:00",
+        "2026-09-08T14:00",
+        min_transfer=180,
+    )
+    assert journeys._cross_airport_ok(
+        "OKA",
+        "FUK",
+        "2026-09-08T12:00",
+        "2026-09-08T16:00",
+        min_transfer=180,
+    )
+
+
+def test_cross_airport_ok_utc_math_crosses_date_line() -> None:
+    assert journeys._cross_airport_ok(
+        "NRT",
+        "HNL",
+        "2026-11-06T09:00",
+        "2026-11-05T20:00",
+        min_transfer=180,
+    )
+    assert not journeys._cross_airport_ok(
+        "NRT",
+        "HND",
+        "2026-11-05T22:00",
+        "2026-11-06T00:40",
+        min_transfer=180,
+    )
+
+
+def test_cross_airport_ok_utc_math_across_dst_fall_back() -> None:
+    assert journeys._cross_airport_ok(
+        "EWR",
+        "JFK",
+        "2026-11-01T00:30",
+        "2026-11-01T02:30",
+        min_transfer=180,
+    )
+    assert not journeys._cross_airport_ok(
+        "EWR",
+        "JFK",
+        "2026-11-01T00:30",
+        "2026-11-01T02:30",
+        min_transfer=181,
+    )
+
+
+def test_cross_airport_ok_utc_math_across_dst_spring_forward() -> None:
+    assert not journeys._cross_airport_ok(
+        "EWR",
+        "JFK",
+        "2026-03-08T01:30",
+        "2026-03-08T03:30",
+        min_transfer=90,
+    )
+
+
+def test_cross_airport_ok_honors_offset_bearing_stamps() -> None:
+    assert journeys._cross_airport_ok(
+        "EWR",
+        "JFK",
+        "2026-09-08T20:00+00:00",
+        "2026-09-08T18:30-04:00",
+        min_transfer=120,
+    )
+
+
 def test_legless_plan_raises_typed_usage_error(home: Path) -> None:
     prefs.init()
     trips.new(SLUG, now=clock())
@@ -504,6 +575,13 @@ HYBRID_ROUND_TRIP = {
         {"id": "return", "dests": "$origins"},
     ]
 }
+CROSS_AIRPORT_HYBRID_ROUND_TRIP = {
+    "legs": [
+        {"id": "outbound", "origins": ["SFO"], "buckets": [{"name": "asia", "dests": ["NRT"]}]},
+        {"id": "onward", "dests": ["OKA"], "mode": "cash"},
+        {"id": "return", "origins": ["FUK"], "dests": "$origins"},
+    ]
+}
 
 
 def gw_cand(cid: str, dest: str, mileage: int = 80000, *, seats: int = 2) -> dict:
@@ -817,6 +895,42 @@ def _write_hybrid_round_trip_return(slug: str, ret_dep: str, ret_arr: str, ret_d
     )
 
 
+def _write_cross_airport_hybrid_return(slug: str, ret_dep: str) -> None:
+    seed("GW-NRT", ob_detail("GW-NRT", dest="NRT", dep="2026-09-05T10:00", arr="2026-09-06T14:00"))
+    seed("RET-FUK", ret_detail("RET-FUK", origin="FUK", dep=ret_dep, arr="2026-09-08T20:00"))
+    trips.artifact_write(
+        slug,
+        "legs/return/shortlist.json",
+        json.dumps(shortlist_doc([cand("RET-FUK", "FUK", "SFO", "2026-09-08")], leg="return")),
+    )
+    write_hybrid(
+        slug,
+        gateways=[gw_cand("GW-NRT", "NRT")],
+        quotes=[cash_quote("NRT", "OKA", 120.0, arrives_local="2026-09-08T12:00")],
+    )
+
+
+def test_cross_airport_transfer_under_floor_rejected(home: Path) -> None:
+    slug = make_trip(CROSS_AIRPORT_HYBRID_ROUND_TRIP)
+    _write_cross_airport_hybrid_return(slug, "2026-09-08T14:00")
+    assert _run(slug)["journeys"] == []
+
+
+def test_cross_airport_transfer_floor_met_accepted(home: Path) -> None:
+    slug = make_trip(CROSS_AIRPORT_HYBRID_ROUND_TRIP)
+    _write_cross_airport_hybrid_return(slug, "2026-09-08T16:00")
+    (journey,) = _run(slug)["journeys"]
+    assert journey["kind"] == "award→cash→award"
+
+
+def test_transfer_floor_pref_threads(home: Path) -> None:
+    slug = make_trip(CROSS_AIRPORT_HYBRID_ROUND_TRIP)
+    layovers = prefs.show()["layovers"]
+    prefs.set_patch({"layovers": {**layovers, "min_airport_transfer_minutes": 300}})
+    _write_cross_airport_hybrid_return(slug, "2026-09-08T16:00")
+    assert _run(slug)["journeys"] == []
+
+
 def test_cash_onward_return_same_day_before_arrival_rejected(home: Path) -> None:
     # The return departs the same day as, but before, the cash leg's real arrival clock —
     # structurally impossible, so no journey composes.
@@ -1093,7 +1207,61 @@ def test_cash_next_boundary_judged_by_its_quote_clock_not_its_date_field() -> No
         "quote": {"departs_local": "2026-09-07T00:30"},
     }
     stay_intent = {"stay_nights": {"min": 4, "max": 7}}
-    assert not journeys._pool_boundary_date_infeasible(prior, nxt, stay_intent)
+    assert not journeys._pool_boundary_date_infeasible(prior, nxt, stay_intent, min_transfer=180)
+
+
+@pytest.mark.parametrize(
+    ("date", "expected"),
+    [
+        pytest.param("2026-11-05", False, id="westward-next-midnight-supremum-feasible"),
+        pytest.param("2026-11-04", True, id="prior-day-infeasible"),
+    ],
+)
+def test_pool_boundary_date_infeasible_uses_next_midnight_supremum(
+    date: str, expected: bool
+) -> None:
+    prior = {"kind": "cash", "dest": "NRT", "quote": {"arrives_local": "2026-11-06T09:00"}}
+    nxt = {"kind": "award", "origin": "HNL", "date": date}
+    assert journeys._pool_boundary_date_infeasible(prior, nxt, {}, min_transfer=180) is expected
+
+
+def test_prune_bound_is_supremum_at_seconds_precision() -> None:
+    prior = {"kind": "cash", "dest": "EWR", "quote": {"arrives_local": "2026-09-08T20:59:30"}}
+    nxt = {"kind": "award", "origin": "JFK", "date": "2026-09-08"}
+    intent: dict = {}
+    assert not journeys._pool_boundary_date_infeasible(
+        prior, nxt, intent, min_transfer=180
+    )
+
+    prior_leg = {
+        "mode": "cash",
+        "origin": "LAX",
+        "dest": prior["dest"],
+        "cash": {
+            "departs_local": "2026-09-08T12:00",
+            "arrives_local": prior["quote"]["arrives_local"],
+        },
+    }
+    nxt_leg = {
+        "mode": "award",
+        "detail": {
+            "segments": [
+                {
+                    "origin": nxt["origin"],
+                    "dest": "SFO",
+                    "departs_local": "2026-09-08T23:59:30",
+                    "arrives_local": "2026-09-09T07:00",
+                }
+            ]
+        },
+    }
+    assert journeys._structural_ok(
+        prior_leg,
+        nxt_leg,
+        intent,
+        min_connection=60,
+        min_transfer=180,
+    )
 
 
 def test_date_infeasible_cash_hops_drop_pre_beam_so_the_feasible_chain_composes(home: Path) -> None:

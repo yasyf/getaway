@@ -36,6 +36,7 @@ def test_init_writes_neutral_template(getaway_home: Path) -> None:
         "layovers": {
             "style": "minimize",
             "min_connection_minutes": 75,
+            "min_airport_transfer_minutes": 180,
             "prefer_cities": [],
             "avoid_cities": [],
         },
@@ -123,6 +124,7 @@ def test_status_cli_exit_codes(ready: Path, runner: CliRunner) -> None:
                 "layovers": {
                     "style": "explore",
                     "min_connection_minutes": 90,
+                    "min_airport_transfer_minutes": 240,
                     "prefer_cities": ["IST"],
                     "avoid_cities": ["LHR"],
                 }
@@ -131,6 +133,7 @@ def test_status_cli_exit_codes(ready: Path, runner: CliRunner) -> None:
             {
                 "style": "explore",
                 "min_connection_minutes": 90,
+                "min_airport_transfer_minutes": 240,
                 "prefer_cities": ["IST"],
                 "avoid_cities": ["LHR"],
             },
@@ -220,6 +223,7 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
                 "layovers": {
                     "style": "wander",
                     "min_connection_minutes": 75,
+                    "min_airport_transfer_minutes": 180,
                     "prefer_cities": [],
                     "avoid_cities": [],
                 }
@@ -232,11 +236,24 @@ def test_set_patch_requires_initialized(getaway_home: Path) -> None:
                 "layovers": {
                     "style": "minimize",
                     "min_connection_minutes": "75",
+                    "min_airport_transfer_minutes": 180,
                     "prefer_cities": [],
                     "avoid_cities": [],
                 }
             },
             id="layovers-min-connection-not-int",
+        ),
+        pytest.param(
+            {
+                "layovers": {
+                    "style": "minimize",
+                    "min_connection_minutes": 75,
+                    "min_airport_transfer_minutes": "180",
+                    "prefer_cities": [],
+                    "avoid_cities": [],
+                }
+            },
+            id="layovers-transfer-not-int",
         ),
         pytest.param({"statuses": {"united": 5}}, id="status-tier-not-string"),
         pytest.param(
@@ -522,5 +539,3 @@ def test_instrument_add_cli_roundtrips_stdin_json(ready: Path, runner: CliRunner
     assert result.exit_code == 0
     row = json.loads(result.stdout)
     assert row["type"] == "companion_fare" and len(row["id"]) == 8
-
-
