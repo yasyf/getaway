@@ -380,6 +380,97 @@ def test_seat_advice_live_joined_when_matched(getaway_home: Path) -> None:
     }
 
 
+def test_seat_advice_operated_by_rekeys_registry(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    operated_by = {"carrier": "XX", "name": "Xanadu Air"}
+    enhance.merge(
+        slug,
+        "seat-advice",
+        [
+            {
+                "target_id": "UA:77W:J",
+                "outcome": "found",
+                "checked_at": "2026-07-13T14:00:00+00:00",
+                "method": "public",
+                "observed": {
+                    "picks": [{"seat": "12A", "why": "extra legroom"}],
+                    "avoids": [],
+                    "tips": [],
+                    "sources": ["https://example.com/seat-guru"],
+                    "operated_by": operated_by,
+                },
+                "evidence": "seat guide consensus",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert advice["operated_by"] == operated_by
+    assert advice["carrier"] == "UA"
+    assert advice["registry"] == quality.classify("XX", "Boeing 777-300ER", "business")
+    assert advice["registry"] == {
+        "verdict": "verify",
+        "product": None,
+        "note": None,
+        "matched": None,
+    }
+
+
+def test_seat_advice_no_operated_by_when_not_reported(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    enhance.merge(
+        slug,
+        "seat-advice",
+        [
+            {
+                "target_id": "UA:77W:J",
+                "outcome": "found",
+                "checked_at": "2026-07-13T14:00:00+00:00",
+                "method": "public",
+                "observed": {
+                    "picks": [{"seat": "12A", "why": "extra legroom"}],
+                    "avoids": [],
+                    "tips": [],
+                    "sources": ["https://example.com/seat-guru"],
+                },
+                "evidence": "seat guide consensus",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert "operated_by" not in advice
+    assert advice["registry"] == quality.classify("UA", "Boeing 777-300ER", "business")
+
+
+def test_seat_advice_inconclusive_keeps_marketing_registry(getaway_home: Path) -> None:
+    slug = _new(getaway_home, DIRECT_PLAN)
+    write(slug, "expand.json", expand_doc())
+    write(slug, "rank.json", _rank_doc([{"id": "J0", "legs": [_award_leg("outbound")]}]))
+    enhance.merge(
+        slug,
+        "seat-advice",
+        [
+            {
+                "target_id": "UA:77W:J",
+                "outcome": "inconclusive",
+                "checked_at": "2026-07-13T14:00:00+00:00",
+                "method": "public",
+                "observed": None,
+                "evidence": "no consensus found",
+            }
+        ],
+    )
+    doc = factors.finalize(slug, now=clock())
+    (advice,) = doc["journeys"][0]["seat_advice"]
+    assert "operated_by" not in advice
+    assert advice["registry"] == quality.classify("UA", "Boeing 777-300ER", "business")
+
+
 def test_seat_advice_no_live_key_when_unmatched(getaway_home: Path) -> None:
     slug = _new(getaway_home, DIRECT_PLAN)
     write(slug, "expand.json", expand_doc())

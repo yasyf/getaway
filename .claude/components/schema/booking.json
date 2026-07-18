@@ -115,6 +115,16 @@
         "durationMinutes": { "type": "integer", "minimum": 1 },
         "aircraft": { "type": "string", "minLength": 1 },
         "aircraftCode": { "type": "string", "pattern": "^[A-Z0-9]{3,4}$" },
+        "operatedBy": {
+          "type": "object",
+          "description": "The airline operating the flight when different from the marketing carrier.",
+          "additionalProperties": false,
+          "required": ["carrier", "name"],
+          "properties": {
+            "carrier": { "type": "string", "pattern": "^[A-Z0-9]{2}$", "description": "The operating carrier's IATA designator." },
+            "name": { "type": "string", "minLength": 1, "description": "The operating carrier's name." }
+          }
+        },
         "seat": { "$ref": "#/$defs/seat" }
       }
     },

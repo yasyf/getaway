@@ -2,20 +2,20 @@ const A = window.CcPresent;
 if (!A)
   throw new Error("cc-present: window.CcPresent unavailable; a pack bundle loaded before the host installed it");
 const r = A.jsxRuntime.jsx, s = A.jsxRuntime.jsxs, v = A.jsxRuntime.Fragment;
-function E() {
+function j() {
   const e = window.CcPresent;
   if (!e)
     throw new Error("cc-present: window.CcPresent unavailable; the host must install it before a pack bundle loads");
   return e;
 }
 function p() {
-  return E().ui.tokens;
+  return j().ui.tokens;
 }
 function le(e) {
-  E().ui.toast(e);
+  j().ui.toast(e);
 }
 function R(e, t) {
-  return E().ui.usePackState(e, t);
+  return j().ui.usePackState(e, t);
 }
 const ce = {
   suite: "ok",
@@ -50,11 +50,11 @@ function I(e) {
 function re(e, t) {
   return t === "ok" ? e.ok : t === "warn" ? e.warn : t === "danger" ? e.danger : e.dim;
 }
-function _({ children: e, style: t }) {
+function E({ children: e, style: t }) {
   const n = p();
   return /* @__PURE__ */ r("span", { style: { ...I(n), ...t }, children: e });
 }
-function B({ children: e }) {
+function _({ children: e }) {
   const t = p();
   return /* @__PURE__ */ r(
     "span",
@@ -178,7 +178,7 @@ function Q({
 const ie = window.CcPresent;
 if (!ie)
   throw new Error("cc-present: window.CcPresent unavailable; a pack bundle loaded before the host installed it");
-const de = ie.React, { createElement: Ee, Fragment: me, useCallback: pe, useEffect: _e, useMemo: Be, useRef: Oe, useState: oe } = de;
+const de = ie.React, { createElement: je, Fragment: me, useCallback: pe, useEffect: Ee, useMemo: _e, useRef: Oe, useState: oe } = de;
 function U(e, t, n) {
   return {
     minWidth: "4rem",
@@ -253,7 +253,7 @@ function z({ value: e, submit: t, disabled: n, context: i }) {
       /* @__PURE__ */ r("button", { type: "button", onClick: () => c(!1), style: U(o, !1, !1), children: "Cancel" })
     ] })
   ] }) : l ? /* @__PURE__ */ s("div", { style: { display: "flex", flexDirection: "column", gap: "0.3rem" }, children: [
-    /* @__PURE__ */ r(_, { children: "your note" }),
+    /* @__PURE__ */ r(E, { children: "your note" }),
     /* @__PURE__ */ r(
       "div",
       {
@@ -422,7 +422,7 @@ function xe({ block: e, value: t, submit: n, disabled: i, context: o }) {
           " → ",
           d.destination
         ] }),
-        /* @__PURE__ */ r(B, { children: a.program })
+        /* @__PURE__ */ r(_, { children: a.program })
       ] }),
       /* @__PURE__ */ s(
         "div",
@@ -688,14 +688,14 @@ function $e({ block: e, value: t, submit: n, disabled: i, context: o }) {
           " → ",
           a.destination
         ] }),
-        a.program && /* @__PURE__ */ r(B, { children: a.program })
+        a.program && /* @__PURE__ */ r(_, { children: a.program })
       ] }),
       /* @__PURE__ */ r("span", { style: { color: l.dim, fontSize: "0.8rem" }, children: we(a.rows, f) })
     ] }),
     /* @__PURE__ */ r(ee, { rows: y, present: f, showHeader: !0, isPicked: u, toggle: m, locked: h }),
     N.length > 0 && /* @__PURE__ */ r(Q, { label: `show all ${a.rows.length} dates`, children: /* @__PURE__ */ r("div", { style: { marginTop: "0.4rem" }, children: /* @__PURE__ */ r(ee, { rows: N, present: f, showHeader: !1, isPicked: u, toggle: m, locked: h }) }) }),
     /* @__PURE__ */ s("div", { style: { display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }, children: [
-      /* @__PURE__ */ s(_, { children: [
+      /* @__PURE__ */ s(E, { children: [
         d.length,
         " picked"
       ] }),
@@ -717,7 +717,7 @@ const ze = {
   invalid_interval: { head: "Lodging deferred", body: "The derived stay interval isn't valid." },
   not_walked: { head: "Lodging not checked", body: "This option was not walked on rooms.aero." }
 };
-function j(e, t) {
+function B(e, t) {
   const n = t === "warn" ? e.warn : e.danger;
   return {
     fontSize: "0.8rem",
@@ -781,7 +781,7 @@ function Me({ room: e, nights: t }) {
   const n = p();
   return /* @__PURE__ */ s("div", { style: { display: "flex", flexDirection: "column", gap: "0.4rem" }, children: [
     /* @__PURE__ */ s("div", { style: { display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }, children: [
-      /* @__PURE__ */ r(B, { children: e.program }),
+      /* @__PURE__ */ r(_, { children: e.program }),
       /* @__PURE__ */ r("span", { style: { fontWeight: 600 }, children: e.name }),
       /* @__PURE__ */ s("span", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "0.4rem" }, children: [
         e.stale && /* @__PURE__ */ r(O, { tone: "warn", children: "stale" }),
@@ -840,8 +840,8 @@ function Ae({ block: e, note: t, closed: n }) {
         e.rooms.length === 1 ? "property" : "properties"
       ] })
     ] }),
-    e.session === "anonymous" && /* @__PURE__ */ r("div", { style: j(i, "warn"), children: "Anonymous session — these rates are not refreshed and can be weeks stale." }),
-    a ? /* @__PURE__ */ s("div", { style: j(i, "danger"), children: [
+    e.session === "anonymous" && /* @__PURE__ */ r("div", { style: B(i, "warn"), children: "Anonymous session — these rates are not refreshed and can be weeks stale." }),
+    a ? /* @__PURE__ */ s("div", { style: B(i, "danger"), children: [
       "Lodging lookup couldn't complete: ",
       a,
       "."
@@ -859,7 +859,7 @@ function Ie({ block: e, note: t, closed: n }) {
   const i = p(), { head: o, body: l } = Ce[e.reason];
   return /* @__PURE__ */ s("div", { style: { ...S(i), opacity: n ? 0.6 : 1 }, children: [
     e.destination && /* @__PURE__ */ r(ae, { destination: e.destination, airport: e.airport }),
-    /* @__PURE__ */ s("div", { style: j(i, "warn"), children: [
+    /* @__PURE__ */ s("div", { style: B(i, "warn"), children: [
       /* @__PURE__ */ s("span", { style: { fontWeight: 600 }, children: [
         o,
         "."
@@ -951,6 +951,10 @@ function Re({ flight: e }) {
         e.aircraft,
         e.aircraft && e.aircraftCode ? ` (${e.aircraftCode})` : e.aircraftCode
       ] }),
+      e.operatedBy && /* @__PURE__ */ s("span", { style: { color: t.dim, fontSize: "0.8rem" }, children: [
+        "operated by ",
+        e.operatedBy.name
+      ] }),
       /* @__PURE__ */ r("span", { style: { marginLeft: "auto", color: t.dim, fontSize: "0.8rem" }, children: C(e.durationMinutes) })
     ] }),
     e.seat && /* @__PURE__ */ s("div", { style: { display: "flex", flexDirection: "column", gap: "0.2rem", paddingLeft: "0.6rem" }, children: [
@@ -982,7 +986,7 @@ function Te({ leg: e }) {
     ] }, l))
   ] });
 }
-function je({ block: e, value: t, submit: n, disabled: i, context: o }) {
+function Be({ block: e, value: t, submit: n, disabled: i, context: o }) {
   const l = p(), a = e, c = a.transfers ?? [], d = a.totals ? fe(a.totals.miles) : "", f = a.totals ? H(a.totals.cash) : "", h = !!a.totals && (d !== "" || f !== "");
   return /* @__PURE__ */ s("div", { style: { ...S(l), opacity: o.closed ? 0.6 : 1, transition: "opacity 120ms ease" }, children: [
     /* @__PURE__ */ s("div", { style: { display: "flex", flexDirection: "column", gap: "0.2rem" }, children: [
@@ -1009,7 +1013,7 @@ function je({ block: e, value: t, submit: n, disabled: i, context: o }) {
           fontSize: "0.85rem"
         },
         children: [
-          /* @__PURE__ */ r(_, { children: "total" }),
+          /* @__PURE__ */ r(E, { children: "total" }),
           d && /* @__PURE__ */ r("span", { children: d }),
           f && /* @__PURE__ */ r("span", { style: { color: l.dim }, children: f })
         ]
@@ -1039,7 +1043,7 @@ const Qe = {
     flight: be,
     availability: $e,
     stay: Le,
-    booking: je
+    booking: Be
   }
 };
 export {

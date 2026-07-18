@@ -630,6 +630,13 @@ def test_seat_advice_merge_accepts_valid_found_row(trip: str) -> None:
     assert doc["results"]["UA:77W:J"]["outcome"] == "found"
 
 
+def test_seat_advice_merge_accepts_operated_by(trip: str) -> None:
+    row = seat_advice_row("UA:77W:J")
+    row["observed"]["operated_by"] = {"carrier": "MS", "name": "EgyptAir"}
+    enhance.merge(trip, "seat-advice", [row])
+    assert read_seat_advice(trip)["results"]["UA:77W:J"]["observed"] == row["observed"]
+
+
 def test_seat_advice_merge_rejects_verify_only_outcome(trip: str) -> None:
     with pytest.raises(UsageError, match="outcome"):
         enhance.merge(
@@ -692,6 +699,29 @@ def test_seat_advice_merge_later_checked_at_wins_upsert(trip: str) -> None:
         ),
         pytest.param(
             lambda o: {**o, "tips": [1]}, "must be a list of strings", id="non-string-tip"
+        ),
+        pytest.param(
+            lambda o: {**o, "operated_by": {"carrier": "ms", "name": "EgyptAir"}},
+            r"^seat-advice\.results\['UA:77W:J'\]\.observed\.operated_by\.carrier must match "
+            r"\[A-Z0-9\]\{2\}$",
+            id="lowercase-operating-carrier",
+        ),
+        pytest.param(
+            lambda o: {**o, "operated_by": {"carrier": "EGY", "name": "EgyptAir"}},
+            r"^seat-advice\.results\['UA:77W:J'\]\.observed\.operated_by\.carrier must match "
+            r"\[A-Z0-9\]\{2\}$",
+            id="three-character-operating-carrier",
+        ),
+        pytest.param(
+            lambda o: {**o, "operated_by": {"carrier": "MS"}},
+            r"^seat-advice\.results\['UA:77W:J'\]\.observed\.operated_by keys: missing="
+            r"\['name'\] extra=\[\]$",
+            id="operating-carrier-missing-name",
+        ),
+        pytest.param(
+            lambda o: {**o, "operated_by": "MS"},
+            r"^seat-advice\.results\['UA:77W:J'\]\.observed\.operated_by must be an object$",
+            id="operating-carrier-non-object",
         ),
     ],
 )

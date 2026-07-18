@@ -34,7 +34,8 @@
           "departsAt": "2026-09-06T12:15",
           "arrivesAt": "2026-09-06T13:45",
           "cabin": "economy",
-          "durationMinutes": 90
+          "durationMinutes": 90,
+          "operatedBy": { "carrier": "OO", "name": "SkyWest Airlines" }
         }
       ],
       "bookingLinks": [

@@ -169,7 +169,7 @@ Each `segments` entry maps from one detail segment, key by key. `origin`, `cabin
 | `aircraft_code` | `aircraftCode` |
 | `duration_minutes` | `durationMinutes` |
 
-The detail segment also carries `carrier` (the `flight_number` prefix), which drives seat matching, not the block. Registry verdicts are keyed on that marketing carrier; on a codeshare the operating airline's cabin product can differ, so the researcher lane probes the operating carrier, and an unmatched probe yields verdict `verify` — the honest render.
+The detail segment also carries `carrier` (the `flight_number` prefix), which drives seat matching, not the block. Registry verdicts key on that marketing carrier until the researcher lane reports better: on a codeshare the researcher records the operator as `observed.operated_by`, the finalize fold re-keys the verdict on it and promotes `operated_by` onto the advice row, and the booking flight carries it as `operatedBy`. An unmatched probe still yields verdict `verify` — the honest render.
 
 ## getaway.flight
 
@@ -454,7 +454,7 @@ Each leg (`legs[]`):
 | `bookingLinks` | bookingLink[], min 1 | yes | One is primary. |
 | `notes` | string[] | no | Per-leg booking cautions. |
 
-Each flight (`legs[].flights[]`) mirrors `getaway.flight` with one difference: `cabin` is optional here. Required are `flightNumber`, `origin`, `destination`, `departsAt`, `arrivesAt`, and `durationMinutes`; `cabin`, `aircraft`, `aircraftCode`, and `seat` are optional. The `seat` object:
+Each flight (`legs[].flights[]`) mirrors `getaway.flight` with one difference: `cabin` is optional here. Required are `flightNumber`, `origin`, `destination`, `departsAt`, `arrivesAt`, and `durationMinutes`; `cabin`, `aircraft`, `aircraftCode`, `operatedBy`, and `seat` are optional. `operatedBy` is `{carrier, name}`, both required — the operating airline on a codeshare, copied verbatim from the advice row's `operated_by`; it renders dim beside the aircraft as "operated by {name}". The `seat` object:
 
 | Field | Type | Required | Meaning |
 |-------|------|----------|---------|

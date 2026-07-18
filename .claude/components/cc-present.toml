@@ -1,6 +1,6 @@
 host_api = 2
 name = "getaway"
-version = "0.2.0"
+version = "0.2.1"
 description = "Award-travel blocks: itineraries, single flight legs, an availability calendar, a lodging stay, and a final booking sheet."
 entry = "dist/pack.js"
 reference = "reference/blocks.md"

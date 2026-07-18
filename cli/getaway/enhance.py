@@ -11,6 +11,7 @@ join keys from the legs, so nothing here stores a target list the rank fold coul
 
 import datetime as dt
 import json
+import re
 from collections import Counter
 
 import click
@@ -29,6 +30,7 @@ from getaway.paths import (
 )
 
 ENHANCERS = ("verify", "seat-advice")
+_OPERATING_CARRIER_PATTERN = re.compile(r"[A-Z0-9]{2}")
 OUTCOMES_BY_ENHANCER: dict[str, frozenset[str]] = {
     "verify": frozenset({"confirmed", "gone", "degraded", "inconclusive"}),
     "seat-advice": frozenset({"found", "inconclusive"}),
@@ -84,7 +86,22 @@ def _validate_advice_note(note: object, label: str) -> None:
 
 
 def _validate_seat_advice_observed(observed: object, label: str) -> None:
-    observed = require_keys(observed, {"picks", "avoids", "tips", "sources"}, label)
+    observed = require_keys(
+        observed,
+        {"picks", "avoids", "tips", "sources"},
+        label,
+        optional=frozenset({"operated_by"}),
+    )
+    if "operated_by" in observed:
+        operated_by = require_keys(
+            observed["operated_by"], {"carrier", "name"}, f"{label}.operated_by"
+        )
+        carrier = require_str(operated_by["carrier"], f"{label}.operated_by.carrier")
+        if _OPERATING_CARRIER_PATTERN.fullmatch(carrier) is None:
+            raise UsageError(f"{label}.operated_by.carrier must match [A-Z0-9]{{2}}")
+        name = require_str(operated_by["name"], f"{label}.operated_by.name")
+        if not name:
+            raise UsageError(f"{label}.operated_by.name must be non-empty")
     for key in ("picks", "avoids"):
         notes = observed[key]
         if not isinstance(notes, list):

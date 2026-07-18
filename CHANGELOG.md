@@ -59,6 +59,14 @@ onboarding, and in-flight v1 trips are discarded, not migrated.
   getaway@getaway`, no dependency marketplaces to add by hand.
 
 ### Added
+- Codeshare honesty lands in data: seats.aero carries no
+  operating-carrier field (verified against the live cache), so the
+  seat-advice researchers report it — a `found` row's
+  `observed.operated_by` names the operator when one airline flies every
+  flight number under the target. Finalize re-keys the registry verdict
+  on that operator and promotes `operated_by` onto the advice row, and
+  the booking sheet's flights render "operated by {name}" via the new
+  optional `operatedBy` field (pack 0.2.1).
 - The board flow: one cc-present artifact carries the whole trip as
   rounds — a context-rich multi-select intake board replaces the
   AskUserQuestion intake, the finalist board opens with what was swept

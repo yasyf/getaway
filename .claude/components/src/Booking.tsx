@@ -41,6 +41,7 @@ interface Flight {
   durationMinutes: number;
   aircraft?: string;
   aircraftCode?: string;
+  operatedBy?: { carrier: string; name: string };
   seat?: Seat;
 }
 
@@ -181,6 +182,9 @@ function FlightRow({ flight }: { flight: Flight }) {
             {flight.aircraft}
             {flight.aircraft && flight.aircraftCode ? ` (${flight.aircraftCode})` : flight.aircraftCode}
           </span>
+        )}
+        {flight.operatedBy && (
+          <span style={{ color: t.dim, fontSize: '0.8rem' }}>operated by {flight.operatedBy.name}</span>
         )}
         <span style={{ marginLeft: 'auto', color: t.dim, fontSize: '0.8rem' }}>{formatDuration(flight.durationMinutes)}</span>
       </div>

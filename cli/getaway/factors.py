@@ -637,6 +637,13 @@ def _seat_advice_row(leg: dict, segment: dict, live_results: dict, letter_to_cab
     live = live_results.get(f"{carrier}:{aircraft_code}:{cabin}")
     if live is not None:
         row["live"] = {k: live[k] for k in ("outcome", "checked_at", "observed", "evidence")}
+        observed = live["observed"]
+        if isinstance(observed, dict) and "operated_by" in observed:
+            operated_by = observed["operated_by"]
+            row["operated_by"] = operated_by
+            row["registry"] = quality.classify(
+                operated_by["carrier"], segment["aircraft"], letter_to_cabin[cabin]
+            )
     return row
 
 
@@ -653,7 +660,7 @@ def _thread_seat_advice(doc: dict, slug: str) -> None:
     """Attach the seat-quality registry verdict (and any matched live seat-advice enhancer result)
     to every award-leg segment in each board journey. The registry classification is unconditional;
     ``live`` appears only when a merged enhance-seat-advice.json row matches the segment's
-    (carrier, aircraft_code, cabin)."""
+    (carrier, aircraft_code, cabin). An observed operator re-keys the registry classification."""
     live_results = enhance.results_index(slug, "seat-advice")
     letter_to_cabin = {letter: name for name, letter in CABIN_PREFIX.items()}
     for section in ("journeys", "notable_stretches"):
