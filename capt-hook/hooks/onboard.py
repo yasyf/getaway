@@ -5,7 +5,7 @@ from pathlib import Path
 
 from captain_hook import Allow, Event, Input, Warn, nudge
 
-CLI_DIR = Path(__file__).resolve().parent.parent / "cli"
+CLI_DIR = Path(__file__).resolve().parent.parent.parent / "cli"
 
 ONBOARD = (
     "This session is using the getaway skill but travel preferences are not configured yet "

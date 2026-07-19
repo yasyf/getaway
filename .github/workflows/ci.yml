@@ -61,10 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
-      - name: Hook inline tests
-        run: HOME="$(mktemp -d)" uvx capt-hook --hooks hooks --root "$(mktemp -d)" test --json
-      - name: Lint capt-hook pack
-        run: uvx 'capt-hook>=9.9.0' pack lint "$GITHUB_WORKSPACE"
+      - name: Test capt-hook pack
+        run: HOME="$(mktemp -d)" uvx --isolated 'capt-hook>=11.0.0' pack test "$GITHUB_WORKSPACE"
 
   pack:
     runs-on: ubuntu-latest
