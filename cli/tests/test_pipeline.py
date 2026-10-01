@@ -46,6 +46,12 @@ def clock() -> Callable[[], dt.datetime]:
     return lambda: FROZEN
 
 
+class FrozenDatetime(dt.datetime):
+    @classmethod
+    def now(cls, tz: dt.tzinfo | None = None) -> dt.datetime:
+        return FROZEN
+
+
 def _seg(origin: str, dest: str, dep: str, arr: str) -> dict:
     return {
         "origin": origin,
@@ -78,6 +84,7 @@ def _detail(cid: str, segments: list[dict], mileage: int) -> dict:
 @pytest.fixture
 def runner(getaway_home: Path, monkeypatch: pytest.MonkeyPatch) -> CliRunner:
     monkeypatch.setenv("SEATS_AERO_API_KEY", "testkey")
+    monkeypatch.setattr("getaway.paths.datetime", FrozenDatetime)
     return CliRunner()
 
 

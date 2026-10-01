@@ -514,7 +514,7 @@ def test_oka_alias_fix_patches_encode_and_decode(getaway_home: Path) -> None:
     segment = FlightSegment(
         departure_airport=[[Airport["HND"], 0]],
         arrival_airport=[[Airport["OKA"], 0]],
-        travel_date="2026-09-10",
+        travel_date=(dt.date.today() + dt.timedelta(days=365)).isoformat(),
     )
     filters = FlightSearchFilters(
         trip_type=TripType.ONE_WAY,

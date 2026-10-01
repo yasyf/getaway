@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - name: Test capt-hook pack
-        run: HOME="$(mktemp -d)" uvx --isolated 'capt-hook>=12.72.0' pack test "$GITHUB_WORKSPACE"
+        run: HOME="$(mktemp -d)" uvx --isolated 'capt-hook>=12.74.0' pack test "$GITHUB_WORKSPACE"
 
   pack:
     runs-on: ubuntu-latest
