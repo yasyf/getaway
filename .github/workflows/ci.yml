@@ -12,6 +12,7 @@ concurrency:
 jobs:
   manifests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -34,6 +35,7 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -48,6 +50,7 @@ jobs:
 
   workflow:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -60,6 +63,7 @@ jobs:
 
   hooks:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -70,6 +74,7 @@ jobs:
 
   pack:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     defaults:
